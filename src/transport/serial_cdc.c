@@ -1,11 +1,15 @@
-/* NOTE: unverified by compilation (see README.md). esp_tinyusb's CDC-ACM
- * config struct/callback shape has changed across its own release history
- * (0.x vs 1.x) somewhat independently of ESP-IDF versions — if a build
- * error points here, check tinyusb_config_cdcacm_t / tusb_cdc_acm_init in
- * whatever esp_tinyusb version the component manager resolved (see
- * src/idf_component.yml). Everything past a complete line reaching
- * dispatcher_handle() below is the same tested logic the native tests
- * cover. */
+/* Confirmed to compile against ESP-IDF 6.0.1 as part of a full firmware
+ * build, with espressif/esp_tinyusb ^1.4 as resolved by the component
+ * manager at that time (see README.md's "Status" section and
+ * src/idf_component.yml) — including the exact tinyusb_config_cdcacm_t /
+ * tusb_cdc_acm_init shape assumed below. esp_tinyusb's CDC-ACM API has
+ * changed across its own release history (0.x vs 1.x) somewhat
+ * independently of ESP-IDF versions, though, so on a different resolved
+ * version, that's still the first thing to check if a build error points
+ * here. Actual USB-CDC behavior (does a browser's navigator.serial
+ * actually see and talk to this) has never been checked against real
+ * hardware. Everything past a complete line reaching dispatcher_handle()
+ * below is the same tested logic the native tests cover. */
 #include "serial_cdc.h"
 
 #include <string.h>

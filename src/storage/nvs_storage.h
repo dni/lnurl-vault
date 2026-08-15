@@ -12,9 +12,12 @@
  * (excluded from the native test build — see platformio.ini's
  * `[env:native]` build_src_filter and test/native/Makefile). */
 
-/* Brings up NVS (encrypted, reading keys from the nvs_keys partition, if
- * CONFIG_NVS_ENCRYPTION is set — see sdkconfig.defaults) or plain NVS
- * otherwise. Call once, before vault_nvs_storage_init(). */
+/* Brings up NVS. If CONFIG_NVS_ENCRYPTION is set (see sdkconfig.defaults),
+ * plain nvs_flash_init() transparently encrypts the default partition using
+ * whichever key-protection scheme is Kconfig-selected (HMAC-peripheral on
+ * ESP32-S3) — nothing extra to do here; see nvs_storage.c's header comment
+ * for how that was confirmed against a real build. Call once, before
+ * vault_nvs_storage_init(). */
 esp_err_t vault_nvs_boot(void);
 
 /* Opens the "vault" NVS namespace and wires up the vault_storage_t backend.

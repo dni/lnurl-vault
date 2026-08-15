@@ -1,9 +1,12 @@
-/* NOTE: unverified by compilation (see README.md). Uses standard ESP-IDF
+/* Confirmed to compile against ESP-IDF 6.0.1 as part of a full firmware
+ * build (see README.md's "Status" section). Uses standard ESP-IDF
  * GPIO/esp_timer APIs, which have been stable across recent IDF releases —
- * the piece most likely to need adjustment is board_pins.h, not this file.
- * The actual gesture logic (debounce, tap vs. chord) lives in the portable,
+ * board_pins.h is the piece most likely to need adjustment on real
+ * hardware, not this file (see that header's own comment). The actual
+ * gesture logic (debounce, tap vs. chord) lives in the portable,
  * unit-tested src/proto/button_fsm.c; this file is deliberately just a thin
- * adapter feeding it real hardware state. */
+ * adapter feeding it real hardware state — real button behavior itself is
+ * still unverified without a physical board. */
 #include "buttons.h"
 
 #include "board_pins.h"

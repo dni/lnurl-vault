@@ -3,11 +3,12 @@
 # firmware build with PlatformIO (no upload, just "does it compile").
 #
 # Unlike release.yml, this doesn't publish anything — it's a signal, not a
-# release gate. See README.md's "Status: unverified by compilation": at the
-# time this workflow was written, `pio run` had never actually been run
-# against this code, so don't be surprised if the build job is red on its
-# first few runs — that's exactly what it's here to catch. Each firmware
-# file's own header comment says what to check first.
+# release gate. See README.md's "Status" section: `pio run -e t-display-s3`
+# has been confirmed to succeed against ESP-IDF 6.0.1 in a real build (not
+# just assumed to work) — a different ESP-IDF/PlatformIO version resolved
+# by a GitHub-hosted runner could still turn up something new, in which
+# case each firmware file's own header comment says what was already found
+# and fixed there, as a starting point.
 name: CI
 
 on:
@@ -50,9 +51,13 @@ jobs:
 
       # qr_display.c depends on a third-party QR encoder deliberately not
       # vendored into this repo (see its header comment and README.md's
-      # Build & flash section) — fetched here the same way a human
-      # following those instructions would, so this build check is
-      # actually meaningful rather than failing on a known-missing file.
+      # Build & flash section — both PlatformIO lib_deps and an
+      # idf_component.yml git dependency were tried for this and confirmed
+      # not to work for this framework/library combination). Fetched here
+      # the same way a human following those instructions would, so this
+      # build check is actually meaningful rather than failing on a
+      # known-missing file — including the one-line patch its qrcode.h
+      # needs (see qr_display.c's header comment for why).
       - name: Vendor QR library (ricmoo/QRCode)
         run: |
           set -euo pipefail
@@ -60,6 +65,7 @@ jobs:
           git clone --depth 1 https://github.com/ricmoo/QRCode "$tmpdir"
           cp "$(find "$tmpdir" -maxdepth 2 -name 'qrcode.h' | head -1)" src/ui/qrcode.h
           cp "$(find "$tmpdir" -maxdepth 2 -name 'qrcode.c' | head -1)" src/ui/qrcode.c
+          sed -i '/typedef unsigned char bool;/d; /static const bool false = 0;/d; /static const bool true = 1;/d' src/ui/qrcode.h
 
       - name: Build firmware
         run: pio run -e t-display-s3

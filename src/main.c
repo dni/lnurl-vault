@@ -1,12 +1,11 @@
-/* NOTE: unverified by compilation (see README.md, "Status: unverified by
- * compilation"). This file wires together modules with very different
- * confidence levels: dispatcher.c/vault.c and everything under src/vault
- * and src/proto are exercised by test/native/ and actually pass (112/112
- * assertions, see README.md's Verification section); nvs_storage.c,
- * serial_cdc.c, ble_gatt.c, display.c, buttons.c, and ui_task.c are
- * ESP-IDF-specific and have not been compiled here — see each file's own
- * header comment for which parts are most likely to need reconciling
- * against your installed IDF version. */
+/* This file, and everything it wires together, compiles and links into a
+ * working firmware.bin against ESP-IDF 6.0.1 — see README.md's "Status"
+ * section, including several real bugs found and fixed getting here.
+ * dispatcher.c/vault.c and everything under src/vault and src/proto are
+ * additionally exercised by test/native/, independent of the ESP32 build,
+ * and pass (112/112 assertions, see README.md's Verification section).
+ * What none of this proves is real hardware behavior — see the "Status"
+ * section for exactly what that does and doesn't cover. */
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdlib.h>

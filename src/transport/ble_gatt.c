@@ -1,16 +1,25 @@
-/* NOTE: unverified by compilation — this is the single most version-fragile
- * file in the project (see README.md, "Status: unverified by compilation").
- * NimBLE glue (callback signatures, header paths, ble_gatts_*/nimble_port_*
- * helper names) has changed across ESP-IDF releases more than anything else
- * here. Treat this file as a strong starting skeleton to debug against your
- * installed IDF version's own NimBLE example, not as verified-working code:
+/* Confirmed to compile against ESP-IDF 6.0.1 as part of a full firmware
+ * build (see README.md's "Status" section) — this was the single most
+ * version-fragile file in the project, and getting it there surfaced three
+ * real bugs, not hypothetical ones: a comment-close token (asterisk then
+ * slash) embedded mid-sentence that closed this very comment block early
+ * and corrupted everything parsed after it; `.uuid` fields
+ * assigned `BLE_UUID128_INIT(...)`'s brace-initializer value directly
+ * instead of a `const ble_uuid_t *` pointer to a named `ble_uuid128_t`
+ * variable's `.u` member; and a call to
+ * `esp_nimble_hci_and_controller_init()`, which doesn't exist anywhere in
+ * this framework version — `nimble_port_init()` alone brings up the
+ * controller internally. All three were found and fixed by cross-checking
+ * against ESP-IDF's own bundled `bleprph` example
+ * (`examples/bluetooth/nimble/bleprph/main/`), not guessed. NimBLE glue
+ * has still changed across ESP-IDF releases before, though, so on a
+ * *different* installed IDF version, that same example is still the first
+ * place to check if something here doesn't compile:
  *
  *   idf.py create-project-from-example espressif/esp-idf:bluetooth/nimble/bleprph
  *
- * diff that example's app_main/GAP/GATT bring-up against this file's if
- * something doesn't compile. Everything downstream of a full JSON message
- * reaching dispatcher_handle() below is the same tested logic the native
- * tests cover — the risk here is entirely in the BLE plumbing above it.
+ * Everything downstream of a full JSON message reaching dispatcher_handle()
+ * below is the same tested logic the native tests cover.
  *
  * GATT layout: one custom service, two characteristics.
  *  - RX (write / write-no-response): command chunks in, from the browser.
@@ -26,7 +35,6 @@
 
 #include "dispatcher.h"
 #include "esp_log.h"
-#include "esp_nimble_hci.h"
 #include "host/ble_hs.h"
 #include "host/ble_uuid.h"
 #include "nimble/nimble_port.h"
@@ -35,15 +43,21 @@
 #include "services/gatt/ble_svc_gatt.h"
 #include "vault_lock.h"
 
-#define LNURLVAULT_SVC_UUID128                                                                       \
-    BLE_UUID128_INIT(0x9c, 0x1a, 0x60, 0x4e, 0x53, 0x1b, 0x4b, 0xd6, 0x8e, 0x11, 0x3d, 0x2c, 0x1a, \
-                      0x0f, 0x7e, 0x40)
-#define LNURLVAULT_CHR_RX_UUID128                                                                     \
-    BLE_UUID128_INIT(0x9c, 0x1a, 0x60, 0x4e, 0x53, 0x1b, 0x4b, 0xd6, 0x8e, 0x11, 0x3d, 0x2c, 0x1b, \
-                      0x0f, 0x7e, 0x40)
-#define LNURLVAULT_CHR_TX_UUID128                                                                     \
-    BLE_UUID128_INIT(0x9c, 0x1a, 0x60, 0x4e, 0x53, 0x1b, 0x4b, 0xd6, 0x8e, 0x11, 0x3d, 0x2c, 0x1c, \
-                      0x0f, 0x7e, 0x40)
+/* BLE_UUID128_INIT(...) expands to a brace initializer for a ble_uuid128_t
+ * value (see the compiler error you get if you try to assign it directly
+ * to a `.uuid` field, which wants a `const ble_uuid_t *` pointer, not a
+ * struct value) — so each UUID needs to be its own named variable, then
+ * referenced as `&name.u` (address of its embedded ble_uuid_t header)
+ * everywhere a `.uuid` field is set below. */
+static const ble_uuid128_t g_svc_uuid =
+    BLE_UUID128_INIT(0x9c, 0x1a, 0x60, 0x4e, 0x53, 0x1b, 0x4b, 0xd6, 0x8e, 0x11, 0x3d, 0x2c, 0x1a,
+                      0x0f, 0x7e, 0x40);
+static const ble_uuid128_t g_chr_rx_uuid =
+    BLE_UUID128_INIT(0x9c, 0x1a, 0x60, 0x4e, 0x53, 0x1b, 0x4b, 0xd6, 0x8e, 0x11, 0x3d, 0x2c, 0x1b,
+                      0x0f, 0x7e, 0x40);
+static const ble_uuid128_t g_chr_tx_uuid =
+    BLE_UUID128_INIT(0x9c, 0x1a, 0x60, 0x4e, 0x53, 0x1b, 0x4b, 0xd6, 0x8e, 0x11, 0x3d, 0x2c, 0x1c,
+                      0x0f, 0x7e, 0x40);
 
 static const char *TAG = "ble_gatt";
 
@@ -152,12 +166,12 @@ static int tx_chr_access(uint16_t conn_handle, uint16_t attr_handle,
 
 static const struct ble_gatt_chr_def g_chrs[] = {
     {
-        .uuid = LNURLVAULT_CHR_RX_UUID128,
+        .uuid = &g_chr_rx_uuid.u,
         .access_cb = rx_chr_access,
         .flags = BLE_GATT_CHR_F_WRITE_NO_RSP | BLE_GATT_CHR_F_WRITE,
     },
     {
-        .uuid = LNURLVAULT_CHR_TX_UUID128,
+        .uuid = &g_chr_tx_uuid.u,
         .access_cb = tx_chr_access,
         .val_handle = &g_tx_val_handle,
         .flags = BLE_GATT_CHR_F_NOTIFY,
@@ -168,7 +182,7 @@ static const struct ble_gatt_chr_def g_chrs[] = {
 static const struct ble_gatt_svc_def g_svcs[] = {
     {
         .type = BLE_GATT_SVC_TYPE_PRIMARY,
-        .uuid = LNURLVAULT_SVC_UUID128,
+        .uuid = &g_svc_uuid.u,
         .characteristics = g_chrs,
     },
     {0},
@@ -246,13 +260,18 @@ static void nimble_host_task(void *param) {
 }
 
 void ble_gatt_start(void) {
-    esp_err_t err = esp_nimble_hci_and_controller_init();
+    /* nimble_port_init() brings up the controller itself (it calls
+     * esp_nimble_hci_init() internally — see nimble_port.c) — confirmed
+     * against the real bleprph example bundled with this ESP-IDF version,
+     * which does exactly this and nothing more here. An earlier version of
+     * this function called a separate esp_nimble_hci_and_controller_init(),
+     * which doesn't exist in this ESP-IDF version (nor, it turns out,
+     * anywhere in this framework at all) and failed to compile. */
+    esp_err_t err = nimble_port_init();
     if (err != ESP_OK) {
-        ESP_LOGE(TAG, "controller init failed: %s", esp_err_to_name(err));
+        ESP_LOGE(TAG, "nimble_port_init failed: %s", esp_err_to_name(err));
         return;
     }
-
-    nimble_port_init();
 
     ble_hs_cfg.reset_cb = on_reset;
     ble_hs_cfg.sync_cb = on_sync;

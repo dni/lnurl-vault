@@ -1,16 +1,24 @@
-/* NOTE: unverified by compilation — this environment has no ESP-IDF/
- * PlatformIO install or attached board (see README.md, "Status: unverified
- * by compilation"). NVS encryption bring-up in particular has drifted
- * across ESP-IDF releases; if nvs_flash_secure_init/nvs_flash_read_security_cfg
- * don't match your installed IDF version, that's the one function
- * (vault_nvs_boot) likely to need reconciling — nothing else here depends
- * on it. */
+/* Confirmed to compile against ESP-IDF 6.0.1 as part of a full firmware
+ * build (see README.md's "Status" section for what that does and doesn't
+ * prove).
+ *
+ * vault_nvs_boot() used to hand-roll NVS-encryption key bring-up here
+ * (reading/generating keys from a `nvs_keys` partition, then calling
+ * nvs_flash_secure_init() directly) — that's an older API path. A real
+ * build against ESP-IDF 6.0.1 showed plain nvs_flash_init() now documents
+ * doing all of that internally whenever CONFIG_NVS_ENCRYPTION is enabled,
+ * dispatching to whichever key-protection scheme is Kconfig-selected (see
+ * sdkconfig.defaults — on ESP32-S3 that's the HMAC-peripheral scheme, not
+ * the partition-based one this file used to implement by hand, which is
+ * why the `nvs_keys` partition was removed from partitions.csv too). The
+ * hand-rolled version and the Kconfig-selected scheme were fighting each
+ * other; calling plain nvs_flash_init() unconditionally — exactly what
+ * ESP-IDF's own bleprph example does — is both simpler and correct. */
 #include "nvs_storage.h"
 
 #include <string.h>
 
 #include "esp_log.h"
-#include "esp_partition.h"
 #include "nvs.h"
 #include "nvs_flash.h"
 
@@ -23,38 +31,12 @@ static bool g_open = false;
 static vault_storage_t g_storage_iface;
 
 esp_err_t vault_nvs_boot(void) {
-#if CONFIG_NVS_ENCRYPTION
-    const esp_partition_t *key_partition = esp_partition_find_first(
-        ESP_PARTITION_TYPE_DATA, ESP_PARTITION_SUBTYPE_DATA_NVS_KEYS, NULL);
-    if (!key_partition) {
-        ESP_LOGE(TAG, "nvs_keys partition not found (check partitions.csv)");
-        return ESP_FAIL;
-    }
-
-    nvs_sec_cfg_t sec_cfg;
-    esp_err_t err = nvs_flash_read_security_cfg(key_partition, &sec_cfg);
-    if (err == ESP_ERR_NVS_KEYS_NOT_INITIALIZED) {
-        err = nvs_flash_generate_keys(key_partition, &sec_cfg);
-    }
-    if (err != ESP_OK) {
-        ESP_LOGE(TAG, "failed to read/generate nvs encryption keys: %s", esp_err_to_name(err));
-        return err;
-    }
-
-    err = nvs_flash_secure_init(&sec_cfg);
-    if (err == ESP_ERR_NVS_NO_FREE_PAGES || err == ESP_ERR_NVS_NEW_VERSION_FOUND) {
-        ESP_ERROR_CHECK(nvs_flash_erase());
-        err = nvs_flash_secure_init(&sec_cfg);
-    }
-    return err;
-#else
     esp_err_t err = nvs_flash_init();
     if (err == ESP_ERR_NVS_NO_FREE_PAGES || err == ESP_ERR_NVS_NEW_VERSION_FOUND) {
         ESP_ERROR_CHECK(nvs_flash_erase());
         err = nvs_flash_init();
     }
     return err;
-#endif
 }
 
 static bool nvs_load_index(char ids[][VAULT_ID_BUF], size_t max, size_t *count, void *ctx) {

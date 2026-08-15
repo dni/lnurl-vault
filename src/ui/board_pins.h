@@ -3,14 +3,16 @@
 
 /* LilyGo T-Display S3 pin assignments.
  *
- * NOT independently verified against hardware in this environment (no board
- * attached, no ESP-IDF install to compile against — see README.md, "Status:
- * unverified by compilation"). These match LilyGo's commonly published
- * T-Display-S3 pins_config.h at the time of writing, but LilyGo has shipped
- * more than one board revision (e.g. a later AMOLED variant) with a
- * different pinout. Before flashing, diff these against your specific
- * board revision using LilyGo's own example repo — that repo, not this
- * file, is the source of truth:
+ * These numbers compile fine (confirmed — see README.md's "Status"
+ * section for the full build this is part of) but that only proves they're
+ * valid GPIO numbers, not that they're electrically correct for your
+ * board: NOT independently verified against real hardware (no board
+ * attached in the environment that built this project). These match
+ * LilyGo's commonly published T-Display-S3 pins_config.h at the time of
+ * writing, but LilyGo has shipped more than one board revision (e.g. a
+ * later AMOLED variant) with a different pinout. Before flashing, diff
+ * these against your specific board revision using LilyGo's own example
+ * repo — that repo, not this file, is the source of truth:
  * https://github.com/Xinyuan-LilyGO/T-Display-S3 (pins_config.h)
  */
 

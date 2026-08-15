@@ -21,31 +21,61 @@ Browser-side integration into `lnurl-wallet` (a `device.ts` client, pairing
 UI) is a deliberate follow-up, not part of this repo yet — this is the
 firmware and its protocol, designed to be consumed by that later.
 
-## Status: unverified by compilation
+## Status: compiles and links successfully; hardware behavior unverified
 
-This project was built in a sandbox with **no ESP-IDF/PlatformIO install and
-no ESP32-S3 board attached** (`command -v idf.py` / `platformio` /
-`arduino-cli` all came back empty). Two different confidence levels apply:
+This firmware **has been built successfully end to end** — bootloader,
+partition table, and `firmware.bin` all produced by a real
+`pio run -e t-display-s3` against ESP-IDF 6.0.1 (GCC 15.2.0,
+`xtensa-esp-elf` toolchain), 30.3% RAM / 26.4% flash used. That build also
+found and fixed several real, non-obvious bugs along the way, worth
+knowing about even though they're now fixed:
 
-- **`src/vault/`, `src/proto/`** (the note state machine, SHA-256, hex, JSON
-  reader/writer, command dispatcher, button gesture state machine, and
-  `lnurlw://` URL builder): pure portable C, no ESP-IDF dependency,
-  exercised by `test/native/` — **112/112 assertions actually pass**, run
-  with plain `gcc` in this environment (see Verification below). This is
-  the security- and protocol-critical logic, including the debounce/tap/
-  chord logic gating every plaintext-secret disclosure.
-- **`src/storage/`, `src/transport/`, `src/ui/`, `src/main.c`,
-  `src/vault_lock.c`**: ESP-IDF glue (NVS, TinyUSB CDC, NimBLE, esp_lcd,
-  GPIO, FreeRTOS mutex/queue) written against documented APIs but never
-  compiled here. Each file's header comment flags exactly what's most
-  likely to need reconciling against your installed IDF version — NimBLE
-  bring-up (`ble_gatt.c`) is the highest-risk one, NVS encryption setup
-  (`nvs_storage.c`) and esp_lcd struct field names (`display.c`) the next
-  most likely. Treat these as a strong, structured starting point to debug
-  against real hardware, not verified-working firmware.
-- **`src/ui/qr_display.c`** carries an additional risk beyond "unverified":
-  it depends on a third-party QR encoder **not included in this repo** —
-  see that file's header comment and "Build & flash" below.
+- A comment in `ble_gatt.c` containing `*/` mid-sentence closed early,
+  corrupting everything parsed after it into garbage compile errors.
+- `BLE_UUID128_INIT(...)` was assigned directly to a `.uuid` field, which
+  wants a `const ble_uuid_t *` pointer, not the macro's brace-initializer
+  value — fixed by giving each UUID its own named variable and taking
+  `&var.u`.
+- `ble_gatt_start()` called a `esp_nimble_hci_and_controller_init()` that
+  doesn't exist in this ESP-IDF version (nor, it turns out, anywhere in the
+  framework at all) — `nimble_port_init()` alone already brings up the
+  controller internally.
+- The vendored QR library's C-mode `bool`/`true`/`false` shim breaks under
+  this toolchain's default `-std=gnu23` (where they're language keywords,
+  not `<stdbool.h>` macros) in a way no `#undef`/re-`#include` trick on our
+  side could work around — fixed by patching the shim out of the vendored
+  header at vendor time instead (see `qr_display.c`'s header comment and
+  "Build & flash" below).
+- `sdkconfig.defaults` enabled NVS encryption without pinning a key-
+  protection scheme, so ESP-IDF defaulted to the HMAC-peripheral scheme —
+  while `nvs_storage.c` separately hand-implemented the *other* (Flash-
+  Encryption-partition-based) scheme by calling an older API directly. The
+  two were fighting each other. Fixed by simplifying `nvs_storage.c` to
+  call plain `nvs_flash_init()` (which — per its own doc comment — already
+  handles whichever scheme Kconfig selects internally) and pinning
+  `CONFIG_NVS_SEC_HMAC_EFUSE_KEY_ID`; the now-unused `nvs_keys` partition
+  was removed from `partitions.csv`.
+- Two mechanisms that would have auto-fetched the QR library instead of
+  vendoring it by hand were tried and empirically confirmed *not* to work
+  for this framework/library combination — see `platformio.ini`'s comment.
+
+**What that build does *not* prove**: this device has never been flashed to
+real hardware. On-screen rendering, physical button timing, BLE pairing
+against a real central, and NVS persistence across real power cycles are
+all still unverified — a compiling program can still be wrong about timing,
+electrical behavior, or the exact pin numbers in `src/ui/board_pins.h`
+(never independently checked against a physical board revision). A
+different installed ESP-IDF/PlatformIO version than the one used here could
+also still turn up something new; each fix above is documented in the
+relevant file's own header comment as a starting point if it does.
+
+`src/vault/` and `src/proto/` (the note state machine, SHA-256, hex, JSON
+reader/writer, command dispatcher, button gesture state machine, and
+`lnurlw://` URL builder) are pure portable C with no ESP-IDF dependency at
+all, and are additionally exercised by `test/native/` — **112/112
+assertions pass** — independent of the ESP32 build. This is the security-
+and protocol-critical logic, including the debounce/tap/chord logic gating
+every plaintext-secret disclosure.
 
 ## Architecture
 
@@ -86,15 +116,22 @@ session itself.
 
 ## Build & flash
 
-Requires [PlatformIO](https://platformio.org/) (not installed in this
-environment — `pip install platformio`), which resolves the ESP-IDF
-toolchain itself on first build.
+Requires [PlatformIO](https://platformio.org/) (`pip install platformio`
+if you don't have it), which resolves the ESP-IDF toolchain itself on
+first build.
 
 **Before the first build**, vendor the QR encoder `qr_display.c` needs —
-not included in this repo (see its header comment for why): download
-`qrcode.h` and `qrcode.c` from
-[ricmoo/QRCode](https://github.com/ricmoo/QRCode) (MIT) and drop them
-directly into `src/ui/` (flat, no subdirectory).
+not included in this repo (see its header comment for why, and for two
+auto-fetch mechanisms that were actually tried and confirmed not to work
+for this library, not just skipped): download `qrcode.h` and `qrcode.c`
+from [ricmoo/QRCode](https://github.com/ricmoo/QRCode) (MIT) into `src/ui/`
+(flat, no subdirectory), then apply the one-line patch its `qrcode.h` needs
+to build under this project's ESP-IDF version (see `qr_display.c`'s header
+comment for exactly why):
+
+```sh
+sed -i '/typedef unsigned char bool;/d; /static const bool false = 0;/d; /static const bool true = 1;/d' src/ui/qrcode.h
+```
 
 ```sh
 pio run -e t-display-s3 -t upload
@@ -200,7 +237,9 @@ integration names them differently than expected there.
   note and unveiling it is a real, unmitigated risk of this v1.
 - **The QR encoder is a required external dependency**, not included in
   this repo — see "Build & flash" above. Nothing in `src/ui/qr_display.c`
-  will compile until it's vendored.
+  will compile until it's vendored (confirmed both PlatformIO `lib_deps`
+  and an `idf_component.yml` git dependency don't work around this for this
+  particular library — see `platformio.ini`'s comment for what was tried).
 - **No OTA**, single factory app partition — see `partitions.csv`.
 - **No `lnurl-wallet` integration yet** — see the top of this file.
 - BLE pairing/bonding is unauthenticated in this v1 (any nearby device can
@@ -213,9 +252,8 @@ integration names them differently than expected there.
 [`.github/workflows/ci.yml`](.github/workflows/ci.yml) runs both of the
 following automatically on every push to `main` and every pull request: the
 native unit tests, and a PlatformIO build of the firmware (no upload, no
-board needed — just "does it compile", vendoring the QR library itself so
-that check is meaningful). Unlike `release.yml`, it publishes nothing; it's
-a signal, not a release gate.
+board needed — just "does it compile"). Unlike `release.yml`, it publishes
+nothing; it's a signal, not a release gate.
 
 **Native unit tests** (portable core, no hardware, no PlatformIO needed):
 

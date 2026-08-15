@@ -8,7 +8,8 @@
  * whatever display_set_state() last showed. Returns false if the text is
  * too long to fit any QR version this device tries, or the vendored QR
  * library isn't present. See qr_display.c's header comment — this depends
- * on a third-party library not included in this repo. */
+ * on a third-party library not included in this repo (vendor it into
+ * src/ui/ yourself; see README.md's Build & flash section). */
 bool qr_display_show(const char *text);
 
 #endif

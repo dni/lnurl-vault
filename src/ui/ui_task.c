@@ -1,11 +1,13 @@
-/* NOTE: unverified by compilation (see README.md). Builds on buttons.c/
- * display.c (unverified ESP-IDF glue) and qr_display.c (additionally
- * depends on a vendored third-party library — see its own header comment),
- * but the actual gesture logic driving all of this (tap vs. chord,
- * debounce) is src/proto/button_fsm.c, which IS unit-tested — see
+/* Confirmed to compile against ESP-IDF 6.0.1 as part of a full firmware
+ * build (see README.md's "Status" section). Builds on buttons.c/display.c
+ * and qr_display.c (which additionally depends on a vendored third-party
+ * library — see its own header comment); the actual gesture logic driving
+ * all of this (tap vs. chord, debounce) is src/proto/button_fsm.c, which
+ * is unit-tested independent of the ESP32 build — see
  * test/native/test_button_fsm.c. vault.c access from this task is
  * serialized against the transport task via vault_lock.h — see that
- * header's comment for why. */
+ * header's comment for why. None of this has been checked against real
+ * button/display hardware. */
 #include "ui_task.h"
 
 #include <stddef.h>

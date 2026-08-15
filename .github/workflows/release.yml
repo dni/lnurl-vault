@@ -3,12 +3,15 @@
 # GitHub Pages from whatever releases currently exist. See webinstaller/ and
 # README.md's "Releases & web installer" section.
 #
-# NOTE: unverified — this has never actually run (see README.md, "Status:
-# unverified by compilation"). `pio run`'s output filenames under
-# .pio/build/t-display-s3/ are located by pattern rather than a hardcoded
-# path for exactly that reason; if PlatformIO's ESP-IDF integration names
-# them differently than expected, the "Collect build outputs" step is the
-# one to fix.
+# NOTE: this workflow itself has never actually run (no GitHub remote was
+# configured for this repo when it was written), but the `pio run` command
+# it depends on has been confirmed to succeed against ESP-IDF 6.0.1 in a
+# real build — see README.md's "Status" section. `pio run`'s output
+# filenames under .pio/build/t-display-s3/ are still located by pattern
+# rather than a hardcoded path, since a different ESP-IDF/PlatformIO
+# version resolved by a GitHub-hosted runner could still name them
+# differently — if the "Collect build outputs" step comes up empty, that's
+# the one to check.
 #
 # One-time manual setup this workflow can't do for you: Settings -> Pages ->
 # Source: "GitHub Actions" (this repo's github.io URL only starts serving
@@ -44,6 +47,20 @@ jobs:
 
       - name: Install PlatformIO
         run: pip install --upgrade platformio
+
+      # See ci.yml's identical step and qr_display.c's header comment: this
+      # library isn't (and can't cleanly be) an automatic PlatformIO/
+      # ESP-IDF dependency, so it's fetched by hand here, with the one-line
+      # patch its qrcode.h needs to build under this project's ESP-IDF
+      # version.
+      - name: Vendor QR library (ricmoo/QRCode)
+        run: |
+          set -euo pipefail
+          tmpdir=$(mktemp -d)
+          git clone --depth 1 https://github.com/ricmoo/QRCode "$tmpdir"
+          cp "$(find "$tmpdir" -maxdepth 2 -name 'qrcode.h' | head -1)" src/ui/qrcode.h
+          cp "$(find "$tmpdir" -maxdepth 2 -name 'qrcode.c' | head -1)" src/ui/qrcode.c
+          sed -i '/typedef unsigned char bool;/d; /static const bool false = 0;/d; /static const bool true = 1;/d' src/ui/qrcode.h
 
       - name: Build firmware
         run: pio run -e t-display-s3

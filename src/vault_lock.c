@@ -1,6 +1,6 @@
-/* NOTE: unverified by compilation (see README.md). Standard FreeRTOS mutex
- * semaphore APIs, stable across ESP-IDF releases — low risk relative to the
- * rest of this project's ESP-IDF glue. */
+/* Confirmed to compile as part of a full firmware build against ESP-IDF
+ * 6.0.1 (see README.md's "Status" section). Standard FreeRTOS mutex
+ * semaphore APIs, stable across ESP-IDF releases. */
 #include "vault_lock.h"
 
 #include "freertos/FreeRTOS.h"

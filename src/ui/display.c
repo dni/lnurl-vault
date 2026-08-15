@@ -1,9 +1,11 @@
-/* NOTE: unverified by compilation (see README.md). esp_lcd's panel-io/
- * panel-vendor struct field names have changed across ESP-IDF releases
- * (e.g. IDF 5.x renamed `color_space` to `rgb_ele_order` with a different
- * enum) — if a build error points here, that's the likely mismatch to
- * reconcile against your installed IDF version's esp_lcd_panel_io.h /
- * esp_lcd_panel_vendor.h.
+/* Confirmed to compile against ESP-IDF 6.0.1 as part of a full firmware
+ * build (see README.md's "Status" section) — including the esp_lcd
+ * panel-io/panel-vendor struct field names below (`rgb_ele_order` etc.),
+ * which have changed across ESP-IDF releases before (e.g. IDF 5.x renamed
+ * `color_space` to `rgb_ele_order` with a different enum). On a different
+ * installed IDF version, that's still the first thing to check if a build
+ * error points here — esp_lcd_panel_io.h / esp_lcd_panel_vendor.h. Actual
+ * on-screen rendering has never been checked against a real display.
  *
  * v1 deliberately does NOT render note text (id/amount/label) on-screen —
  * see README.md's "Known limitations" section for why (a hand-transcribed

@@ -8,11 +8,26 @@
 # installed IDF version rather than assuming this file is wrong wholesale.
 
 # --- NVS encryption -----------------------------------------------------
-# Encrypts note storage at rest using keys from the dedicated `nvs_keys`
-# partition (see partitions.csv). This alone only protects against casual
-# flash dumping — see README.md's security posture section for why Flash
-# Encryption + Secure Boot V2 are also required before storing real value.
+# Encrypts note storage at rest. On ESP32-S3 (which has an HMAC peripheral),
+# ESP-IDF's NVS_SEC_KEY_PROTECTION_SCHEME choice defaults to
+# NVS_SEC_KEY_PROTECT_USING_HMAC — deriving the encryption key from an eFuse
+# via the chip's HMAC peripheral, no separate `nvs_keys` partition needed
+# (unlike the older Flash-Encryption-based scheme; confirmed by an actual
+# build in this environment, which fails at compile time in ESP-IDF's own
+# nvs_sec_provider component without the eFuse key ID below — this isn't
+# guessed). This alone only protects against casual flash dumping — see
+# README.md's security posture section for why Flash Encryption + Secure
+# Boot V2 are also required before storing real value; the HMAC key itself
+# still lives in an eFuse block that must be provisioned (a one-time,
+# irreversible write, done automatically by nvs_flash_init() on first boot
+# if the block is empty).
 CONFIG_NVS_ENCRYPTION=y
+# eFuse key block (0-5) used to derive the NVS encryption key. Block 0 is
+# an arbitrary but common choice for a device with no other eFuse key use
+# yet — if you're also planning Flash Encryption or Secure Boot V2 on the
+# same board, check those don't already claim block 0 before flashing to
+# real hardware (eFuse writes cannot be undone).
+CONFIG_NVS_SEC_HMAC_EFUSE_KEY_ID=0
 
 # --- No Wi-Fi -------------------------------------------------------------
 # The device does no networking of its own (see README.md) — the mint is
