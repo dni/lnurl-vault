@@ -1,0 +1,188 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>LNURLvault — web installer</title>
+<meta name="description" content="Flash lnurl-vault firmware onto a LilyGo T-Display S3 directly from your browser.">
+<!--
+  esp-web-tools (Apache-2.0): https://esphome.github.io/esp-web-tools/
+  Pinned to major version 10 via unpkg's semver range. If the install
+  button below doesn't render, check whether a newer major version is
+  current and bump this.
+-->
+<script type="module" src="https://unpkg.com/esp-web-tools@10/dist/web/install-button.js"></script>
+<style>
+  :root {
+    color-scheme: light dark;
+    --fg: #1a1a1a;
+    --bg: #ffffff;
+    --muted: #5b5b5b;
+    --border: #d8d8d8;
+    --accent: #6d3fd6;
+    --accent-fg: #ffffff;
+    --card: #f7f6fb;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --fg: #ececec;
+      --bg: #121212;
+      --muted: #a5a5a5;
+      --border: #333333;
+      --accent: #a684ff;
+      --accent-fg: #17101f;
+      --card: #1b1b22;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: -apple-system, "Segoe UI", Roboto, sans-serif;
+    color: var(--fg);
+    background: var(--bg);
+  }
+  main {
+    max-width: 640px;
+    margin: 0 auto;
+    padding: 2.5rem 1.5rem 4rem;
+  }
+  h1 {
+    font-size: 1.6rem;
+    margin-bottom: 0.25rem;
+  }
+  .subtitle {
+    color: var(--muted);
+    margin-top: 0;
+  }
+  .card {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 1.5rem;
+    margin: 1.5rem 0;
+  }
+  label {
+    display: block;
+    font-size: 0.85rem;
+    font-weight: 600;
+    margin-bottom: 0.4rem;
+    color: var(--muted);
+  }
+  select {
+    width: 100%;
+    font-size: 1rem;
+    padding: 0.6rem 0.7rem;
+    border-radius: 8px;
+    border: 1px solid var(--border);
+    background: var(--bg);
+    color: var(--fg);
+    margin-bottom: 1.1rem;
+  }
+  esp-web-install-button {
+    --esp-tools-button-color: var(--accent-fg);
+    --esp-tools-button-background-color: var(--accent);
+    display: block;
+  }
+  esp-web-install-button[disabled] { opacity: 0.5; pointer-events: none; }
+  h2 {
+    font-size: 1rem;
+    margin-top: 0;
+  }
+  ul { margin: 0; padding-left: 1.2rem; color: var(--muted); line-height: 1.6; }
+  footer {
+    margin-top: 2rem;
+    font-size: 0.85rem;
+    color: var(--muted);
+  }
+  footer a { color: inherit; }
+  .status {
+    font-size: 0.85rem;
+    color: var(--muted);
+    margin-top: 0.6rem;
+  }
+</style>
+</head>
+<body>
+<main>
+  <h1>LNURLvault web installer</h1>
+  <p class="subtitle">
+    Flash
+    <a href="https://github.com/dni/lnurl-vault">lnurl-vault</a>
+    firmware onto a LilyGo T-Display S3 straight from this page — no
+    PlatformIO or ESP-IDF install needed.
+  </p>
+
+  <div class="card">
+    <label for="release-select">Version</label>
+    <select id="release-select" disabled>
+      <option>Loading releases…</option>
+    </select>
+
+    <esp-web-install-button id="install-btn" disabled></esp-web-install-button>
+    <div class="status" id="status"></div>
+  </div>
+
+  <div class="card">
+    <h2>Before you start</h2>
+    <ul>
+      <li>Works in Chrome or Edge on desktop — Web Serial isn't available in Firefox or Safari.</li>
+      <li>Connect the board's USB-C port directly to your computer (not through a hub that lacks data lines).</li>
+      <li>A first install will offer to erase the flash first; later installs update in place and keep any notes already stored on the device.</li>
+      <li>If the browser can't find the device, hold the board's BOOT button while plugging it in (or while clicking Install), then try again.</li>
+    </ul>
+  </div>
+
+  <footer>
+    Installer version: <span id="footer-version">—</span><br><br>
+    See <a href="https://github.com/dni/lnurl-vault/blob/main/docs/PROTOCOL.md">docs/PROTOCOL.md</a>
+    for the device's wire protocol and on-device note-browsing gestures, and
+    <a href="https://github.com/dni/lnurl-vault/blob/main/README.md">README.md</a>
+    for the security posture and known limitations of what you're about to flash.
+  </footer>
+</main>
+
+<script type="module">
+  const select = document.getElementById("release-select");
+  const button = document.getElementById("install-btn");
+  const status = document.getElementById("status");
+  const footerVersion = document.getElementById("footer-version");
+
+  function labelFor(release) {
+    return release.name && release.name.trim() ? release.name : release.tagName;
+  }
+
+  function selectRelease(tag) {
+    button.manifest = `firmware/${tag}/manifest.json`;
+    button.removeAttribute("disabled");
+    footerVersion.textContent = tag;
+  }
+
+  fetch("releases.json")
+    .then((r) => {
+      if (!r.ok) throw new Error(`releases.json: HTTP ${r.status}`);
+      return r.json();
+    })
+    .then((releases) => {
+      if (!Array.isArray(releases) || releases.length === 0) {
+        select.innerHTML = "<option>No releases published yet</option>";
+        status.textContent = "Check back once the first release is tagged.";
+        return;
+      }
+      select.innerHTML = releases
+        .map(
+          (r, i) =>
+            `<option value="${r.tagName}"${i === 0 ? " selected" : ""}>${labelFor(r)}</option>`,
+        )
+        .join("");
+      select.disabled = false;
+      selectRelease(releases[0].tagName);
+    })
+    .catch((err) => {
+      select.innerHTML = "<option>Failed to load releases</option>";
+      status.textContent = String(err);
+    });
+
+  select.addEventListener("change", () => selectRelease(select.value));
+</script>
+</body>
+</html>

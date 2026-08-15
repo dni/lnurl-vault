@@ -1,0 +1,134 @@
+# Builds firmware and publishes it as a GitHub Release on every `v*` tag,
+# then (always, tag or not) regenerates and deploys the web installer to
+# GitHub Pages from whatever releases currently exist. See webinstaller/ and
+# README.md's "Releases & web installer" section.
+#
+# NOTE: unverified — this has never actually run (see README.md, "Status:
+# unverified by compilation"). `pio run`'s output filenames under
+# .pio/build/t-display-s3/ are located by pattern rather than a hardcoded
+# path for exactly that reason; if PlatformIO's ESP-IDF integration names
+# them differently than expected, the "Collect build outputs" step is the
+# one to fix.
+#
+# One-time manual setup this workflow can't do for you: Settings -> Pages ->
+# Source: "GitHub Actions" (this repo's github.io URL only starts serving
+# once that's set), and confirm dist/manifest.json's "path"/"offset" values
+# still match partitions.csv if you ever change it.
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build-firmware:
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install PlatformIO
+        run: pip install --upgrade platformio
+
+      - name: Build firmware
+        run: pio run -e t-display-s3
+
+      - name: Collect build outputs
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          BUILD_DIR=.pio/build/t-display-s3
+          cp "$(find "$BUILD_DIR" -maxdepth 1 -name 'bootloader.bin' | head -1)" dist/bootloader.bin
+          cp "$(find "$BUILD_DIR" -maxdepth 1 -name 'partition*.bin' | head -1)" dist/partitions.bin
+          cp "$(find "$BUILD_DIR" -maxdepth 1 -name 'firmware.bin' | head -1)" dist/firmware.bin
+          ls -la dist
+
+      - name: Generate manifest.json
+        run: |
+          set -euo pipefail
+          VERSION="${GITHUB_REF_NAME#v}"
+          # Offsets must match partitions.csv: bootloader @ 0x0 (ESP32-S3),
+          # the partition table @ 0x8000 (ESP-IDF default), and our
+          # `factory` app partition @ 0x30000.
+          cat > dist/manifest.json <<EOF
+          {
+            "name": "lnurl-vault",
+            "version": "${VERSION}",
+            "new_install_prompt_erase": true,
+            "builds": [
+              {
+                "chipFamily": "ESP32-S3",
+                "parts": [
+                  { "path": "bootloader.bin", "offset": 0 },
+                  { "path": "partitions.bin", "offset": 32768 },
+                  { "path": "firmware.bin", "offset": 196608 }
+                ]
+              }
+            ]
+          }
+          EOF
+          cat dist/manifest.json
+
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${GITHUB_REF_NAME}" \
+            --title "${GITHUB_REF_NAME}" \
+            --generate-notes \
+            dist/bootloader.bin dist/partitions.bin dist/firmware.bin dist/manifest.json
+
+  deploy-pages:
+    needs: [build-firmware]
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Fetch every release's firmware assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p site/firmware
+          for tag in $(gh release list --limit 100 --json tagName --jq '.[].tagName'); do
+            dir="site/firmware/${tag}"
+            mkdir -p "$dir"
+            gh release download "$tag" --dir "$dir" \
+              --pattern 'bootloader.bin' \
+              --pattern 'partitions.bin' \
+              --pattern 'firmware.bin' \
+              --pattern 'manifest.json' \
+              --clobber
+          done
+          gh release list --limit 100 --json tagName,name,publishedAt \
+            | jq 'sort_by(.publishedAt) | reverse' > site/releases.json
+          cat site/releases.json
+
+      - name: Assemble the web installer page
+        run: cp -r webinstaller/. site/
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+
+      - uses: actions/deploy-pages@v4
+        id: deployment

@@ -111,6 +111,42 @@ header, an esp_lcd struct field), that's expected per the Status section
 above — the failing file's own top comment says which ESP-IDF version
 change is the likely cause and what to check against.
 
+## Releases & web installer
+
+Pushing a tag (`git tag v0.1.0 && git push origin v0.1.0`) triggers
+[`.github/workflows/release.yml`](.github/workflows/release.yml), which:
+
+1. Builds the firmware with PlatformIO (same as "Build & flash" above).
+2. Publishes a GitHub Release for the tag with four assets: `bootloader.bin`,
+   `partitions.bin`, `firmware.bin`, and an [esp-web-tools](https://esphome.github.io/esp-web-tools/)
+   `manifest.json` describing where each one flashes (offsets must match
+   `partitions.csv` — the workflow's own comments spell out why each value
+   is what it is).
+3. Regenerates and deploys **[`webinstaller/`](webinstaller/)** to GitHub
+   Pages: a page that lists every published release (fetched via `gh
+   release list`, no server needed beyond static Pages hosting) and lets a
+   visitor flash any of them directly from Chrome/Edge over Web Serial —
+   no PlatformIO, no command line, just a USB cable. Every release's
+   binaries are copied into the deployed site itself (`firmware/<tag>/`)
+   rather than linked cross-origin to GitHub's release CDN, which doesn't
+   serve CORS headers `fetch()` would need — see the workflow's "Fetch
+   every release's firmware assets" step.
+
+That last step also runs standalone (`workflow_dispatch`, no new tag
+needed) — useful for updating `webinstaller/index.html` itself, or after
+manually deleting a bad release, without cutting a new firmware version.
+
+**One-time manual setup this workflow can't do for you**: Settings → Pages
+→ Source: "GitHub Actions" — the `github.io` URL won't serve anything until
+that's set. The web installer page currently hardcodes this repo as
+`dni/lnurl-vault` in a couple of "view source" links.
+
+Like the rest of the ESP-IDF-specific parts of this project, this workflow
+has never actually run (no GitHub remote was configured for this repo when
+it was written) — reconcile `.pio/build/t-display-s3/`'s actual output
+filenames against the "Collect build outputs" step if PlatformIO's ESP-IDF
+integration names them differently than expected there.
+
 ## Security posture
 
 - **Secrets** come from `esp_fill_random()` (the ESP32-S3's hardware TRNG).
