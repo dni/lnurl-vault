@@ -1,0 +1,65 @@
+# Runs on every push to main and every pull request: the native unit tests
+# (fast, always meaningful — see README.md's Verification section) and a
+# firmware build with PlatformIO (no upload, just "does it compile").
+#
+# Unlike release.yml, this doesn't publish anything — it's a signal, not a
+# release gate. See README.md's "Status: unverified by compilation": at the
+# time this workflow was written, `pio run` had never actually been run
+# against this code, so don't be surprised if the build job is red on its
+# first few runs — that's exactly what it's here to catch. Each firmware
+# file's own header comment says what to check first.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    name: Native unit tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build and run test/native
+        run: |
+          cd test/native
+          make test
+
+  build:
+    name: Firmware build (PlatformIO, no upload)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Cache PlatformIO packages/toolchain
+        uses: actions/cache@v4
+        with:
+          path: ~/.platformio
+          key: platformio-${{ runner.os }}-${{ hashFiles('platformio.ini', 'sdkconfig.defaults', 'partitions.csv') }}
+          restore-keys: platformio-${{ runner.os }}-
+
+      - name: Install PlatformIO
+        run: pip install --upgrade platformio
+
+      # qr_display.c depends on a third-party QR encoder deliberately not
+      # vendored into this repo (see its header comment and README.md's
+      # Build & flash section) — fetched here the same way a human
+      # following those instructions would, so this build check is
+      # actually meaningful rather than failing on a known-missing file.
+      - name: Vendor QR library (ricmoo/QRCode)
+        run: |
+          set -euo pipefail
+          tmpdir=$(mktemp -d)
+          git clone --depth 1 https://github.com/ricmoo/QRCode "$tmpdir"
+          cp "$(find "$tmpdir" -maxdepth 2 -name 'qrcode.h' | head -1)" src/ui/qrcode.h
+          cp "$(find "$tmpdir" -maxdepth 2 -name 'qrcode.c' | head -1)" src/ui/qrcode.c
+
+      - name: Build firmware
+        run: pio run -e t-display-s3

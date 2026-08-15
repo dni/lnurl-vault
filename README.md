@@ -210,6 +210,13 @@ integration names them differently than expected there.
 
 ## Verification
 
+[`.github/workflows/ci.yml`](.github/workflows/ci.yml) runs both of the
+following automatically on every push to `main` and every pull request: the
+native unit tests, and a PlatformIO build of the firmware (no upload, no
+board needed — just "does it compile", vendoring the QR library itself so
+that check is meaningful). Unlike `release.yml`, it publishes nothing; it's
+a signal, not a release gate.
+
 **Native unit tests** (portable core, no hardware, no PlatformIO needed):
 
 ```sh
