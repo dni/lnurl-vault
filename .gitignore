@@ -1,0 +1,7 @@
+.pio/
+.vscode/
+sdkconfig
+sdkconfig.old
+build/
+test/native/vault_tests
+*.o

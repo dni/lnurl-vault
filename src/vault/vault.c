@@ -1,0 +1,361 @@
+#include "vault.h"
+
+#include <string.h>
+
+#include "hex.h"
+#include "sha256.h"
+
+static note_t g_notes[VAULT_MAX_NOTES];
+static size_t g_note_count = 0;
+static const vault_storage_t *g_storage = NULL;
+static vault_time_fn g_now = NULL;
+
+static void copy_trunc(char *dst, const char *src, size_t dstcap) {
+    if (dstcap == 0) {
+        return;
+    }
+    size_t i = 0;
+    for (; i + 1 < dstcap && src && src[i]; i++) {
+        dst[i] = src[i];
+    }
+    dst[i] = '\0';
+}
+
+static int find_index(const char *id) {
+    for (size_t i = 0; i < g_note_count; i++) {
+        if (strncmp(g_notes[i].id, id, VAULT_ID_BUF) == 0) {
+            return (int)i;
+        }
+    }
+    return -1;
+}
+
+static void persist_index(void) {
+    if (!g_storage || !g_storage->save_index) {
+        return;
+    }
+    char ids[VAULT_MAX_NOTES][VAULT_ID_BUF];
+    for (size_t i = 0; i < g_note_count; i++) {
+        memcpy(ids[i], g_notes[i].id, VAULT_ID_BUF);
+    }
+    g_storage->save_index(ids, g_note_count, g_storage->ctx);
+}
+
+static void persist_note(const note_t *n) {
+    if (!g_storage || !g_storage->save_note) {
+        return;
+    }
+    g_storage->save_note(n, g_storage->ctx);
+}
+
+/* Removes g_notes[idx], compacting the array, and persists the deletion. */
+static void remove_at(size_t idx) {
+    char id[VAULT_ID_BUF];
+    memcpy(id, g_notes[idx].id, VAULT_ID_BUF);
+    for (size_t i = idx; i + 1 < g_note_count; i++) {
+        g_notes[i] = g_notes[i + 1];
+    }
+    g_note_count--;
+    if (g_storage && g_storage->delete_note) {
+        g_storage->delete_note(id, g_storage->ctx);
+    }
+    persist_index();
+}
+
+static bool gen_unique_id(vault_rng_fn rng, char out[VAULT_ID_BUF]) {
+    for (int attempt = 0; attempt < 8; attempt++) {
+        uint8_t raw[4];
+        if (!rng(raw, sizeof(raw))) {
+            return false;
+        }
+        hex_encode(raw, sizeof(raw), out, VAULT_ID_BUF);
+        if (find_index(out) < 0) {
+            return true;
+        }
+    }
+    return false;
+}
+
+static void fill_meta(const note_t *n, note_meta_t *out) {
+    memcpy(out->id, n->id, VAULT_ID_BUF);
+    out->state = n->state;
+    out->amount_msat = n->amount_msat;
+    memcpy(out->label, n->label, VAULT_LABEL_BUF);
+    memcpy(out->host, n->host, VAULT_HOST_BUF);
+    memcpy(out->sig, n->sig, VAULT_SIG_BUF);
+    memcpy(out->parent_ids, n->parent_ids, sizeof(out->parent_ids));
+    out->parent_count = n->parent_count;
+    out->created_at = n->created_at;
+    out->updated_at = n->updated_at;
+}
+
+void vault_init(const vault_storage_t *storage, vault_time_fn now_fn) {
+    g_storage = storage;
+    g_now = now_fn;
+    g_note_count = 0;
+
+    if (!storage || !storage->load_index) {
+        return;
+    }
+
+    char ids[VAULT_MAX_NOTES][VAULT_ID_BUF];
+    size_t count = 0;
+    if (!storage->load_index(ids, VAULT_MAX_NOTES, &count, storage->ctx)) {
+        return;
+    }
+    for (size_t i = 0; i < count && g_note_count < VAULT_MAX_NOTES; i++) {
+        note_t n;
+        if (storage->load_note && storage->load_note(ids[i], &n, storage->ctx)) {
+            g_notes[g_note_count++] = n;
+        }
+    }
+}
+
+static vault_err_t new_note(vault_rng_fn rng, const char parent_ids[][VAULT_ID_BUF],
+                             size_t parent_count, const char *label, note_t *out) {
+    if (!rng || parent_count > VAULT_MAX_PARENTS) {
+        return VAULT_ERR_BAD_REQUEST;
+    }
+    if (g_note_count >= VAULT_MAX_NOTES) {
+        return VAULT_ERR_STORAGE_FULL;
+    }
+
+    memset(out, 0, sizeof(*out));
+    if (!gen_unique_id(rng, out->id)) {
+        return VAULT_ERR_STORAGE_FULL;
+    }
+    if (!rng(out->secret, VAULT_SECRET_LEN)) {
+        return VAULT_ERR_BAD_REQUEST;
+    }
+    out->state = NOTE_STATE_PENDING;
+    if (label) {
+        copy_trunc(out->label, label, VAULT_LABEL_BUF);
+    }
+    out->parent_count = (uint8_t)parent_count;
+    for (size_t i = 0; i < parent_count; i++) {
+        copy_trunc(out->parent_ids[i], parent_ids[i], VAULT_ID_BUF);
+    }
+    out->created_at = out->updated_at = g_now ? g_now() : 0;
+    return VAULT_OK;
+}
+
+vault_err_t vault_new_secret(vault_rng_fn rng, const char parent_ids[][VAULT_ID_BUF],
+                              size_t parent_count, const char *label, char out_id[VAULT_ID_BUF],
+                              char out_h_hex[VAULT_HASH_HEX_BUF]) {
+    note_t n;
+    vault_err_t err = new_note(rng, parent_ids, parent_count, label, &n);
+    if (err != VAULT_OK) {
+        return err;
+    }
+
+    uint8_t h[32];
+    sha256(n.secret, VAULT_SECRET_LEN, h);
+    hex_encode(h, sizeof(h), out_h_hex, VAULT_HASH_HEX_BUF);
+    copy_trunc(out_id, n.id, VAULT_ID_BUF);
+
+    g_notes[g_note_count++] = n;
+    persist_note(&n);
+    persist_index();
+    return VAULT_OK;
+}
+
+vault_err_t vault_new_secret_pair(vault_rng_fn rng, const char parent_ids[][VAULT_ID_BUF],
+                                   size_t parent_count, const char *label,
+                                   char out_id[VAULT_ID_BUF], char out_h_hex[VAULT_HASH_HEX_BUF],
+                                   char out_id2[VAULT_ID_BUF],
+                                   char out_h2_hex[VAULT_HASH_HEX_BUF]) {
+    if (g_note_count + 1 >= VAULT_MAX_NOTES) {
+        return VAULT_ERR_STORAGE_FULL;
+    }
+
+    note_t n1, n2;
+    vault_err_t err = new_note(rng, parent_ids, parent_count, label, &n1);
+    if (err != VAULT_OK) {
+        return err;
+    }
+    err = new_note(rng, parent_ids, parent_count, label, &n2);
+    if (err != VAULT_OK) {
+        return err;
+    }
+
+    uint8_t h1[32], h2[32];
+    sha256(n1.secret, VAULT_SECRET_LEN, h1);
+    sha256(n2.secret, VAULT_SECRET_LEN, h2);
+    hex_encode(h1, sizeof(h1), out_h_hex, VAULT_HASH_HEX_BUF);
+    hex_encode(h2, sizeof(h2), out_h2_hex, VAULT_HASH_HEX_BUF);
+    copy_trunc(out_id, n1.id, VAULT_ID_BUF);
+    copy_trunc(out_id2, n2.id, VAULT_ID_BUF);
+
+    g_notes[g_note_count++] = n1;
+    g_notes[g_note_count++] = n2;
+    persist_note(&n1);
+    persist_note(&n2);
+    persist_index();
+    return VAULT_OK;
+}
+
+vault_err_t vault_confirm(const char *id, uint64_t amount_msat, const char *host,
+                           const char *sig) {
+    int idx = find_index(id);
+    if (idx < 0) {
+        return VAULT_ERR_NOT_FOUND;
+    }
+    if (g_notes[idx].state != NOTE_STATE_PENDING) {
+        return VAULT_ERR_INVALID_STATE;
+    }
+    g_notes[idx].state = NOTE_STATE_CONFIRMED;
+    g_notes[idx].amount_msat = amount_msat;
+    if (host) {
+        copy_trunc(g_notes[idx].host, host, VAULT_HOST_BUF);
+    }
+    if (sig) {
+        copy_trunc(g_notes[idx].sig, sig, VAULT_SIG_BUF);
+    } else {
+        g_notes[idx].sig[0] = '\0';
+    }
+    g_notes[idx].updated_at = g_now ? g_now() : 0;
+    persist_note(&g_notes[idx]);
+    return VAULT_OK;
+}
+
+vault_err_t vault_discard(const char *id) {
+    int idx = find_index(id);
+    if (idx < 0) {
+        return VAULT_ERR_NOT_FOUND;
+    }
+    if (g_notes[idx].state != NOTE_STATE_PENDING) {
+        return VAULT_ERR_INVALID_STATE;
+    }
+    remove_at((size_t)idx);
+    return VAULT_OK;
+}
+
+vault_err_t vault_export_secret(const char *id, char out_hex[VAULT_SECRET_HEX_BUF]) {
+    int idx = find_index(id);
+    if (idx < 0) {
+        return VAULT_ERR_NOT_FOUND;
+    }
+    if (g_notes[idx].state != NOTE_STATE_CONFIRMED) {
+        return VAULT_ERR_INVALID_STATE;
+    }
+    hex_encode(g_notes[idx].secret, VAULT_SECRET_LEN, out_hex, VAULT_SECRET_HEX_BUF);
+    return VAULT_OK;
+}
+
+vault_err_t vault_import_secret(vault_rng_fn rng, const char *k1_hex, const char *host,
+                                 uint64_t amount_msat, const char *label,
+                                 char out_id[VAULT_ID_BUF]) {
+    if (!rng || !k1_hex || strlen(k1_hex) != VAULT_SECRET_LEN * 2) {
+        return VAULT_ERR_BAD_REQUEST;
+    }
+    uint8_t secret[VAULT_SECRET_LEN];
+    if (!hex_decode(k1_hex, VAULT_SECRET_LEN * 2, secret, sizeof(secret))) {
+        return VAULT_ERR_BAD_REQUEST;
+    }
+    if (g_note_count >= VAULT_MAX_NOTES) {
+        return VAULT_ERR_STORAGE_FULL;
+    }
+
+    note_t n;
+    memset(&n, 0, sizeof(n));
+    if (!gen_unique_id(rng, n.id)) {
+        return VAULT_ERR_STORAGE_FULL;
+    }
+    memcpy(n.secret, secret, VAULT_SECRET_LEN);
+    n.state = NOTE_STATE_CONFIRMED;
+    n.amount_msat = amount_msat;
+    if (host) {
+        copy_trunc(n.host, host, VAULT_HOST_BUF);
+    }
+    if (label) {
+        copy_trunc(n.label, label, VAULT_LABEL_BUF);
+    }
+    n.created_at = n.updated_at = g_now ? g_now() : 0;
+    copy_trunc(out_id, n.id, VAULT_ID_BUF);
+
+    g_notes[g_note_count++] = n;
+    persist_note(&n);
+    persist_index();
+    return VAULT_OK;
+}
+
+vault_err_t vault_mark_spent(const char *id) {
+    int idx = find_index(id);
+    if (idx < 0) {
+        return VAULT_ERR_NOT_FOUND;
+    }
+    if (g_notes[idx].state != NOTE_STATE_CONFIRMED) {
+        return VAULT_ERR_INVALID_STATE;
+    }
+    g_notes[idx].state = NOTE_STATE_SPENT;
+    g_notes[idx].updated_at = g_now ? g_now() : 0;
+    persist_note(&g_notes[idx]);
+    return VAULT_OK;
+}
+
+vault_err_t vault_rename(const char *id, const char *label) {
+    int idx = find_index(id);
+    if (idx < 0) {
+        return VAULT_ERR_NOT_FOUND;
+    }
+    copy_trunc(g_notes[idx].label, label, VAULT_LABEL_BUF);
+    g_notes[idx].updated_at = g_now ? g_now() : 0;
+    persist_note(&g_notes[idx]);
+    return VAULT_OK;
+}
+
+vault_err_t vault_delete(const char *id) {
+    int idx = find_index(id);
+    if (idx < 0) {
+        return VAULT_ERR_NOT_FOUND;
+    }
+    if (g_notes[idx].state != NOTE_STATE_SPENT) {
+        return VAULT_ERR_INVALID_STATE;
+    }
+    remove_at((size_t)idx);
+    return VAULT_OK;
+}
+
+size_t vault_list(note_meta_t *out, size_t max) {
+    size_t n = g_note_count < max ? g_note_count : max;
+    for (size_t i = 0; i < n; i++) {
+        fill_meta(&g_notes[i], &out[i]);
+    }
+    return n;
+}
+
+bool vault_get_meta(const char *id, note_meta_t *out) {
+    int idx = find_index(id);
+    if (idx < 0) {
+        return false;
+    }
+    fill_meta(&g_notes[idx], out);
+    return true;
+}
+
+size_t vault_count(void) {
+    return g_note_count;
+}
+
+bool vault_get_meta_at(size_t index, note_meta_t *out) {
+    if (index >= g_note_count) {
+        return false;
+    }
+    fill_meta(&g_notes[index], out);
+    return true;
+}
+
+void vault_get_info(size_t *note_count, size_t *pending_count) {
+    if (note_count) {
+        *note_count = g_note_count;
+    }
+    if (pending_count) {
+        size_t pending = 0;
+        for (size_t i = 0; i < g_note_count; i++) {
+            if (g_notes[i].state == NOTE_STATE_PENDING) {
+                pending++;
+            }
+        }
+        *pending_count = pending;
+    }
+}

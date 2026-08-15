@@ -1,0 +1,8 @@
+# ESP-IDF Component Manager manifest for the firmware ("main") component.
+# Pulls in the managed esp_tinyusb component for native USB-CDC (WebSerial).
+# NOTE: unverified by an actual `pio run`/`idf.py` build in this environment —
+# reconcile the version constraint against what's current if it fails to
+# resolve (`pio run -t menuconfig` or the component registry at
+# components.espressif.com/component/espressif/esp_tinyusb).
+dependencies:
+  espressif/esp_tinyusb: "^1.4"

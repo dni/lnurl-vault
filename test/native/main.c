@@ -1,0 +1,28 @@
+#include <stdio.h>
+
+#include "unity_lite.h"
+
+int g_tests_run = 0;
+int g_tests_failed = 0;
+
+void test_sha256_run(void);
+void test_hex_run(void);
+void test_json_run(void);
+void test_vault_run(void);
+void test_dispatcher_run(void);
+
+int main(void) {
+    test_sha256_run();
+    test_hex_run();
+    test_json_run();
+    test_vault_run();
+    test_dispatcher_run();
+
+    printf("%d/%d assertions passed\n", g_tests_run - g_tests_failed, g_tests_run);
+    if (g_tests_failed > 0) {
+        printf("FAILED: %d assertion(s) failed\n", g_tests_failed);
+        return 1;
+    }
+    printf("All tests passed.\n");
+    return 0;
+}

@@ -1,0 +1,37 @@
+# lnurl-vault sdkconfig defaults.
+#
+# NOTE: this file was authored without a working ESP-IDF/PlatformIO install or
+# attached board in the environment that built this project (see README.md,
+# "Status: unverified by compilation"). Config option names have drifted
+# between ESP-IDF releases before; if `pio run` reports an unknown option,
+# reconcile the affected line against `pio run -t menuconfig` on your
+# installed IDF version rather than assuming this file is wrong wholesale.
+
+# --- NVS encryption -----------------------------------------------------
+# Encrypts note storage at rest using keys from the dedicated `nvs_keys`
+# partition (see partitions.csv). This alone only protects against casual
+# flash dumping — see README.md's security posture section for why Flash
+# Encryption + Secure Boot V2 are also required before storing real value.
+CONFIG_NVS_ENCRYPTION=y
+
+# --- No Wi-Fi -------------------------------------------------------------
+# The device does no networking of its own (see README.md) — the mint is
+# only ever reached through the paired browser session. Leaving the Wi-Fi
+# driver out entirely shrinks the attack surface and flash/RAM footprint.
+CONFIG_ESP_WIFI_ENABLED=n
+
+# --- Bluetooth (NimBLE) ----------------------------------------------------
+# Also required for the ESP32-S3 hardware RNG's documented full-entropy
+# guarantee (Wi-Fi or BT must have been active at least once) — see
+# secret.c and README.md's security posture section.
+CONFIG_BT_ENABLED=y
+CONFIG_BT_NIMBLE_ENABLED=y
+
+# --- USB (native USB-CDC for WebSerial) ------------------------------------
+CONFIG_TINYUSB_CDC_ENABLED=y
+CONFIG_USB_CDC_ENABLED=y
+
+# --- Flash size -------------------------------------------------------------
+# LilyGo T-Display S3 ships with 16MB flash on the common variant; adjust if
+# yours differs (`pio run -t menuconfig` -> Serial flasher config).
+CONFIG_ESPTOOLPY_FLASHSIZE_16MB=y
