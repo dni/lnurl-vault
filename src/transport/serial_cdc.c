@@ -14,6 +14,7 @@
 #include "esp_log.h"
 #include "tinyusb.h"
 #include "tusb_cdc_acm.h"
+#include "vault_lock.h"
 
 static const char *TAG = "serial_cdc";
 
@@ -38,7 +39,9 @@ static void handle_rx(int itf, cdcacm_event_t *event) {
         if (c == '\n' || c == '\r') {
             if (g_line_len > 0) {
                 g_line_buf[g_line_len] = '\0';
+                vault_lock_acquire();
                 dispatcher_handle(g_line_buf, g_resp_buf, sizeof(g_resp_buf));
+                vault_lock_release();
                 size_t resp_len = strlen(g_resp_buf);
                 tinyusb_cdcacm_write_queue(itf, (const uint8_t *)g_resp_buf, resp_len);
                 uint8_t nl = '\n';

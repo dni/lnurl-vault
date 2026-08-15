@@ -33,6 +33,7 @@
 #include "nimble/nimble_port_freertos.h"
 #include "services/gap/ble_svc_gap.h"
 #include "services/gatt/ble_svc_gatt.h"
+#include "vault_lock.h"
 
 #define LNURLVAULT_SVC_UUID128                                                                       \
     BLE_UUID128_INIT(0x9c, 0x1a, 0x60, 0x4e, 0x53, 0x1b, 0x4b, 0xd6, 0x8e, 0x11, 0x3d, 0x2c, 0x1a, \
@@ -121,7 +122,9 @@ static int rx_chr_access(uint16_t conn_handle, uint16_t attr_handle,
     if (g_rx_want > 0 && g_rx_have >= g_rx_want) {
         g_rx_buf[g_rx_have < RX_BUF_SIZE ? g_rx_have : RX_BUF_SIZE - 1] = '\0';
 
+        vault_lock_acquire();
         dispatcher_handle((const char *)g_rx_buf, (char *)g_tx_buf + 2, TX_BUF_SIZE - 2);
+        vault_lock_release();
         size_t resp_len = strlen((const char *)g_tx_buf + 2);
         g_tx_buf[0] = (uint8_t)(resp_len & 0xFF);
         g_tx_buf[1] = (uint8_t)((resp_len >> 8) & 0xFF);

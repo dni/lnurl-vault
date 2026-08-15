@@ -1,18 +1,17 @@
 #ifndef LNURLVAULT_BUTTONS_H
 #define LNURLVAULT_BUTTONS_H
 
-#include <stdint.h>
-
-#include "dispatcher.h" /* for confirm_result_t */
+#include "button_fsm.h" /* button_event_t */
 
 void buttons_init(void);
 
-/* Blocks (polling with simple debounce) until BUTTON_1 (confirm) or
- * BUTTON_2 (cancel) is pressed, or timeout_ms elapses. Requires both
- * buttons to be released first, so a button already held down from
- * whatever triggered the prompt can't auto-confirm it. This is the actual
- * security-relevant gate in front of vault_export_secret — see
- * dispatcher.h's export_confirm_fn and main.c's confirm_export_on_device. */
-confirm_result_t buttons_wait_confirm(uint32_t timeout_ms);
+/* Thin wrapper around button_fsm_poll() (src/proto/button_fsm.h, portable
+ * and unit-tested — see test/native/test_button_fsm.c) feeding it real GPIO
+ * levels and a real monotonic clock. Call periodically from exactly one
+ * owner task — that's ui_task.c, which is the sole owner for both local
+ * note browsing (tap = next/prev, both-buttons chord = unveil a note's QR)
+ * and servicing remote export_secret confirm requests, so the two never
+ * read the buttons concurrently. */
+button_event_t buttons_poll(void);
 
 #endif

@@ -1,29 +1,28 @@
 /* NOTE: unverified by compilation (see README.md, "Status: unverified by
  * compilation"). This file wires together modules with very different
  * confidence levels: dispatcher.c/vault.c and everything under src/vault
- * and src/proto are exercised by test/native/ and actually pass (93/93
+ * and src/proto are exercised by test/native/ and actually pass (112/112
  * assertions, see README.md's Verification section); nvs_storage.c,
- * serial_cdc.c, ble_gatt.c, display.c, and buttons.c are ESP-IDF-specific
- * and have not been compiled here — see each file's own header comment for
- * which parts are most likely to need reconciling against your installed
- * IDF version. */
+ * serial_cdc.c, ble_gatt.c, display.c, buttons.c, and ui_task.c are
+ * ESP-IDF-specific and have not been compiled here — see each file's own
+ * header comment for which parts are most likely to need reconciling
+ * against your installed IDF version. */
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdlib.h>
 
 #include "ble_gatt.h"
-#include "board_pins.h"
 #include "buttons.h"
 #include "dispatcher.h"
 #include "display.h"
 #include "esp_log.h"
 #include "esp_random.h"
 #include "esp_timer.h"
-#include "freertos/FreeRTOS.h"
-#include "freertos/task.h"
 #include "nvs_storage.h"
 #include "serial_cdc.h"
+#include "ui_task.h"
 #include "vault.h"
+#include "vault_lock.h"
 
 static const char *TAG = "main";
 
@@ -63,23 +62,19 @@ static void rng_self_test(void) {
     }
 }
 
-/* The physical confirm/cancel gate in front of vault_export_secret. Note
- * details aren't shown on-screen yet (see display.c's header comment) but
- * the gate itself — a real button press required, with a timeout — is
- * fully functional regardless. */
+/* The physical confirm/cancel gate in front of vault_export_secret, now
+ * delegated to ui_task.c — see its header comment for why: it's the single
+ * owner of both buttons and the display, arbitrating between this (a
+ * remote request) and local on-device note browsing so the two never read
+ * the buttons concurrently. */
 static confirm_result_t confirm_export_on_device(const note_meta_t *note) {
-    (void)note;
-    display_set_state(DISPLAY_STATE_CONFIRM_PENDING);
-    confirm_result_t result = buttons_wait_confirm(30000);
-    display_set_state(result == CONFIRM_YES ? DISPLAY_STATE_APPROVED : DISPLAY_STATE_DECLINED);
-    vTaskDelay(pdMS_TO_TICKS(800));
-    display_set_state(DISPLAY_STATE_IDLE);
-    return result;
+    return ui_task_request_remote_confirm(note, 30000);
 }
 
 void app_main(void) {
     buttons_init();
     display_init();
+    vault_lock_init();
 
     esp_err_t err = vault_nvs_boot();
     if (err != ESP_OK) {
@@ -102,6 +97,11 @@ void app_main(void) {
     rng_self_test();
 
     vault_init(storage_ok ? vault_nvs_storage() : NULL, now_seconds);
+
+    /* ui_task_start() must come after vault_init() (so ui_task never
+     * browses a not-yet-populated vault) but can otherwise run any time
+     * before the transports start accepting commands. */
+    ui_task_start();
 
     serial_cdc_start();
 }

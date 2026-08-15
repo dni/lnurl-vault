@@ -8,11 +8,15 @@ SRC = ../../src/vault/sha256.c \
       ../../src/vault/vault.c \
       ../../src/proto/json.c \
       ../../src/proto/dispatcher.c \
+      ../../src/proto/button_fsm.c \
+      ../../src/proto/note_url.c \
       test_sha256.c \
       test_hex.c \
       test_json.c \
       test_vault.c \
       test_dispatcher.c \
+      test_button_fsm.c \
+      test_note_url.c \
       main.c
 BIN = vault_tests
 

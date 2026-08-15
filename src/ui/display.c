@@ -22,9 +22,9 @@
 #include "esp_lcd_panel_ops.h"
 #include "esp_lcd_panel_st7789.h"
 #include "esp_lcd_panel_vendor.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 
-#define LCD_WIDTH 320
-#define LCD_HEIGHT 170
 #define LCD_SPI_HOST SPI2_HOST
 
 static esp_lcd_panel_handle_t g_panel = NULL;
@@ -33,6 +33,8 @@ static uint16_t color_for_state(display_state_t state) {
     switch (state) {
         case DISPLAY_STATE_IDLE:
             return 0x39C7; /* muted blue, RGB565 */
+        case DISPLAY_STATE_BROWSE:
+            return 0x781F; /* purple */
         case DISPLAY_STATE_CONFIRM_PENDING:
             return 0xFEA0; /* amber */
         case DISPLAY_STATE_APPROVED:
@@ -96,11 +98,12 @@ void display_init(void) {
     display_set_state(DISPLAY_STATE_IDLE);
 }
 
-void display_set_state(display_state_t state) {
+static display_state_t g_current_state = DISPLAY_STATE_IDLE;
+
+static void fill_screen(uint16_t color) {
     if (!g_panel) {
         return;
     }
-    uint16_t color = color_for_state(state);
     static uint16_t line[LCD_WIDTH];
     for (int i = 0; i < LCD_WIDTH; i++) {
         line[i] = color;
@@ -108,4 +111,28 @@ void display_set_state(display_state_t state) {
     for (int y = 0; y < LCD_HEIGHT; y++) {
         esp_lcd_panel_draw_bitmap(g_panel, 0, y, LCD_WIDTH, y + 1, line);
     }
+}
+
+void display_set_state(display_state_t state) {
+    g_current_state = state;
+    fill_screen(color_for_state(state));
+}
+
+void display_flash_count(int count) {
+    if (count < 1 || !g_panel) {
+        return;
+    }
+    if (count > 20) {
+        count = 20; /* don't turn a large note collection into a light show */
+    }
+    for (int i = 0; i < count; i++) {
+        fill_screen(0xFFFF); /* white */
+        vTaskDelay(pdMS_TO_TICKS(150));
+        fill_screen(color_for_state(g_current_state));
+        vTaskDelay(pdMS_TO_TICKS(150));
+    }
+}
+
+esp_lcd_panel_handle_t display_panel_handle(void) {
+    return g_panel;
 }

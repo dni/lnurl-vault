@@ -6,5 +6,5 @@
 idf_component_register(
     SRC_DIRS "." "vault" "proto" "storage" "transport" "ui"
     INCLUDE_DIRS "." "vault" "proto" "storage" "transport" "ui"
-    REQUIRES nvs_flash esp_lcd driver bt esp_hw_support esp_timer esp_tinyusb esp_partition
+    REQUIRES nvs_flash esp_lcd driver bt esp_hw_support esp_timer esp_tinyusb esp_partition freertos
 )

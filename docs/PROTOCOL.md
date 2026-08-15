@@ -201,3 +201,39 @@ itself as a prior holder).
 **Receiving a note from someone else** (offline handoff): `import_secret`
 with the received `k1`, then immediately **rotate** it, closing the window
 in which the previous holder could also redeem it.
+
+## On-device note browsing
+
+Independent of the commands above and not exposed over serial/BLE at all —
+this is a purely physical, local interaction (`src/ui/ui_task.c`) for
+handing a note to someone else in person, the "offline circulation" case
+[LUD-25](../../luds/25.md) itself describes. No browser or paired host is
+involved in this flow.
+
+| Gesture | Effect |
+|---|---|
+| Tap either button (idle) | Enter browse mode at the first `CONFIRMED` note |
+| Tap button 1 / button 2 (browsing) | Next / previous `CONFIRMED` note (wraps around) |
+| Hold both buttons together for ~200ms ("the chord") | **Unveil**: exports the selected note's secret and shows its `lnurlw://` URL as a QR code on-screen |
+| Any tap while a QR is shown | Dismiss it, back to browsing |
+| ~15s with no input while browsing | Back to idle |
+
+Only `CONFIRMED` notes are browsable (a `PENDING` note has no settled value
+yet; `SPENT` notes have nothing left to show). There's no on-screen text yet
+(see README.md's "Known limitations"), so the display blinks the selected
+note's 1-based position among `CONFIRMED` notes instead of printing a
+number.
+
+The chord *is* the confirmation — unlike `export_secret` over serial/BLE,
+there's no separate confirm/cancel step, because reaching this point already
+required physically holding the device and deliberately pressing both
+buttons together. Once shown, the QR **is** the bearer secret in the clear;
+anyone who can see the screen can scan and redeem it, exactly like handing
+over a banknote. Dismissing it overwrites the screen (and the URL buffer
+holding the secret is explicitly zeroed in RAM) but there is, deliberately,
+no way to re-display the same QR without repeating the gesture.
+
+This and a remote `export_secret` request share the same physical
+buttons/display, arbitrated by a single owning task — see `ui_task.c` and
+`vault_lock.h`'s header comments for how the two are kept from ever reading
+the buttons concurrently.

@@ -1,16 +1,17 @@
 /* NOTE: unverified by compilation (see README.md). Uses standard ESP-IDF
- * GPIO/FreeRTOS/esp_timer APIs, which have been stable across recent IDF
- * releases — the piece most likely to need adjustment is board_pins.h, not
- * this file. */
+ * GPIO/esp_timer APIs, which have been stable across recent IDF releases —
+ * the piece most likely to need adjustment is board_pins.h, not this file.
+ * The actual gesture logic (debounce, tap vs. chord) lives in the portable,
+ * unit-tested src/proto/button_fsm.c; this file is deliberately just a thin
+ * adapter feeding it real hardware state. */
 #include "buttons.h"
 
-#include <stdbool.h>
-
 #include "board_pins.h"
+#include "button_fsm.h"
 #include "driver/gpio.h"
 #include "esp_timer.h"
-#include "freertos/FreeRTOS.h"
-#include "freertos/task.h"
+
+static button_fsm_t g_fsm;
 
 void buttons_init(void) {
     gpio_config_t cfg = {
@@ -21,36 +22,11 @@ void buttons_init(void) {
         .intr_type = GPIO_INTR_DISABLE,
     };
     gpio_config(&cfg);
+    button_fsm_init(&g_fsm);
 }
 
-static bool pressed(int pin) {
-    return gpio_get_level(pin) == 0; /* active-low, per pull-up config above */
-}
-
-confirm_result_t buttons_wait_confirm(uint32_t timeout_ms) {
-    int64_t deadline_us = esp_timer_get_time() + (int64_t)timeout_ms * 1000;
-
-    while (pressed(PIN_BUTTON_1) || pressed(PIN_BUTTON_2)) {
-        if (esp_timer_get_time() > deadline_us) {
-            return CONFIRM_TIMEOUT;
-        }
-        vTaskDelay(pdMS_TO_TICKS(20));
-    }
-
-    while (esp_timer_get_time() < deadline_us) {
-        if (pressed(PIN_BUTTON_1)) {
-            vTaskDelay(pdMS_TO_TICKS(30)); /* debounce */
-            if (pressed(PIN_BUTTON_1)) {
-                return CONFIRM_YES;
-            }
-        }
-        if (pressed(PIN_BUTTON_2)) {
-            vTaskDelay(pdMS_TO_TICKS(30));
-            if (pressed(PIN_BUTTON_2)) {
-                return CONFIRM_NO;
-            }
-        }
-        vTaskDelay(pdMS_TO_TICKS(20));
-    }
-    return CONFIRM_TIMEOUT;
+button_event_t buttons_poll(void) {
+    bool b1 = gpio_get_level(PIN_BUTTON_1) == 0; /* active-low, per pull-up config above */
+    bool b2 = gpio_get_level(PIN_BUTTON_2) == 0;
+    return button_fsm_poll(&g_fsm, b1, b2, esp_timer_get_time());
 }
