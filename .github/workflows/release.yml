@@ -75,13 +75,43 @@ jobs:
           cp "$(find "$BUILD_DIR" -maxdepth 1 -name 'firmware.bin' | head -1)" dist/firmware.bin
           ls -la dist
 
+      # esp-web-tools' own docs are explicit that it can't patch SPI flash
+      # parameters on the fly when writing multiple separate binary parts
+      # over Web Serial, and that ESP-IDF firmware needs to be pre-merged
+      # with esptool first (confirmed by fetching those docs directly, not
+      # assumed) — a real symptom of skipping this is exactly "the web
+      # installer reports success, but the board never boots the flashed
+      # firmware, stuck showing the ROM's own bootloader instead". The
+      # --flash_mode/--flash_freq/--flash_size values here must match what
+      # `pio run -t upload`'s own esptool.py invocation uses for this board
+      # — verified directly (`pio run -t upload -v`) rather than guessed:
+      # dio / 80m / 16MB.
+      #
+      # Deliberately invoking the exact esptool.py PlatformIO already
+      # downloaded for this build (under ~/.platformio/packages/
+      # tool-esptoolpy/), rather than a separately `pip install`ed esptool:
+      # the latter can resolve a much newer major version (v5, confirmed —
+      # renamed this very command to `merge-bin` and restructured its
+      # flags) that isn't the one this step was actually tested against.
+      - name: Merge into a single flashable image
+        run: |
+          set -euo pipefail
+          ESPTOOL="$(find "$HOME/.platformio/packages/tool-esptoolpy" -maxdepth 1 -name 'esptool.py')"
+          python3 "$ESPTOOL" --chip esp32s3 merge_bin \
+            -o dist/merged-firmware.bin \
+            --flash_mode dio --flash_freq 80m --flash_size 16MB \
+            0x0 dist/bootloader.bin \
+            0x8000 dist/partitions.bin \
+            0x30000 dist/firmware.bin
+          ls -la dist
+
       - name: Generate manifest.json
         run: |
           set -euo pipefail
           VERSION="${GITHUB_REF_NAME#v}"
-          # Offsets must match partitions.csv: bootloader @ 0x0 (ESP32-S3),
-          # the partition table @ 0x8000 (ESP-IDF default), and our
-          # `factory` app partition @ 0x30000.
+          # Single merged part at offset 0 — see "Merge into a single
+          # flashable image" above for why this isn't three separate parts
+          # the way an earlier version of this workflow did it.
           cat > dist/manifest.json <<EOF
           {
             "name": "lnurl-vault",
@@ -91,9 +121,7 @@ jobs:
               {
                 "chipFamily": "ESP32-S3",
                 "parts": [
-                  { "path": "bootloader.bin", "offset": 0 },
-                  { "path": "partitions.bin", "offset": 32768 },
-                  { "path": "firmware.bin", "offset": 196608 }
+                  { "path": "merged-firmware.bin", "offset": 0 }
                 ]
               }
             ]
@@ -108,7 +136,8 @@ jobs:
           gh release create "${GITHUB_REF_NAME}" \
             --title "${GITHUB_REF_NAME}" \
             --generate-notes \
-            dist/bootloader.bin dist/partitions.bin dist/firmware.bin dist/manifest.json
+            dist/bootloader.bin dist/partitions.bin dist/firmware.bin \
+            dist/merged-firmware.bin dist/manifest.json
 
   deploy-pages:
     needs: [build-firmware]

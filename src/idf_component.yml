@@ -6,3 +6,4 @@
 # components.espressif.com/component/espressif/esp_tinyusb).
 dependencies:
   espressif/esp_tinyusb: "^1.4"
+  espressif/cjson: "^1.7.19"

@@ -41,12 +41,16 @@ bool json_get_str_array(const char *json, const char *key, char *out_flat,
 
 #define JW_MAX_DEPTH 8
 
+/* Builds a cJSON tree internally (stack holds opaque cJSON* container
+ * pointers — kept as void* so this header doesn't need cJSON.h on its
+ * include path) and serializes it into buf/cap the moment the outermost
+ * jw_begin_obj/jw_begin_arr closes. See json.c for details. */
 typedef struct {
     char *buf;
     size_t cap;
-    size_t len;
-    bool ok; /* false once the buffer would have overflowed */
-    bool need_comma[JW_MAX_DEPTH];
+    bool ok; /* false once malformed, over-nested, or the buffer would overflow */
+    void *root;
+    void *stack[JW_MAX_DEPTH];
     int depth;
 } json_writer_t;
 

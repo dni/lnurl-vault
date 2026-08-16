@@ -106,6 +106,9 @@ static void handle_get_info(char *out, size_t outcap) {
     jw_str(&w, "fw_version", LNURLVAULT_FW_VERSION);
     jw_uint64(&w, "note_count", note_count);
     jw_uint64(&w, "pending_count", pending_count);
+    if (g_deps.free_heap) {
+        jw_uint64(&w, "free_heap_bytes", g_deps.free_heap());
+    }
     jw_end_obj(&w);
 }
 
@@ -328,7 +331,8 @@ static void handle_delete(const char *line, char *out, size_t outcap) {
 
 void dispatcher_handle(const char *line, char *out, size_t outcap) {
     char cmd[32];
-    if (!json_get_str(line, "cmd", cmd, sizeof(cmd))) {
+    bool found_cmd = json_get_str(line, "cmd", cmd, sizeof(cmd));
+    if (!found_cmd) {
         write_error(out, outcap, "bad_request", "missing or invalid cmd");
         return;
     }

@@ -2,6 +2,7 @@
 #define LNURLVAULT_DISPATCHER_H
 
 #include <stddef.h>
+#include <stdint.h>
 
 #include "vault.h"
 
@@ -25,9 +26,18 @@ typedef enum {
  * NULL => always allow (used by native tests, where there's no display). */
 typedef confirm_result_t (*export_confirm_fn)(const note_meta_t *note);
 
+/* Optional: reports current free heap in bytes, surfaced as get_info's
+ * free_heap_bytes field when set. NULL => field omitted (native tests have
+ * no heap of their own to report). Added to chase a real, reproducible
+ * hardware issue where serial responses get flakier the longer a boot runs
+ * — see README.md's Status section — not just for its own sake, but it's
+ * cheap and generally useful for a long-running device to report this. */
+typedef uint64_t (*free_heap_fn)(void);
+
 typedef struct {
     vault_rng_fn rng;
     export_confirm_fn confirm_export;
+    free_heap_fn free_heap;
 } dispatcher_deps_t;
 
 void dispatcher_init(const dispatcher_deps_t *deps);
