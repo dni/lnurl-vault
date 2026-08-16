@@ -22,6 +22,11 @@ test/native/vault_tests
 managed_components/
 dependencies.lock
 
+# release.yml's own scratch output directory (bootloader.bin/partitions.bin/
+# firmware.bin/merged-firmware.bin/manifest.json before they're uploaded as
+# release assets) — only relevant if you run those steps locally.
+/dist/
+
 # Vendored third-party QR encoder (ricmoo/QRCode) — deliberately not
 # committed, see README.md's "Build & flash" and src/ui/qr_display.c's
 # header comment for why and how to fetch it yourself.

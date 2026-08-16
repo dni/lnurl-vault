@@ -1,468 +1,274 @@
 #include "json.h"
 
-#include <stdio.h>
 #include <string.h>
 
-#include "hex.h"
+#include "cJSON.h"
 
-/* ================= shared scanning helpers ============================ */
-
-static void skip_ws(const char **p) {
-    while (**p == ' ' || **p == '\t' || **p == '\n' || **p == '\r') {
-        (*p)++;
-    }
-}
-
-/* *p must point at the opening '"'. Returns a pointer just past the matching
- * (unescaped) closing '"'. Does not validate escape sequences, just skips
- * past them so bracket/quote matching stays correct. */
-static const char *skip_json_string(const char *p) {
-    p++; /* opening quote */
-    while (*p && *p != '"') {
-        if (*p == '\\' && *(p + 1)) {
-            p += 2;
-            continue;
-        }
-        p++;
-    }
-    if (*p == '"') {
-        p++;
-    }
-    return p;
-}
-
-/* *p must point at `open`. Returns a pointer just past the matching `close`,
- * skipping over any nested strings/brackets in between. */
-static const char *skip_json_bracketed(const char *p, char open, char close) {
-    int depth = 0;
-    for (;;) {
-        if (*p == '"') {
-            p = skip_json_string(p);
-            continue;
-        }
-        if (*p == '\0') {
-            return p;
-        }
-        if (*p == open) {
-            depth++;
-            p++;
-        } else if (*p == close) {
-            depth--;
-            p++;
-            if (depth == 0) {
-                return p;
-            }
-        } else {
-            p++;
-        }
-    }
-}
-
-/* Finds `key` as a field of the outermost JSON object and returns the raw
- * (still-encoded) span of its value — e.g. for a string value the span
- * includes the surrounding quotes. Nested objects/arrays belonging to other
- * fields are skipped wholesale, never descended into. */
-static bool json_find_raw(const char *json, const char *key, const char **val_start,
-                           const char **val_end) {
-    const char *p = json;
-    while (*p && *p != '{') {
-        p++;
-    }
-    if (*p != '{') {
-        return false;
-    }
-    p++;
-
-    size_t keylen = strlen(key);
-
-    for (;;) {
-        skip_ws(&p);
-        if (*p == '}' || *p == '\0') {
-            return false;
-        }
-        if (*p == ',') {
-            p++;
-            continue;
-        }
-        if (*p != '"') {
-            return false; /* malformed input */
-        }
-
-        const char *kstart = p + 1;
-        const char *after_key = skip_json_string(p);
-        const char *kend = after_key - 1; /* at the closing quote */
-        p = after_key;
-
-        skip_ws(&p);
-        if (*p != ':') {
-            return false;
-        }
-        p++;
-        skip_ws(&p);
-
-        const char *vstart = p;
-        const char *vend;
-        if (*p == '"') {
-            vend = skip_json_string(p);
-        } else if (*p == '{') {
-            vend = skip_json_bracketed(p, '{', '}');
-        } else if (*p == '[') {
-            vend = skip_json_bracketed(p, '[', ']');
-        } else {
-            while (*p && *p != ',' && *p != '}' && *p != ' ' && *p != '\t' && *p != '\n' &&
-                   *p != '\r') {
-                p++;
-            }
-            vend = p;
-        }
-
-        size_t this_keylen = (size_t)(kend - kstart);
-        if (this_keylen == keylen && strncmp(kstart, key, keylen) == 0) {
-            *val_start = vstart;
-            *val_end = vend;
-            return true;
-        }
-
-        p = vend;
-    }
-}
-
-static bool json_unescape_str(const char *src, size_t srclen, char *dst, size_t dstcap) {
-    size_t di = 0;
-    size_t i = 0;
-    while (i < srclen) {
-        char c = src[i];
-        if (c != '\\') {
-            if (di + 1 >= dstcap) {
-                return false;
-            }
-            dst[di++] = c;
-            i++;
-            continue;
-        }
-
-        if (i + 1 >= srclen) {
-            return false;
-        }
-        char e = src[i + 1];
-        if (e == 'u') {
-            if (i + 6 > srclen) {
-                return false;
-            }
-            uint8_t codeunit[2];
-            if (!hex_decode(src + i + 2, 4, codeunit, sizeof(codeunit))) {
-                return false;
-            }
-            unsigned cp = ((unsigned)codeunit[0] << 8) | codeunit[1];
-            i += 6;
-            if (cp < 0x80) {
-                if (di + 1 >= dstcap) {
-                    return false;
-                }
-                dst[di++] = (char)cp;
-            } else if (cp < 0x800) {
-                if (di + 2 >= dstcap) {
-                    return false;
-                }
-                dst[di++] = (char)(0xC0 | (cp >> 6));
-                dst[di++] = (char)(0x80 | (cp & 0x3F));
-            } else {
-                if (di + 3 >= dstcap) {
-                    return false;
-                }
-                dst[di++] = (char)(0xE0 | (cp >> 12));
-                dst[di++] = (char)(0x80 | ((cp >> 6) & 0x3F));
-                dst[di++] = (char)(0x80 | (cp & 0x3F));
-            }
-            continue;
-        }
-
-        char out_c;
-        switch (e) {
-            case '"':
-                out_c = '"';
-                break;
-            case '\\':
-                out_c = '\\';
-                break;
-            case '/':
-                out_c = '/';
-                break;
-            case 'b':
-                out_c = '\b';
-                break;
-            case 'f':
-                out_c = '\f';
-                break;
-            case 'n':
-                out_c = '\n';
-                break;
-            case 'r':
-                out_c = '\r';
-                break;
-            case 't':
-                out_c = '\t';
-                break;
-            default:
-                return false;
-        }
-        if (di + 1 >= dstcap) {
-            return false;
-        }
-        dst[di++] = out_c;
-        i += 2;
-    }
-    dst[di] = '\0';
-    return true;
-}
+/* Backed by cJSON (vendored for native tests at test/native/vendor/cjson/,
+ * pulled as the espressif/cjson managed component for the firmware build —
+ * see src/idf_component.yml). This file only adapts cJSON to the fixed,
+ * bounded-buffer API in json.h that the rest of the firmware (dispatcher.c
+ * etc.) depends on: no heap left dangling past any call here, and no
+ * caller-visible allocation ever handed back to them.
+ *
+ * Note on integers: cJSON stores numbers as `double`. Values above 2^53 lose
+ * exact precision; amount_msat values in this protocol are nowhere near that
+ * range in practice (LNURLcash bearer notes cap out at a tiny fraction of
+ * total BTC supply expressed in msat). */
 
 /* ================= reader public API =================================== */
 
 bool json_has(const char *json, const char *key) {
-    const char *vs, *ve;
-    return json_find_raw(json, key, &vs, &ve);
+    cJSON *root = cJSON_Parse(json);
+    if (!root) {
+        return false;
+    }
+    bool found = cJSON_GetObjectItemCaseSensitive(root, key) != NULL;
+    cJSON_Delete(root);
+    return found;
 }
 
 bool json_get_str(const char *json, const char *key, char *out, size_t outcap) {
-    const char *vs, *ve;
-    if (!json_find_raw(json, key, &vs, &ve)) {
+    cJSON *root = cJSON_Parse(json);
+    if (!root) {
         return false;
     }
-    if (ve - vs < 2 || *vs != '"' || *(ve - 1) != '"') {
-        return false;
+    cJSON *item = cJSON_GetObjectItemCaseSensitive(root, key);
+    bool ok = false;
+    if (cJSON_IsString(item) && item->valuestring != NULL) {
+        size_t len = strlen(item->valuestring);
+        if (len + 1 <= outcap) {
+            memcpy(out, item->valuestring, len + 1);
+            ok = true;
+        }
     }
-    return json_unescape_str(vs + 1, (size_t)((ve - 1) - (vs + 1)), out, outcap);
+    cJSON_Delete(root);
+    return ok;
 }
 
 bool json_get_u64(const char *json, const char *key, uint64_t *out) {
-    const char *vs, *ve;
-    if (!json_find_raw(json, key, &vs, &ve)) {
+    cJSON *root = cJSON_Parse(json);
+    if (!root) {
         return false;
     }
-    if (vs >= ve) {
-        return false;
+    cJSON *item = cJSON_GetObjectItemCaseSensitive(root, key);
+    bool ok = false;
+    if (cJSON_IsNumber(item) && item->valuedouble >= 0) {
+        *out = (uint64_t)item->valuedouble;
+        ok = true;
     }
-    uint64_t val = 0;
-    for (const char *p = vs; p < ve; p++) {
-        if (*p < '0' || *p > '9') {
-            return false;
-        }
-        /* Reject rather than wrap. The field this mostly parses is
-         * amount_msat, so a silent wrap turns an absurd number into a
-         * plausible one and stores it against a real note. */
-        uint64_t digit = (uint64_t)(*p - '0');
-        if (val > UINT64_MAX / 10) {
-            return false;
-        }
-        val *= 10;
-        if (val > UINT64_MAX - digit) {
-            return false;
-        }
-        val += digit;
-    }
-    *out = val;
-    return true;
+    cJSON_Delete(root);
+    return ok;
 }
 
 bool json_get_bool(const char *json, const char *key, bool *out) {
-    const char *vs, *ve;
-    if (!json_find_raw(json, key, &vs, &ve)) {
+    cJSON *root = cJSON_Parse(json);
+    if (!root) {
         return false;
     }
-    size_t len = (size_t)(ve - vs);
-    if (len == 4 && strncmp(vs, "true", 4) == 0) {
-        *out = true;
-        return true;
+    cJSON *item = cJSON_GetObjectItemCaseSensitive(root, key);
+    bool ok = false;
+    if (cJSON_IsBool(item)) {
+        *out = cJSON_IsTrue(item);
+        ok = true;
     }
-    if (len == 5 && strncmp(vs, "false", 5) == 0) {
-        *out = false;
-        return true;
-    }
-    return false;
+    cJSON_Delete(root);
+    return ok;
 }
 
 bool json_get_str_array(const char *json, const char *key, char *out_flat, size_t item_stride,
                          size_t max_items, size_t *count) {
-    const char *vs, *ve;
-    if (!json_find_raw(json, key, &vs, &ve)) {
+    cJSON *root = cJSON_Parse(json);
+    if (!root) {
         return false;
     }
-    if (vs >= ve || *vs != '[' || *(ve - 1) != ']') {
-        return false;
-    }
-
-    const char *p = vs + 1;
-    const char *end = ve - 1;
-    *count = 0;
-
-    skip_ws(&p);
-    while (p < end) {
-        if (*p == ',') {
-            p++;
-            skip_ws(&p);
-            continue;
-        }
-        if (*p != '"') {
-            return false; /* only string arrays are supported */
-        }
-        const char *item_end = skip_json_string(p); /* past closing quote */
-        size_t content_len = (size_t)((item_end - 1) - (p + 1));
-        if (*count < max_items) {
-            if (!json_unescape_str(p + 1, content_len, out_flat + (*count) * item_stride,
-                                    item_stride)) {
-                return false;
+    cJSON *item = cJSON_GetObjectItemCaseSensitive(root, key);
+    bool ok = false;
+    if (cJSON_IsArray(item)) {
+        ok = true;
+        size_t n = 0;
+        cJSON *elem = NULL;
+        cJSON_ArrayForEach(elem, item) {
+            if (!cJSON_IsString(elem) || elem->valuestring == NULL) {
+                ok = false;
+                break;
             }
-            (*count)++;
+            if (n < max_items) {
+                size_t len = strlen(elem->valuestring);
+                if (len + 1 > item_stride) {
+                    ok = false;
+                    break;
+                }
+                memcpy(out_flat + n * item_stride, elem->valuestring, len + 1);
+            }
+            n++;
         }
-        p = item_end;
-        skip_ws(&p);
+        if (ok) {
+            *count = n < max_items ? n : max_items;
+        }
     }
-    return true;
+    cJSON_Delete(root);
+    return ok;
 }
 
 /* ================= writer =============================================== */
 
+/* json_writer_t builds a cJSON tree as jw_* calls come in (mirroring the
+ * caller's begin/end nesting via w->stack), then serializes it into the
+ * caller-provided buf/cap the moment the outermost container closes — every
+ * call site in dispatcher.c relies on `out` already holding the finished
+ * response as soon as the matching top-level jw_end_obj()/jw_end_arr()
+ * returns, with no separate "finalize" call. */
+
 void jw_init(json_writer_t *w, char *buf, size_t cap) {
     w->buf = buf;
     w->cap = cap;
-    w->len = 0;
     w->ok = cap > 0;
+    w->root = NULL;
     w->depth = 0;
     if (cap > 0) {
         buf[0] = '\0';
     }
 }
 
-static void jw_raw(json_writer_t *w, const char *s, size_t n) {
-    if (!w->ok) {
-        return;
-    }
-    if (w->len + n + 1 > w->cap) {
-        w->ok = false;
-        return;
-    }
-    memcpy(w->buf + w->len, s, n);
-    w->len += n;
-    w->buf[w->len] = '\0';
+static cJSON *jw_current(json_writer_t *w) {
+    return w->depth > 0 ? (cJSON *)w->stack[w->depth - 1] : NULL;
 }
 
-static void jw_raw_cstr(json_writer_t *w, const char *s) {
-    jw_raw(w, s, strlen(s));
-}
-
-static void jw_pre_value(json_writer_t *w) {
-    if (w->depth > 0) {
-        if (w->need_comma[w->depth - 1]) {
-            jw_raw(w, ",", 1);
-        }
-        w->need_comma[w->depth - 1] = true;
-    }
-}
-
-static void jw_escaped_str(json_writer_t *w, const char *s) {
-    jw_raw(w, "\"", 1);
-    for (const unsigned char *p = (const unsigned char *)s; *p; p++) {
-        switch (*p) {
-            case '"':
-                jw_raw(w, "\\\"", 2);
-                break;
-            case '\\':
-                jw_raw(w, "\\\\", 2);
-                break;
-            case '\n':
-                jw_raw(w, "\\n", 2);
-                break;
-            case '\r':
-                jw_raw(w, "\\r", 2);
-                break;
-            case '\t':
-                jw_raw(w, "\\t", 2);
-                break;
-            default:
-                if (*p < 0x20) {
-                    char buf[7];
-                    snprintf(buf, sizeof(buf), "\\u%04x", *p);
-                    jw_raw_cstr(w, buf);
-                } else {
-                    char c = (char)*p;
-                    jw_raw(w, &c, 1);
-                }
-        }
-    }
-    jw_raw(w, "\"", 1);
-}
-
-static void jw_push(json_writer_t *w) {
+static void jw_push(json_writer_t *w, cJSON *container) {
     if (w->depth < JW_MAX_DEPTH) {
-        w->need_comma[w->depth] = false;
-        w->depth++;
+        w->stack[w->depth++] = container;
     } else {
         w->ok = false;
     }
 }
 
-static void jw_pop(json_writer_t *w) {
-    if (w->depth > 0) {
-        w->depth--;
+/* Attaches `container` (a freshly created object/array) either as the tree
+ * root, a keyed member of the current object, or an unkeyed element of the
+ * current array — then pushes it as the new current container. */
+static void jw_attach(json_writer_t *w, cJSON *container, const char *key) {
+    if (!container) {
+        w->ok = false;
+        return;
     }
+    if (!w->ok) {
+        cJSON_Delete(container);
+        return;
+    }
+    if (w->root == NULL) {
+        w->root = container;
+    } else {
+        cJSON *parent = jw_current(w);
+        cJSON_bool added =
+            key ? cJSON_AddItemToObject(parent, key, container) : cJSON_AddItemToArray(parent, container);
+        if (!parent || !added) {
+            w->ok = false;
+            cJSON_Delete(container);
+            return;
+        }
+    }
+    jw_push(w, container);
+}
+
+/* Serializes the finished tree into buf/cap and frees the tree — called the
+ * moment jw_end_obj/jw_end_arr closes the outermost container. */
+static void jw_finalize(json_writer_t *w) {
+    cJSON *root = (cJSON *)w->root;
+    w->root = NULL;
+    if (!w->ok || !root) {
+        cJSON_Delete(root);
+        w->ok = false;
+        return;
+    }
+    char *printed = cJSON_PrintUnformatted(root);
+    cJSON_Delete(root);
+    if (!printed) {
+        w->ok = false;
+        return;
+    }
+    size_t len = strlen(printed);
+    if (len + 1 > w->cap) {
+        w->ok = false;
+    } else {
+        memcpy(w->buf, printed, len + 1);
+    }
+    cJSON_free(printed);
 }
 
 void jw_begin_obj(json_writer_t *w, const char *key) {
-    jw_pre_value(w);
-    if (key) {
-        jw_escaped_str(w, key);
-        jw_raw(w, ":", 1);
+    if (!w->ok) {
+        return;
     }
-    jw_raw(w, "{", 1);
-    jw_push(w);
+    jw_attach(w, cJSON_CreateObject(), key);
 }
 
 void jw_end_obj(json_writer_t *w) {
-    jw_pop(w);
-    jw_raw(w, "}", 1);
+    if (w->depth > 0) {
+        w->depth--;
+    }
+    if (w->depth == 0) {
+        jw_finalize(w);
+    }
 }
 
 void jw_begin_arr(json_writer_t *w, const char *key) {
-    jw_pre_value(w);
-    if (key) {
-        jw_escaped_str(w, key);
-        jw_raw(w, ":", 1);
+    if (!w->ok) {
+        return;
     }
-    jw_raw(w, "[", 1);
-    jw_push(w);
+    jw_attach(w, cJSON_CreateArray(), key);
 }
 
 void jw_end_arr(json_writer_t *w) {
-    jw_pop(w);
-    jw_raw(w, "]", 1);
+    if (w->depth > 0) {
+        w->depth--;
+    }
+    if (w->depth == 0) {
+        jw_finalize(w);
+    }
 }
 
 void jw_str(json_writer_t *w, const char *key, const char *val) {
-    jw_pre_value(w);
-    jw_escaped_str(w, key);
-    jw_raw(w, ":", 1);
-    jw_escaped_str(w, val);
+    if (!w->ok) {
+        return;
+    }
+    cJSON *parent = jw_current(w);
+    if (!parent || !cJSON_AddStringToObject(parent, key, val)) {
+        w->ok = false;
+    }
 }
 
 void jw_str_item(json_writer_t *w, const char *val) {
-    jw_pre_value(w);
-    jw_escaped_str(w, val);
+    if (!w->ok) {
+        return;
+    }
+    cJSON *parent = jw_current(w);
+    cJSON *item = cJSON_CreateString(val);
+    if (!parent || !item || !cJSON_AddItemToArray(parent, item)) {
+        w->ok = false;
+        cJSON_Delete(item);
+    }
 }
 
 void jw_uint64(json_writer_t *w, const char *key, uint64_t val) {
-    jw_pre_value(w);
-    jw_escaped_str(w, key);
-    jw_raw(w, ":", 1);
-    char buf[21];
-    snprintf(buf, sizeof(buf), "%llu", (unsigned long long)val);
-    jw_raw_cstr(w, buf);
+    if (!w->ok) {
+        return;
+    }
+    cJSON *parent = jw_current(w);
+    cJSON *item = cJSON_CreateNumber((double)val);
+    if (!parent || !item || !cJSON_AddItemToObject(parent, key, item)) {
+        w->ok = false;
+        cJSON_Delete(item);
+    }
 }
 
 void jw_bool(json_writer_t *w, const char *key, bool val) {
-    jw_pre_value(w);
-    jw_escaped_str(w, key);
-    jw_raw(w, ":", 1);
-    jw_raw_cstr(w, val ? "true" : "false");
+    if (!w->ok) {
+        return;
+    }
+    cJSON *parent = jw_current(w);
+    if (!parent || !cJSON_AddBoolToObject(parent, key, val)) {
+        w->ok = false;
+    }
 }
 
 const char *jw_cstr(json_writer_t *w) {

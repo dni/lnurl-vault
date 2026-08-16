@@ -24,6 +24,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # json.c links against the system cJSON library (see test/native/Makefile) —
+      # same upstream version (1.7.19) the firmware pulls via
+      # src/idf_component.yml's espressif/cjson managed component.
+      - name: Install libcjson-dev
+        run: sudo apt-get update && sudo apt-get install -y libcjson-dev
+
       - name: Build and run test/native
         run: |
           cd test/native
