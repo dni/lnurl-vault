@@ -47,6 +47,19 @@
     margin: 0 auto;
     padding: 2.5rem 1.5rem 4rem;
   }
+  nav {
+    display: flex;
+    align-items: center;
+    gap: 1.1rem;
+    font-size: 0.9rem;
+    padding: 0.4rem 0;
+    margin-bottom: 1rem;
+    border-bottom: 1px solid var(--border);
+  }
+  nav .brand { font-weight: 700; margin-right: auto; }
+  nav a { color: var(--muted); text-decoration: none; }
+  nav a[aria-current="page"] { color: var(--fg); font-weight: 600; }
+  nav a:hover { color: var(--accent); }
   h1 {
     font-size: 1.6rem;
     margin-bottom: 0.25rem;
@@ -105,6 +118,12 @@
 </head>
 <body>
 <main>
+  <nav>
+    <span class="brand">LNURLvault</span>
+    <a href="index.html" aria-current="page">Install</a>
+    <a href="console.html">Console</a>
+  </nav>
+
   <h1>LNURLvault web installer</h1>
   <p class="subtitle">
     Flash
@@ -131,6 +150,16 @@
       <li>A first install will offer to erase the flash first; later installs update in place and keep any notes already stored on the device.</li>
       <li>If the browser can't find the device, hold the board's BOOT button while plugging it in (or while clicking Install), then try again.</li>
     </ul>
+  </div>
+
+  <div class="card">
+    <h2>Already flashed?</h2>
+    <p style="color: var(--muted); margin-bottom: 0;">
+      Use the <a href="console.html">device console</a> to run the wire
+      protocol's commands (get_info, list_notes, export_secret, ...)
+      straight from the browser and see formatted responses, over the same
+      WebSerial link.
+    </p>
   </div>
 
   <footer>
