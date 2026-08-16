@@ -1,0 +1,628 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>LNURLvault — device console</title>
+<meta name="description" content="Connect to a flashed lnurl-vault over WebSerial and run its wire protocol commands directly from the browser.">
+<link rel="icon" type="image/svg+xml" href="favicon.svg">
+<style>
+  :root {
+    color-scheme: light dark;
+    --fg: #1a1a1a;
+    --bg: #ffffff;
+    --muted: #5b5b5b;
+    --border: #d8d8d8;
+    --accent: #6d3fd6;
+    --accent-fg: #ffffff;
+    --card: #f7f6fb;
+    --ok: #1a7f37;
+    --ok-bg: #e9f7ee;
+    --err: #c4261d;
+    --err-bg: #fbeceb;
+    --pending: #9a6700;
+    --pending-bg: #fff6e0;
+    --spent: #6b6b6b;
+    --spent-bg: #eeeeee;
+    --mono-bg: #efedf7;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --fg: #ececec;
+      --bg: #121212;
+      --muted: #a5a5a5;
+      --border: #333333;
+      --accent: #a684ff;
+      --accent-fg: #17101f;
+      --card: #1b1b22;
+      --ok: #5fd587;
+      --ok-bg: #123322;
+      --err: #ff7a72;
+      --err-bg: #3a1715;
+      --pending: #e3b341;
+      --pending-bg: #3a2e0a;
+      --spent: #9a9a9a;
+      --spent-bg: #232323;
+      --mono-bg: #201f2b;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: -apple-system, "Segoe UI", Roboto, sans-serif;
+    color: var(--fg);
+    background: var(--bg);
+  }
+  main {
+    max-width: 780px;
+    margin: 0 auto;
+    padding: 1.5rem 1.5rem 4rem;
+  }
+  nav {
+    display: flex;
+    align-items: center;
+    gap: 1.1rem;
+    font-size: 0.9rem;
+    padding: 0.4rem 0;
+    margin-bottom: 1rem;
+    border-bottom: 1px solid var(--border);
+  }
+  nav .brand { font-weight: 700; margin-right: auto; }
+  nav a { color: var(--muted); text-decoration: none; }
+  nav a[aria-current="page"] { color: var(--fg); font-weight: 600; }
+  nav a:hover { color: var(--accent); }
+  h1 { font-size: 1.5rem; margin-bottom: 0.25rem; }
+  .subtitle { color: var(--muted); margin-top: 0; }
+  .card {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 1.25rem 1.5rem;
+    margin: 1.25rem 0;
+  }
+  h2 { font-size: 1rem; margin-top: 0; }
+  ul { margin: 0; padding-left: 1.2rem; color: var(--muted); line-height: 1.6; }
+  code, .mono {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 0.85em;
+  }
+  button {
+    font: inherit;
+    cursor: pointer;
+    border-radius: 8px;
+    border: 1px solid var(--border);
+    background: var(--bg);
+    color: var(--fg);
+    padding: 0.55rem 1rem;
+  }
+  button:disabled { opacity: 0.5; cursor: not-allowed; }
+  button.primary {
+    background: var(--accent);
+    color: var(--accent-fg);
+    border-color: transparent;
+    font-weight: 600;
+  }
+  .row { display: flex; align-items: center; gap: 0.75rem; flex-wrap: wrap; }
+  .status-dot {
+    width: 0.6rem; height: 0.6rem; border-radius: 50%;
+    background: var(--spent); display: inline-block; flex: none;
+  }
+  .status-dot.connected { background: var(--ok); }
+  .status-text { color: var(--muted); font-size: 0.9rem; }
+  label {
+    display: block;
+    font-size: 0.8rem;
+    font-weight: 600;
+    color: var(--muted);
+    margin: 0.8rem 0 0.3rem;
+  }
+  select, input[type="text"], input[type="number"] {
+    width: 100%;
+    font-size: 0.95rem;
+    padding: 0.5rem 0.6rem;
+    border-radius: 8px;
+    border: 1px solid var(--border);
+    background: var(--bg);
+    color: var(--fg);
+    font-family: inherit;
+  }
+  .fields { display: grid; grid-template-columns: 1fr 1fr; gap: 0 1rem; }
+  .fields.single { grid-template-columns: 1fr; }
+  .cmd-note {
+    font-size: 0.82rem;
+    color: var(--pending);
+    background: var(--pending-bg);
+    border-radius: 8px;
+    padding: 0.5rem 0.7rem;
+    margin-top: 0.8rem;
+  }
+  .send-row { margin-top: 1.1rem; }
+  .log { display: flex; flex-direction: column-reverse; gap: 0.8rem; }
+  .entry {
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    overflow: hidden;
+  }
+  .entry-head {
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+    padding: 0.5rem 0.8rem;
+    background: var(--card);
+    font-size: 0.85rem;
+  }
+  .entry-head .cmd { font-weight: 700; }
+  .entry-head .time { color: var(--muted); margin-left: auto; font-size: 0.78rem; }
+  .badge {
+    display: inline-block;
+    font-size: 0.72rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.02em;
+    padding: 0.15rem 0.5rem;
+    border-radius: 999px;
+  }
+  .badge.ok { color: var(--ok); background: var(--ok-bg); }
+  .badge.err { color: var(--err); background: var(--err-bg); }
+  .badge.pending { color: var(--pending); background: var(--pending-bg); }
+  .badge.confirmed { color: var(--ok); background: var(--ok-bg); }
+  .badge.spent { color: var(--spent); background: var(--spent-bg); }
+  .entry-body { padding: 0.8rem; }
+  .kv { width: 100%; border-collapse: collapse; font-size: 0.9rem; }
+  .kv td { padding: 0.25rem 0.4rem; vertical-align: top; }
+  .kv td:first-child { color: var(--muted); white-space: nowrap; padding-right: 0.8rem; }
+  table.notes { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
+  table.notes th, table.notes td { text-align: left; padding: 0.35rem 0.5rem; border-bottom: 1px solid var(--border); }
+  table.notes th { color: var(--muted); font-weight: 600; font-size: 0.75rem; text-transform: uppercase; }
+  .secret-box {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    background: var(--mono-bg);
+    border-radius: 8px;
+    padding: 0.6rem 0.7rem;
+    word-break: break-all;
+    filter: blur(6px);
+    transition: filter 0.1s;
+    cursor: pointer;
+  }
+  .secret-box.revealed { filter: none; }
+  .secret-hint { font-size: 0.78rem; color: var(--muted); margin-top: 0.3rem; }
+  details.raw { margin-top: 0.6rem; }
+  details.raw summary { cursor: pointer; font-size: 0.78rem; color: var(--muted); }
+  details.raw pre {
+    margin: 0.4rem 0 0;
+    padding: 0.6rem 0.7rem;
+    background: var(--mono-bg);
+    border-radius: 8px;
+    overflow-x: auto;
+    font-size: 0.8rem;
+  }
+  .empty-log { color: var(--muted); font-size: 0.9rem; text-align: center; padding: 1.5rem 0; }
+  footer { margin-top: 2rem; font-size: 0.85rem; color: var(--muted); }
+  footer a { color: inherit; }
+</style>
+</head>
+<body>
+<main>
+  <nav>
+    <span class="brand">LNURLvault</span>
+    <a href="index.html">Install</a>
+    <a href="console.html" aria-current="page">Console</a>
+  </nav>
+
+  <h1>Device console</h1>
+  <p class="subtitle">
+    Connect over WebSerial and run
+    <a href="https://github.com/dni/lnurl-vault/blob/main/docs/PROTOCOL.md">the wire protocol's</a>
+    commands directly against a flashed board — same USB-CDC link the
+    <a href="index.html">installer</a> uses, no PlatformIO, no separate
+    client. Responses are formatted below; raw JSON is one click away if
+    you want the wire bytes instead.
+  </p>
+
+  <div class="card" id="unsupported" hidden>
+    <h2>Web Serial isn't available</h2>
+    <p>This needs Chrome or Edge on desktop. Firefox and Safari don't
+    implement the Web Serial API.</p>
+  </div>
+
+  <div class="card">
+    <div class="row">
+      <span class="status-dot" id="status-dot"></span>
+      <span class="status-text" id="status-text">Not connected</span>
+      <button class="primary" id="connect-btn" style="margin-left:auto">Connect</button>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>Send a command</h2>
+    <label for="cmd-select">Command</label>
+    <select id="cmd-select"></select>
+    <div id="cmd-fields" class="fields"></div>
+    <div id="cmd-note"></div>
+    <div class="row send-row">
+      <button class="primary" id="send-btn" disabled>Send</button>
+      <span class="status-text" id="send-status"></span>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>Session log</h2>
+    <div class="log" id="log">
+      <div class="empty-log">Nothing sent yet.</div>
+    </div>
+  </div>
+
+  <footer>
+    This talks directly to real device state — <code>confirm</code>/
+    <code>mark_spent</code>/<code>delete</code> etc. actually mutate stored
+    notes, and <code>export_secret</code> discloses a plaintext secret (it
+    still requires pressing the confirm button on the device itself within
+    30s — see the note on that command below). See
+    <a href="https://github.com/dni/lnurl-vault/blob/main/docs/PROTOCOL.md">docs/PROTOCOL.md</a>
+    for the full protocol and
+    <a href="https://github.com/dni/lnurl-vault/blob/main/README.md">README.md</a>
+    for known flakiness on the serial link — a command occasionally getting
+    no response is a documented, real hardware issue, not a bug in this
+    page.
+  </footer>
+</main>
+
+<script type="module">
+  // Command definitions mirror docs/PROTOCOL.md exactly — field names,
+  // optionality, and types all match what dispatcher.c actually parses.
+  const COMMANDS = {
+    get_info: { fields: [] },
+    list_notes: { fields: [] },
+    new_secret: {
+      fields: [
+        { name: "parent_ids", label: "Parent IDs (comma-separated)", array: true, optional: true },
+        { name: "label", label: "Label", optional: true },
+      ],
+    },
+    new_secret_pair: {
+      fields: [
+        { name: "parent_ids", label: "Parent IDs (comma-separated)", array: true, optional: true },
+      ],
+    },
+    confirm: {
+      fields: [
+        { name: "id", label: "Note ID" },
+        { name: "amount_msat", label: "Amount (msat)", type: "number" },
+        { name: "host", label: "Mint host" },
+        { name: "sig", label: "Signature (hex)", optional: true },
+      ],
+    },
+    discard: { fields: [{ name: "id", label: "Note ID" }] },
+    export_secret: {
+      fields: [{ name: "id", label: "Note ID" }],
+      note: "Requires pressing the confirm button on the device within 30s, or it returns user_declined / timeout.",
+    },
+    import_secret: {
+      fields: [
+        { name: "k1", label: "Secret (64-hex)" },
+        { name: "host", label: "Mint host" },
+        { name: "amount_msat", label: "Amount (msat)", type: "number" },
+        { name: "label", label: "Label", optional: true },
+      ],
+    },
+    mark_spent: { fields: [{ name: "id", label: "Note ID" }] },
+    rename: {
+      fields: [
+        { name: "id", label: "Note ID" },
+        { name: "label", label: "New label" },
+      ],
+    },
+    delete: {
+      fields: [{ name: "id", label: "Note ID" }],
+      note: "Only succeeds on a SPENT note — discard a PENDING one, or mark_spent a CONFIRMED one first.",
+    },
+  };
+
+  const el = (id) => document.getElementById(id);
+  const cmdSelect = el("cmd-select");
+  const cmdFields = el("cmd-fields");
+  const cmdNote = el("cmd-note");
+  const sendBtn = el("send-btn");
+  const sendStatus = el("send-status");
+  const connectBtn = el("connect-btn");
+  const statusDot = el("status-dot");
+  const statusText = el("status-text");
+  const log = el("log");
+
+  cmdSelect.innerHTML = Object.keys(COMMANDS)
+    .map((name) => `<option value="${name}">${name}</option>`)
+    .join("");
+
+  function renderFields() {
+    const def = COMMANDS[cmdSelect.value];
+    cmdFields.className = "fields" + (def.fields.length <= 1 ? " single" : "");
+    cmdFields.innerHTML = def.fields
+      .map(
+        (f) => `
+        <div>
+          <label for="f-${f.name}">${f.label}${f.optional ? " (optional)" : ""}</label>
+          <input type="${f.type === "number" ? "number" : "text"}" id="f-${f.name}"
+                 autocomplete="off" spellcheck="false">
+        </div>`,
+      )
+      .join("");
+    cmdNote.innerHTML = def.note ? `<div class="cmd-note">${def.note}</div>` : "";
+  }
+  cmdSelect.addEventListener("change", renderFields);
+  renderFields();
+
+  function buildCommand() {
+    const name = cmdSelect.value;
+    const def = COMMANDS[name];
+    const obj = { cmd: name };
+    for (const f of def.fields) {
+      const raw = el(`f-${f.name}`).value.trim();
+      if (!raw) {
+        if (!f.optional) throw new Error(`${f.label} is required`);
+        continue;
+      }
+      if (f.array) {
+        obj[f.name] = raw.split(",").map((s) => s.trim()).filter(Boolean);
+      } else if (f.type === "number") {
+        const n = Number(raw);
+        if (!Number.isFinite(n)) throw new Error(`${f.label} must be a number`);
+        obj[f.name] = n;
+      } else {
+        obj[f.name] = raw;
+      }
+    }
+    return obj;
+  }
+
+  // --- WebSerial plumbing -------------------------------------------------
+  let port = null;
+  let writer = null;
+  let reader = null;
+  let readLoopPromise = null;
+  const pending = []; // FIFO of {resolve, timer} — protocol is one response per command, in order.
+
+  function setConnected(connected) {
+    statusDot.classList.toggle("connected", connected);
+    statusText.textContent = connected ? "Connected" : "Not connected";
+    connectBtn.textContent = connected ? "Disconnect" : "Connect";
+    sendBtn.disabled = !connected;
+  }
+
+  async function readLoop() {
+    const decoder = new TextDecoderStream();
+    const closed = port.readable.pipeTo(decoder.writable).catch(() => {});
+    reader = decoder.readable.getReader();
+    let buf = "";
+    try {
+      for (;;) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        buf += value;
+        let idx;
+        while ((idx = buf.indexOf("\n")) >= 0) {
+          const line = buf.slice(0, idx).replace(/\r$/, "");
+          buf = buf.slice(idx + 1);
+          if (line) deliverLine(line);
+        }
+      }
+    } catch (err) {
+      // Port yanked mid-read — surfaced via the 'disconnect' event handler too.
+    } finally {
+      reader.releaseLock();
+      await closed;
+    }
+  }
+
+  function deliverLine(line) {
+    let parsed;
+    try {
+      parsed = JSON.parse(line);
+    } catch {
+      parsed = null;
+    }
+    const waiter = pending.shift();
+    if (waiter) {
+      clearTimeout(waiter.timer);
+      waiter.resolve({ raw: line, parsed });
+    }
+    // No matching waiter: a late arrival for a request this page already
+    // gave up on. Nothing to correlate it to — see README.md on this
+    // device's documented late/dropped-response flakiness.
+  }
+
+  function sendCommand(obj, timeoutMs = 8000) {
+    return new Promise((resolve, reject) => {
+      const entry = { resolve, timer: null };
+      entry.timer = setTimeout(() => {
+        const idx = pending.indexOf(entry);
+        if (idx >= 0) pending.splice(idx, 1);
+        resolve({ raw: null, parsed: null, timedOut: true });
+      }, timeoutMs);
+      pending.push(entry);
+      writer.write(JSON.stringify(obj) + "\n").catch((err) => {
+        clearTimeout(entry.timer);
+        const idx = pending.indexOf(entry);
+        if (idx >= 0) pending.splice(idx, 1);
+        reject(err);
+      });
+    });
+  }
+
+  async function connect() {
+    try {
+      port = await navigator.serial.requestPort({
+        filters: [{ usbVendorId: 0x303a }], // Espressif VID — same filter test/hardware/test_serial.py auto-detects on.
+      });
+      await port.open({ baudRate: 115200 });
+      const encoder = new TextEncoderStream();
+      encoder.readable.pipeTo(port.writable).catch(() => {});
+      writer = encoder.writable.getWriter();
+      readLoopPromise = readLoop();
+      setConnected(true);
+    } catch (err) {
+      if (err.name !== "NotFoundError") alert(`Couldn't connect: ${err.message}`);
+    }
+  }
+
+  async function disconnect() {
+    try {
+      if (reader) await reader.cancel();
+      if (writer) { await writer.close(); }
+      if (readLoopPromise) await readLoopPromise;
+      if (port) await port.close();
+    } catch (err) {
+      // best-effort teardown
+    }
+    port = writer = reader = readLoopPromise = null;
+    setConnected(false);
+  }
+
+  connectBtn.addEventListener("click", () => (port ? disconnect() : connect()));
+
+  if ("serial" in navigator) {
+    navigator.serial.addEventListener("disconnect", (e) => {
+      if (e.target === port) disconnect();
+    });
+  } else {
+    el("unsupported").hidden = false;
+    connectBtn.disabled = true;
+  }
+
+  // --- Formatting -----------------------------------------------------
+  function esc(s) {
+    return String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+  }
+  function fmtMsat(n) {
+    return `${Number(n).toLocaleString()} msat`;
+  }
+  function stateBadge(state) {
+    return `<span class="badge ${esc(state)}">${esc(state)}</span>`;
+  }
+  function kv(rows) {
+    return `<table class="kv">${rows
+      .filter(([, v]) => v !== undefined && v !== null)
+      .map(([k, v]) => `<tr><td>${esc(k)}</td><td>${v}</td></tr>`)
+      .join("")}</table>`;
+  }
+  function secretBox(hex) {
+    const id = `secret-${Math.random().toString(36).slice(2)}`;
+    setTimeout(() => {
+      const box = document.getElementById(id);
+      if (box) box.addEventListener("click", () => box.classList.toggle("revealed"));
+    });
+    return `<div class="secret-box" id="${id}">${esc(hex)}</div>
+            <div class="secret-hint">Click to reveal/hide. This is the bearer secret — treat it like cash.</div>`;
+  }
+  function notesTable(notes) {
+    if (!notes || notes.length === 0) return `<p class="status-text">No notes.</p>`;
+    return `<table class="notes"><thead><tr>
+        <th>ID</th><th>State</th><th>Amount</th><th>Label</th><th>Host</th>
+      </tr></thead><tbody>${notes
+        .map(
+          (n) => `<tr>
+            <td class="mono">${esc(n.id)}</td>
+            <td>${stateBadge(n.state)}</td>
+            <td>${fmtMsat(n.amount_msat)}</td>
+            <td>${esc(n.label || "—")}</td>
+            <td>${esc(n.host || "—")}</td>
+          </tr>`,
+        )
+        .join("")}</tbody></table>`;
+  }
+
+  function formatBody(cmd, resp) {
+    if (resp.ok === false) {
+      return `<p><strong>${esc(resp.error || "error")}</strong>${resp.message ? ` — ${esc(resp.message)}` : ""}</p>`;
+    }
+    switch (cmd) {
+      case "get_info":
+        return kv([
+          ["Firmware", esc(resp.fw_version)],
+          ["Notes", resp.note_count],
+          ["Pending", resp.pending_count],
+          ["Free heap", resp.free_heap_bytes !== undefined ? `${resp.free_heap_bytes.toLocaleString()} bytes` : undefined],
+        ]);
+      case "list_notes":
+        return notesTable(resp.notes);
+      case "new_secret":
+        return kv([
+          ["ID", `<span class="mono">${esc(resp.id)}</span>`],
+          ["Hash", `<span class="mono">${esc(resp.h)}</span>`],
+        ]);
+      case "new_secret_pair":
+        return kv([
+          ["ID", `<span class="mono">${esc(resp.id)}</span>`],
+          ["Hash", `<span class="mono">${esc(resp.h)}</span>`],
+          ["ID 2", `<span class="mono">${esc(resp.id2)}</span>`],
+          ["Hash 2", `<span class="mono">${esc(resp.h2)}</span>`],
+        ]);
+      case "export_secret":
+        return secretBox(resp.k1);
+      case "import_secret":
+        return kv([["ID", `<span class="mono">${esc(resp.id)}</span>`]]);
+      default:
+        return `<p class="status-text">OK.</p>`;
+    }
+  }
+
+  function addLogEntry(cmd, obj, result) {
+    if (log.querySelector(".empty-log")) log.innerHTML = "";
+    const wrap = document.createElement("div");
+    wrap.className = "entry";
+    const time = new Date().toLocaleTimeString();
+
+    let badge, body, raw;
+    if (result.timedOut) {
+      badge = `<span class="badge err">no response</span>`;
+      body = `<p class="status-text">Timed out waiting for a reply. See README.md's Status section — a command occasionally getting no response is a known, unresolved hardware issue on this link.</p>`;
+      raw = "(nothing arrived)";
+    } else if (!result.parsed || typeof result.parsed !== "object") {
+      badge = `<span class="badge err">unparseable</span>`;
+      body = `<p class="status-text">Response wasn't valid JSON.</p>`;
+      raw = result.raw ?? "";
+    } else {
+      badge = result.parsed.ok === false
+        ? `<span class="badge err">${esc(result.parsed.error || "error")}</span>`
+        : `<span class="badge ok">ok</span>`;
+      body = formatBody(cmd, result.parsed);
+      raw = result.raw;
+    }
+
+    wrap.innerHTML = `
+      <div class="entry-head">
+        <span class="cmd mono">${esc(cmd)}</span>
+        ${badge}
+        <span class="time">${time}</span>
+      </div>
+      <div class="entry-body">
+        ${body}
+        <details class="raw">
+          <summary>Raw JSON</summary>
+          <pre>&gt; ${esc(JSON.stringify(obj))}\n&lt; ${esc(raw ?? "")}</pre>
+        </details>
+      </div>`;
+    log.prepend(wrap);
+  }
+
+  sendBtn.addEventListener("click", async () => {
+    let obj;
+    try {
+      obj = buildCommand();
+    } catch (err) {
+      sendStatus.textContent = err.message;
+      return;
+    }
+    sendStatus.textContent = "";
+    sendBtn.disabled = true;
+    try {
+      const result = await sendCommand(obj);
+      addLogEntry(obj.cmd, obj, result);
+    } catch (err) {
+      sendStatus.textContent = `Send failed: ${err.message}`;
+    } finally {
+      sendBtn.disabled = !port;
+    }
+  });
+</script>
+</body>
+</html>
