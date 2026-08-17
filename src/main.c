@@ -16,6 +16,7 @@
 #include "device_reboot.h"
 #include "dispatcher.h"
 #include "display.h"
+#include "display_selftest.h"
 #include "esp_log.h"
 #include "esp_random.h"
 #include "esp_system.h"
@@ -23,7 +24,6 @@
 #include "nvs_storage.h"
 #include "ota.h"
 #include "release_key.h"
-#include "serial_cdc.h"
 #include "ui_task.h"
 #include "vault.h"
 #include "vault_lock.h"
@@ -159,10 +159,25 @@ void app_main(void) {
 
     vault_init(storage_ok ? vault_nvs_storage() : NULL, now_seconds);
 
-    /* ui_task_start() must come after vault_init() (so ui_task never
-     * browses a not-yet-populated vault) but can otherwise run any time
-     * before the transports start accepting commands. */
-    ui_task_start();
+    board_serial_start();
 
-    serial_cdc_start();
+    /* Diagnostics sit between the transport and ui_task, which is the only
+     * window where they get both properties they need. Run before the
+     * transport, the QR ladder's per-code button wait left the device
+     * unreachable over the wire for minutes. Run after ui_task, that task
+     * polls the same buttons and owns the same display, so every press
+     * advanced the ladder AND made ui_task repaint over the code being
+     * examined. Both were observed on hardware. No-ops unless their build
+     * flags are set.
+     *
+     * The gap this leaves: export_secret arriving during a diagnostic run
+     * would reach a ui_task that has not started. Acceptable only because
+     * these flags are never set in a shipping build. */
+    display_selftest_run();
+    qr_selftest_run();
+
+    /* Last: after vault_init() so it never browses a not-yet-populated
+     * vault, and after the diagnostics so it never fights them for the
+     * display. */
+    ui_task_start();
 }
