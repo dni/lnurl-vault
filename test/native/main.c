@@ -13,6 +13,7 @@ void test_dispatcher_run(void);
 void test_button_fsm_run(void);
 void test_note_url_run(void);
 void test_regressions_run(void);
+void test_qr_capacity_run(void);
 void test_base64_run(void);
 void test_ota_sign_run(void);
 void test_ota_dispatch_run(void);
@@ -26,6 +27,7 @@ int main(void) {
     test_button_fsm_run();
     test_note_url_run();
     test_regressions_run();
+    test_qr_capacity_run();
     test_base64_run();
     test_ota_sign_run();
     test_ota_dispatch_run();

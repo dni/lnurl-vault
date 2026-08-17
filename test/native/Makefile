@@ -14,7 +14,7 @@ CC ?= gcc
 # which is exactly how it reached main.
 CJSON_CFLAGS := $(shell pkg-config --cflags libcjson)
 CJSON_LIBS := $(shell pkg-config --libs libcjson)
-CFLAGS = -std=c11 -Wall -Wextra -Werror -I../../src/vault -I../../src/proto -I../../src/ota -I. $(CJSON_CFLAGS)
+CFLAGS = -std=c11 -Wall -Wextra -Werror -I../../src/vault -I../../src/proto -I../../src/ota -I../../src/ui -I. $(CJSON_CFLAGS)
 SRC = ../../src/vault/sha256.c \
       ../../src/vault/hex.c \
       ../../src/vault/vault.c \
@@ -23,6 +23,7 @@ SRC = ../../src/vault/sha256.c \
       ../../src/proto/dispatcher.c \
       ../../src/proto/button_fsm.c \
       ../../src/proto/note_url.c \
+      ../../src/ui/qr_capacity.c \
       ../../src/ota/monocypher.c \
       ../../src/ota/monocypher-ed25519.c \
       ../../src/ota/ota_sign.c \
@@ -33,6 +34,7 @@ SRC = ../../src/vault/sha256.c \
       test_dispatcher.c \
       test_button_fsm.c \
       test_note_url.c \
+      test_qr_capacity.c \
       test_regressions.c \
       test_base64.c \
       test_ota_sign.c \

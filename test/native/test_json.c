@@ -69,7 +69,54 @@ static void test_reader(void) {
     UL_CHECK(!json_has(json, ""), "has() is false for an empty key");
 }
 
+
+/* json_get_u64 reads the integer from the raw token rather than through
+ * cJSON's double, so amount_msat round trips exactly (see json.c). That is
+ * hand-rolled scanning on a money field, so these pin the cases the scan has
+ * to get right -- particularly "find the key at the top level and nowhere
+ * else", which is the part most likely to be quietly wrong. */
+static void test_u64_raw_scan(void) {
+    uint64_t v;
+
+    v = 0;
+    UL_CHECK(json_get_u64("{\"amount_msat\":18446744073709551615}", "amount_msat", &v) &&
+                 v == UINT64_MAX,
+             "the largest uint64 round trips exactly");
+    v = 0;
+    UL_CHECK(json_get_u64("{\"amount_msat\":9007199254740993}", "amount_msat", &v) &&
+                 v == 9007199254740993ULL,
+             "a value above 2^53 keeps its exact low bits (a double would not)");
+
+    UL_CHECK(!json_get_u64("{\"a\":18446744073709551616}", "a", &v), "2^64 is refused");
+    UL_CHECK(!json_get_u64("{\"a\":-1}", "a", &v), "a negative amount is refused");
+    UL_CHECK(!json_get_u64("{\"a\":1.5}", "a", &v), "a fractional amount is refused");
+    UL_CHECK(!json_get_u64("{\"a\":1e3}", "a", &v), "exponent notation is refused");
+    UL_CHECK(!json_get_u64("{\"a\":\"21000\"}", "a", &v), "a quoted number is not a number");
+    UL_CHECK(!json_get_u64("{\"b\":1}", "a", &v), "an absent key fails");
+
+    v = 0;
+    UL_CHECK(json_get_u64("{\"a\":0}", "a", &v) && v == 0, "zero parses");
+    v = 0;
+    UL_CHECK(json_get_u64("{\"a\":007}", "a", &v) && v == 7, "leading zeros parse");
+    v = 0;
+    UL_CHECK(json_get_u64("{ \"a\" :\t21000 }", "a", &v) && v == 21000,
+             "whitespace around the key and colon is tolerated");
+
+    /* The scan must not match a key nested inside another object, or one that
+     * merely appears inside a string value. Either would read an attacker's
+     * number in place of the real field. */
+    v = 0;
+    UL_CHECK(json_get_u64("{\"outer\":{\"a\":1},\"a\":42}", "a", &v) && v == 42,
+             "a nested same-named key is skipped in favour of the top-level one");
+    v = 0;
+    UL_CHECK(json_get_u64("{\"label\":\"\\\"a\\\":1\",\"a\":42}", "a", &v) && v == 42,
+             "a key-looking sequence inside a string value is not matched");
+    UL_CHECK(!json_get_u64("{\"outer\":{\"a\":1}}", "a", &v),
+             "a key that exists only inside a nested object is not found");
+}
+
 void test_json_run(void) {
+    test_u64_raw_scan();
     test_writer();
     test_reader();
 }
