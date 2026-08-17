@@ -166,13 +166,18 @@ static void test_pair_never_mints_duplicate_id(void) {
     UL_CHECK(err != VAULT_OK || strcmp(id1, id2) != 0,
              "new_secret_pair does not mint two notes sharing one id");
 
-    if (err == VAULT_OK) {
-        UL_CHECK(vault_confirm(id1, 60000, "mint.example", NULL) == VAULT_OK,
-                 "the first split output confirms");
-        note_meta_t m2;
-        UL_CHECK(vault_get_meta(id2, &m2) && m2.state == NOTE_STATE_PENDING,
-                 "confirming one split output does not silently confirm the other");
-    }
+    /* And the same invariant on the path that does succeed, so the two
+     * assertions below always run rather than only when the guard above
+     * happens to let a pair through. */
+    vault_init(NULL, NULL);
+    g_seq = 11;
+    UL_CHECK(vault_new_secret_pair(rng_seq, NULL, 0, NULL, id1, h1, id2, h2) == VAULT_OK,
+             "a split with a healthy RNG still succeeds");
+    UL_CHECK(vault_confirm(id1, 60000, "mint.example", NULL) == VAULT_OK,
+             "the first split output confirms");
+    note_meta_t m2;
+    UL_CHECK(vault_get_meta(id2, &m2) && m2.state == NOTE_STATE_PENDING,
+             "confirming one split output does not silently confirm the other");
 }
 
 /* ---- issue #6: a failed note read must not orphan the note ------------- */
