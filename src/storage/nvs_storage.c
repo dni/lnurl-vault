@@ -30,13 +30,126 @@ static nvs_handle_t g_handle;
 static bool g_open = false;
 static vault_storage_t g_storage_iface;
 
+static vault_storage_state_t g_state = VAULT_STORAGE_UNAVAILABLE;
+
+/* Brings up NVS, and DOES NOT ERASE IT for any reason.
+ *
+ * This used to be the idiom straight out of every ESP-IDF example: on
+ * ESP_ERR_NVS_NO_FREE_PAGES or ESP_ERR_NVS_NEW_VERSION_FOUND, erase and try
+ * again. That idiom is written for devices whose NVS holds a Wi-Fi
+ * credential and a calibration blob, where erasing costs a re-pairing. Here
+ * it silently and irreversibly destroys bearer notes -- value, not settings.
+ *
+ * And it is reachable rather than theoretical. A note blob is
+ * sizeof(note_t) == 448 bytes, so a full vault of 128 is around 57KB of a
+ * 132KB partition, and every confirm, rename or mark_spent rewrites a blob.
+ * Running out of free pages is an ordinary outcome of use, not a sign of
+ * corruption -- and the notes are all still there when it happens.
+ *
+ * So: report it, refuse to proceed silently, and leave the flash alone. The
+ * only thing in this firmware that erases is vault_nvs_wipe(), and it is
+ * reachable only behind a physical confirmation. */
 esp_err_t vault_nvs_boot(void) {
     esp_err_t err = nvs_flash_init();
-    if (err == ESP_ERR_NVS_NO_FREE_PAGES || err == ESP_ERR_NVS_NEW_VERSION_FOUND) {
-        ESP_ERROR_CHECK(nvs_flash_erase());
-        err = nvs_flash_init();
+
+    switch (err) {
+        case ESP_OK:
+            g_state = VAULT_STORAGE_OK;
+            break;
+        case ESP_ERR_NVS_NO_FREE_PAGES:
+            g_state = VAULT_STORAGE_FULL;
+            ESP_LOGE(TAG,
+                     "NVS is out of free pages. NOT erasing: every note is still on flash "
+                     "and erasing would destroy them. get_info reports storage=full; "
+                     "recovery is a deliberate `wipe` (see docs/PROTOCOL.md), never automatic.");
+            break;
+        case ESP_ERR_NVS_NEW_VERSION_FOUND:
+            g_state = VAULT_STORAGE_VERSION;
+            ESP_LOGE(TAG,
+                     "NVS was written by a newer format than this firmware understands. "
+                     "NOT erasing: a correct firmware could still read these notes.");
+            break;
+        default:
+            g_state = VAULT_STORAGE_UNAVAILABLE;
+            ESP_LOGE(TAG, "nvs_flash_init failed: %s", esp_err_to_name(err));
+            break;
     }
     return err;
+}
+
+vault_storage_state_t vault_nvs_state(void) {
+    return g_state;
+}
+
+const char *vault_nvs_state_name(void) {
+    switch (g_state) {
+        case VAULT_STORAGE_OK:
+            return "ok";
+        case VAULT_STORAGE_FULL:
+            return "full";
+        case VAULT_STORAGE_VERSION:
+            return "version_unsupported";
+        default:
+            return "unavailable";
+    }
+}
+
+bool vault_nvs_wipe(void) {
+    /* Close the handle first: erasing the partition underneath an open handle
+     * leaves it pointing at storage that no longer exists. */
+    if (g_open) {
+        nvs_close(g_handle);
+        g_open = false;
+    }
+
+    esp_err_t err = nvs_flash_deinit();
+    if (err != ESP_OK && err != ESP_ERR_NVS_NOT_INITIALIZED) {
+        ESP_LOGE(TAG, "wipe: deinit failed: %s", esp_err_to_name(err));
+        return false;
+    }
+
+    err = nvs_flash_erase();
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "wipe: erase failed: %s", esp_err_to_name(err));
+        return false;
+    }
+
+    /* VERIFY. An erase that reported success but left the data readable is
+     * the failure mode that matters, because the owner acts on the claim. */
+    err = nvs_flash_init();
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "wipe: re-init after erase failed: %s", esp_err_to_name(err));
+        g_state = VAULT_STORAGE_UNAVAILABLE;
+        return false;
+    }
+    g_state = VAULT_STORAGE_OK;
+
+    nvs_handle_t check;
+    err = nvs_open(NAMESPACE, NVS_READONLY, &check);
+    if (err == ESP_OK) {
+        size_t size = 0;
+        esp_err_t found = nvs_get_blob(check, INDEX_KEY, NULL, &size);
+        nvs_close(check);
+        if (found != ESP_ERR_NVS_NOT_FOUND) {
+            ESP_LOGE(TAG, "wipe: the note index is still readable after erasing; refusing to "
+                          "report success");
+            return false;
+        }
+    } else if (err != ESP_ERR_NVS_NOT_FOUND) {
+        /* NOT_FOUND is the expected outcome: the namespace itself is gone. */
+        ESP_LOGE(TAG, "wipe: could not verify the namespace is gone: %s", esp_err_to_name(err));
+        return false;
+    }
+
+    /* Reopen for normal service, so a device that is not rebooted immediately
+     * still has working storage. */
+    if (!vault_nvs_storage_init()) {
+        ESP_LOGE(TAG, "wipe: storage erased and verified, but could not be reopened");
+        return false;
+    }
+
+    ESP_LOGW(TAG, "storage wiped and verified empty");
+    return true;
 }
 
 static bool nvs_load_index(char ids[][VAULT_ID_BUF], size_t max, size_t *count, void *ctx) {

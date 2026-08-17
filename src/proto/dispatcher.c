@@ -116,6 +116,11 @@ static void handle_get_info(char *out, size_t outcap) {
     if (g_deps.free_heap) {
         jw_uint64(&w, "free_heap_bytes", g_deps.free_heap());
     }
+    /* Loud about storage it cannot read, rather than presenting as an empty
+     * working vault -- see dispatcher.h's storage_state_fn. */
+    if (g_deps.storage_state) {
+        jw_str(&w, "storage", g_deps.storage_state());
+    }
     jw_end_obj(&w);
 }
 
@@ -365,6 +370,7 @@ static void handle_reset(char *out, size_t outcap) {
  * the real decoded length. */
 #define OTA_CHUNK_DECODE_BUF 1050
 #define OTA_APPROVE_TIMEOUT_MS 30000 /* matches export_secret's confirm window */
+#define WIPE_APPROVE_TIMEOUT_MS 30000 /* likewise */
 
 typedef struct {
     bool active;
@@ -533,6 +539,84 @@ static void handle_ota_finish(char *out, size_t outcap) {
     write_ok(out, outcap);
 }
 
+/* Erases everything. The only thing in this firmware that does.
+ *
+ * Three gates, none of which is redundant:
+ *
+ *  1. An explicit {"confirm":"WIPE"} in the request. Not security -- the
+ *     physical press below is that -- but intent. `wipe` sits in the same
+ *     command namespace as `get_info`, reachable by anything already paired,
+ *     and a bare {"cmd":"wipe"} is far too easy to emit by accident from a
+ *     retry loop, a fuzzer or a mistyped script.
+ *  2. A physical confirmation, which is the actual control, and which is
+ *     refused rather than skipped when no confirm hook is wired: an
+ *     unconfirmable wipe is not one to grant.
+ *  3. Verification, inside the wipe itself. Erasing is not the hard part;
+ *     being able to prove it worked is. A wipe that claims a success it
+ *     cannot demonstrate is worse than one that admits failure, because the
+ *     owner acts on the claim.
+ *
+ * RAM is cleared only after storage has been erased AND verified, in that
+ * order: until the verification passes, RAM holds the only intact copy of
+ * the notes, and throwing it away first would turn a failed wipe into a
+ * successful one. */
+static void handle_wipe(const char *line, char *out, size_t outcap) {
+    if (!g_deps.wipe_storage) {
+        write_error(out, outcap, "unsupported", "this build has no persistent storage to wipe");
+        return;
+    }
+
+    char confirm[16];
+    if (!json_get_str(line, "confirm", confirm, sizeof(confirm)) ||
+        strcmp(confirm, "WIPE") != 0) {
+        write_error(out, outcap, "bad_request",
+                    "wipe requires \"confirm\":\"WIPE\" -- this erases every note");
+        return;
+    }
+
+    if (!g_deps.wipe_approve) {
+        write_error(out, outcap, "unsupported",
+                    "no on-device confirmation available; refusing to wipe");
+        return;
+    }
+
+    confirm_result_t approved = g_deps.wipe_approve(WIPE_APPROVE_TIMEOUT_MS);
+    if (approved == CONFIRM_NO) {
+        write_error(out, outcap, "user_declined", NULL);
+        return;
+    }
+    if (approved == CONFIRM_TIMEOUT) {
+        write_error(out, outcap, "timeout", NULL);
+        return;
+    }
+
+    if (!g_deps.wipe_storage()) {
+        /* Deliberately does not reboot and does not claim success. The device
+         * is left holding whatever survived, which the owner can still read,
+         * rather than rebooted into an unknown state on the strength of an
+         * unverified erase. */
+        write_error(out, outcap, "wipe_failed",
+                    "storage could not be erased and verified; nothing has been reported as gone");
+        return;
+    }
+
+    vault_forget_all();
+
+    json_writer_t w;
+    jw_init(&w, out, outcap);
+    jw_begin_obj(&w, NULL);
+    jw_bool(&w, "ok", true);
+    jw_bool(&w, "wiped", true);
+    jw_end_obj(&w);
+
+    /* Reboot last, and delayed, so this response leaves first -- same
+     * reasoning as handle_reset(). A fresh boot after a wipe means nothing
+     * derived from the old contents survives anywhere. */
+    if (g_deps.reset) {
+        g_deps.reset();
+    }
+}
+
 static void handle_delete(const char *line, char *out, size_t outcap) {
     char id[VAULT_ID_BUF];
     if (!json_get_str(line, "id", id, sizeof(id))) {
@@ -575,6 +659,8 @@ void dispatcher_handle(const char *line, char *out, size_t outcap) {
         handle_mark_spent(line, out, outcap);
     } else if (strcmp(cmd, "rename") == 0) {
         handle_rename(line, out, outcap);
+    } else if (strcmp(cmd, "wipe") == 0) {
+        handle_wipe(line, out, outcap);
     } else if (strcmp(cmd, "delete") == 0) {
         handle_delete(line, out, outcap);
     } else if (strcmp(cmd, "reset") == 0) {

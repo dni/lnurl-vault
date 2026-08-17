@@ -88,6 +88,34 @@ typedef bool (*ota_write_finish_fn)(void);
  * ever touching the boot partition. */
 typedef void (*ota_write_abort_fn)(void);
 
+/* Optional: the physical confirmation in front of `wipe`. Same shape as
+ * ota_approve_fn, deliberately its own dependency rather than a shared one,
+ * because what the screen should say for "erase everything you own" is not
+ * what it should say for "accept a firmware image", and sharing the hook
+ * would quietly rule that out. NULL => `wipe` refuses outright rather than
+ * proceeding ungated: an unconfirmable wipe is not one to grant. */
+typedef confirm_result_t (*wipe_approve_fn)(uint32_t timeout_ms);
+
+/* Optional: erases persistent storage AND verifies it is gone, returning
+ * false if either the erase or the verification failed. NULL => `wipe` is
+ * reported unsupported.
+ *
+ * A false return must never be reported to the client as success and must
+ * never be followed by a reboot -- see nvs_storage.h's vault_nvs_wipe, and
+ * heartwood-esp32's persistent_wipe.rs, whose header makes the same demand
+ * of its callers. */
+typedef bool (*wipe_storage_fn)(void);
+
+/* Optional: how storage came up this boot ("ok", "full",
+ * "version_unsupported", "unavailable" -- see nvs_storage.h), reported by
+ * get_info. NULL omits the field.
+ *
+ * This exists because the alternative to erasing a full partition is
+ * refusing to, and a device that refuses must be able to say so. Otherwise
+ * it presents as an empty working vault while holding every note on flash,
+ * unread -- and the owner concludes their notes are gone. */
+typedef const char *(*storage_state_fn)(void);
+
 typedef struct {
     vault_rng_fn rng;
     export_confirm_fn confirm_export;
@@ -110,6 +138,9 @@ typedef struct {
      * see docs/ota-signing.md-equivalent notes in README.md once a real
      * release key exists. */
     const uint8_t *ota_pubkey;
+    wipe_approve_fn wipe_approve;
+    wipe_storage_fn wipe_storage;
+    storage_state_fn storage_state;
 } dispatcher_deps_t;
 
 void dispatcher_init(const dispatcher_deps_t *deps);

@@ -69,6 +69,23 @@ plus two OTA-specific codes (see `ota_begin`/`ota_finish` below):
 report, and for a client that wants to warn about a build it does not
 recognise. Absent on a build with no board identifier compiled in.
 
+`storage` says whether the device can actually read its own notes. **A client
+must check it before concluding a vault is empty**, because these are not the
+same situation:
+
+| Value | Meaning |
+|---|---|
+| `ok` | storage is working |
+| `full` | the NVS partition is out of free pages. Every note is still on flash and none is readable. Not corruption -- ordinary churn reaches this, since a note blob is 448 bytes and every `confirm`, `rename` or `mark_spent` rewrites one |
+| `version_unsupported` | flash was written by a newer NVS format than this firmware understands. A downgrade, not damage; a correct firmware could still read it |
+| `unavailable` | storage could not be brought up at all |
+
+Anything other than `ok` means `note_count` is **not** a statement about how
+many notes exist -- it is how many the device could load. The firmware never
+erases to recover from any of these; see `wipe`.
+
+The field is absent on a build with no persistent storage.
+
 ### `list_notes`
 
 Metadata only — a note's secret is never included in any command's response
@@ -195,6 +212,44 @@ the connection as gone once you've gotten the response, and expect to
 reconnect (USB re-enumerates; a BLE central needs to reconnect) after a few
 seconds. No note state changes and nothing is disclosed — this is a
 software reboot, not a factory reset.
+
+### `wipe`
+
+Erases every note, irreversibly. The only command that destroys value, and
+the only thing in the firmware that erases storage at all.
+
+```json
+{"cmd":"wipe","confirm":"WIPE"}
+→ {"ok":true,"wiped":true}
+```
+
+`"confirm":"WIPE"` is required verbatim. A bare `{"cmd":"wipe"}` returns
+`bad_request` and does nothing. That is not the security control -- the
+physical confirmation below is -- it is there because `wipe` sits in the same
+command namespace as `get_info`, reachable by anything already paired, and a
+bare command is far too easy to emit by accident from a retry loop or a
+mistyped script.
+
+The device then asks its owner to confirm physically, on-screen, using the same
+on-device confirmation `export_secret` uses. Possible replies:
+
+| Reply | Meaning |
+|---|---|
+| `{"ok":true,"wiped":true}` | erased **and verified** empty; a reboot follows on the usual delay |
+| `user_declined` | the owner refused. Nothing erased |
+| `timeout` | nobody answered. Nothing erased |
+| `wipe_failed` | the erase, or the verification after it, failed. **Nothing has been reported as gone** -- the device keeps whatever survived and does not reboot |
+| `unsupported` | this build has no storage to wipe, or no way to confirm on-device. A wipe that cannot be confirmed is refused rather than granted |
+
+`wipe_failed` is the reply to take seriously. Erasing is not the hard part;
+being able to prove it worked is. The device re-initialises and re-reads after
+erasing, and reports failure rather than success if anything is still
+readable -- because the owner acts on a success claim, by selling or handing on
+the device. Treat `wipe_failed` as "this device still holds secrets".
+
+Note state and secrets are gone from RAM as well as flash, and only in that
+order: flash is erased and verified first, because until the verification
+passes RAM holds the only intact copy.
 
 ### `ota_begin` / `ota_chunk` / `ota_finish`
 

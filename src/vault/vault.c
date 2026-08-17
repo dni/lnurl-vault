@@ -364,6 +364,24 @@ bool vault_get_meta(const char *id, note_meta_t *out) {
     return true;
 }
 
+void vault_forget_all(void) {
+    /* Through a volatile pointer so this cannot be optimised away as a store
+     * to memory that is never read again -- which is precisely what a
+     * compiler is entitled to assume here, and precisely the assumption that
+     * would leave secrets sitting in RAM after a wipe. */
+    volatile unsigned char *p = (volatile unsigned char *)g_notes;
+    for (size_t i = 0; i < sizeof(g_notes); i++) {
+        p[i] = 0;
+    }
+    g_note_count = 0;
+
+    volatile unsigned char *q = (volatile unsigned char *)g_unloaded_ids;
+    for (size_t i = 0; i < sizeof(g_unloaded_ids); i++) {
+        q[i] = 0;
+    }
+    g_unloaded_count = 0;
+}
+
 size_t vault_count(void) {
     return g_note_count;
 }

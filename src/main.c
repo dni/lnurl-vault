@@ -129,15 +129,30 @@ static confirm_result_t ota_approve_on_device(uint32_t size_bytes, uint32_t time
     return result;
 }
 
+/* Same gate again, for `wipe`. Releases vault_lock across the wait for
+ * exactly the reasons the other two do -- ui_task is the task on the far
+ * side of it and takes vault_lock for its own browsing, so holding it here
+ * would wedge both. cmd_lock stays held throughout; see cmd_lock.h. */
+static confirm_result_t wipe_approve_on_device(uint32_t timeout_ms) {
+    vault_lock_release();
+    confirm_result_t result = ui_task_request_wipe_confirm(timeout_ms);
+    vault_lock_acquire();
+    return result;
+}
+
 void app_main(void) {
     buttons_init();
     display_init();
     vault_lock_init();
     cmd_lock_init();
 
+    /* A failure here is NOT recovered by erasing -- see vault_nvs_boot(). The
+     * notes are still on flash; the device comes up able to say so
+     * (get_info's `storage` field) and nothing else. */
     esp_err_t err = vault_nvs_boot();
     if (err != ESP_OK) {
-        ESP_LOGE(TAG, "vault_nvs_boot failed: %s", esp_err_to_name(err));
+        ESP_LOGE(TAG, "storage unavailable (%s): reporting storage=%s, NOT erasing",
+                 esp_err_to_name(err), vault_nvs_state_name());
     }
     bool storage_ok = vault_nvs_storage_init();
     if (!storage_ok) {
@@ -156,6 +171,9 @@ void app_main(void) {
         .ota_write_finish = ota_write_finish,
         .ota_write_abort = ota_write_abort,
         .ota_pubkey = OTA_RELEASE_PUBKEY,
+        .wipe_approve = wipe_approve_on_device,
+        .wipe_storage = vault_nvs_wipe,
+        .storage_state = vault_nvs_state_name,
     };
     dispatcher_init(&deps);
 
