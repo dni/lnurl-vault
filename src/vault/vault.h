@@ -146,6 +146,17 @@ void vault_get_info(size_t *note_count, size_t *pending_count);
  * of materializing a VAULT_MAX_NOTES-sized array — that's ~50KB, too much
  * for an embedded task stack. */
 size_t vault_count(void);
+
+/* Forgets every note held in RAM, overwriting each secret rather than merely
+ * dropping the count -- freed-but-not-cleared RAM holding bearer secrets is
+ * exactly what a wipe is supposed to remove.
+ *
+ * Storage is NOT touched: the caller is expected to have already erased and
+ * verified it (see nvs_storage.h's vault_nvs_wipe). The order matters and is
+ * the caller's responsibility -- erase flash first, and forget RAM only once
+ * that has been verified, because until it has, RAM is the only intact copy
+ * of the notes. */
+void vault_forget_all(void);
 bool vault_get_meta_at(size_t index, note_meta_t *out);
 
 #endif

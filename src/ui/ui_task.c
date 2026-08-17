@@ -257,3 +257,7 @@ confirm_result_t ui_task_request_remote_confirm(const note_meta_t *note, uint32_
 confirm_result_t ui_task_request_ota_confirm(uint32_t timeout_ms) {
     return request_confirm(timeout_ms);
 }
+
+confirm_result_t ui_task_request_wipe_confirm(uint32_t timeout_ms) {
+    return request_confirm(timeout_ms);
+}

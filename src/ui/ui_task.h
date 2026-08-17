@@ -40,4 +40,11 @@ confirm_result_t ui_task_request_remote_confirm(const note_meta_t *note, uint32_
  * image size on-screen. */
 confirm_result_t ui_task_request_ota_confirm(uint32_t timeout_ms);
 
+/* Same gate again, for `wipe` -- erasing every note on the device. Its own
+ * entry point rather than a shared one because what the screen ought to say
+ * for this is not what it says for an export or a firmware image, and
+ * sharing the call would quietly rule that out. Shows the same generic
+ * confirm state for now; see README.md's "Known limitations". */
+confirm_result_t ui_task_request_wipe_confirm(uint32_t timeout_ms);
+
 #endif
