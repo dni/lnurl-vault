@@ -482,15 +482,21 @@ first build.
 **Before the first build**, vendor the QR encoder `qr_display.c` needs —
 not included in this repo (see its header comment for why, and for two
 auto-fetch mechanisms that were actually tried and confirmed not to work
-for this library, not just skipped): download `qrcode.h` and `qrcode.c`
-from [ricmoo/QRCode](https://github.com/ricmoo/QRCode) (MIT) into `src/ui/`
-(flat, no subdirectory), then apply the one-line patch its `qrcode.h` needs
-to build under this project's ESP-IDF version (see `qr_display.c`'s header
-comment for exactly why):
+for this library, not just skipped):
 
 ```sh
-sed -i '/typedef unsigned char bool;/d; /static const bool false = 0;/d; /static const bool true = 1;/d' src/ui/qrcode.h
+./tools/vendor_qrcode.sh src/ui
 ```
+
+This is the same step both workflows run. It fetches
+[ricmoo/QRCode](https://github.com/ricmoo/QRCode) (MIT) at a **pinned
+commit**, checks both files against **pinned SHA-256 hashes**, and refuses
+to proceed on a mismatch — this library is compiled into a firmware that
+holds bearer secrets, and a moved tag or a force-push would otherwise
+change what ships with no record of it. It then applies the one patch
+`qrcode.h` needs to build here (see `qr_display.c`'s header comment for
+why). Download it by hand and you skip the verification, so use the
+script.
 
 ```sh
 pio run -e t-display-s3 -t upload

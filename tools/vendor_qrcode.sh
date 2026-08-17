@@ -84,13 +84,37 @@ cp "$src_c" "$DEST/qrcode.c"
 # for chip targets (and that no build_flags override can beat, since IDF's own
 # -std= comes later on the compile line). See qr_display.c's header comment.
 #
-# grep -v rather than `sed -i`: the in-place flag takes an argument on BSD sed
-# and not on GNU sed, so a single invocation cannot work on both macOS and CI.
-# That is not hypothetical -- the GNU form was in both workflows and failed the
-# moment anyone ran the same step locally on a Mac.
-grep -v -e 'typedef unsigned char bool;' \
-        -e 'static const bool false = 0;' \
-        -e 'static const bool true = 1;' \
-        "$src_h" > "$DEST/qrcode.h"
+# The shim is REPLACED by <stdbool.h>, not just deleted. Deleting it alone
+# left qrcode.h declaring `bool qrcode_getModule(...)` with nothing defining
+# bool, which compiles only where bool is already a keyword -- i.e. C23 and
+# up. That is true of the firmware build and nothing else, so the header
+# could not be included from an ordinary C11 translation unit at all, which
+# is why the largest pure-C file in the tree has no native test coverage.
+# Including the header is correct under every standard from C99 on: it
+# defines the macros pre-C23 and is explicitly still valid (and empty) from
+# C23 on, so this works for the firmware and for a native build alike.
+#
+# awk rather than `sed -i`: the in-place flag takes an argument on BSD sed and
+# not on GNU sed, so a single invocation cannot work on both macOS and CI.
+# That is not hypothetical -- the GNU form was in both workflows and failed
+# the moment anyone ran the same step locally on a Mac. awk is POSIX and
+# behaves identically on both, and unlike grep -v it can substitute in place
+# rather than only remove, keeping the include inside the library's own
+# `#ifndef __cplusplus` guard where the shim was.
+awk '
+  /typedef unsigned char bool;/  { print "#include <stdbool.h>"; next }
+  /static const bool false = 0;/ { next }
+  /static const bool true = 1;/  { next }
+  { print }
+' "$src_h" > "$DEST/qrcode.h"
+
+# The substitution above is the whole point of this step, so fail loudly if
+# upstream ever changes the shim's wording and it silently stops matching.
+if ! grep -q '#include <stdbool.h>' "$DEST/qrcode.h"; then
+  echo "ERROR: qrcode.h's bool shim was not found, so <stdbool.h> was not" >&2
+  echo "substituted for it. Upstream's wording has changed; update the awk" >&2
+  echo "rules in $0 in the same commit that updates the pinned hashes." >&2
+  exit 1
+fi
 
 echo "vendored ricmoo/QRCode @ ${QRCODE_COMMIT} into ${DEST} (hashes verified)"
