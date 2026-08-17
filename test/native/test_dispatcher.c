@@ -83,6 +83,10 @@ void test_dispatcher_run(void) {
     UL_CHECK(json_get_bool(out, "ok", &ok) && ok, "list_notes returns ok:true");
     UL_CHECK(json_has(out, "notes"), "list_notes response carries a notes field");
 
+    dispatcher_handle("{\"cmd\":\"reset\"}", out, sizeof(out));
+    UL_CHECK(json_get_bool(out, "ok", &ok) && ok,
+             "reset returns ok:true even with no reset_fn wired (native has no device to reboot)");
+
     dispatcher_handle("{\"cmd\":\"totally_unknown\"}", out, sizeof(out));
     UL_CHECK(json_get_bool(out, "ok", &ok) && !ok, "an unknown command is rejected");
     UL_CHECK(json_get_str(out, "error", err, sizeof(err)) && strcmp(err, "bad_request") == 0,

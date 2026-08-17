@@ -1,3 +1,5 @@
+seed
+__pycache__
 .pio/
 .vscode/
 sdkconfig

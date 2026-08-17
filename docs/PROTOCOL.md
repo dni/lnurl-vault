@@ -55,6 +55,8 @@ is a fixed set of fields). A client should treat it as "ask for less", not as
 a device fault — but note there is currently no way to ask for less, so a
 vault holding more notes than fit cannot be listed at all. Paging is the
 outstanding fix.
+plus two OTA-specific codes (see `ota_begin`/`ota_finish` below):
+`bad_signature`, `ota_failed`.
 
 ### `get_info`
 
@@ -170,6 +172,86 @@ or as the burn step of a rotate/split/merge.
 
 `delete` only succeeds on a `SPENT` note (housekeeping) — a `PENDING` note is
 dropped via `discard`, and a `CONFIRMED` one must be spent first.
+
+### `reset`
+
+Reboots the device. Not part of note lifecycle management — a recovery
+tool. This device has a real, still-unresolved issue where individual
+serial responses occasionally arrive late or not at all, and it's observed
+to get *worse* the longer a boot runs without a power cycle (see the
+firmware repo's README.md Status section); `reset` gives a remote client a
+way to force that power cycle without physical access to the board.
+
+```json
+{"cmd":"reset"}
+→ {"ok":true}
+```
+
+The device responds *before* rebooting, on a short delay (currently 10s in
+`main.c`) rather than immediately — long enough that the response has a
+real chance to actually leave the TX buffer first, even under this
+device's worst documented latency. Don't rely on the exact delay; treat
+the connection as gone once you've gotten the response, and expect to
+reconnect (USB re-enumerates; a BLE central needs to reconnect) after a few
+seconds. No note state changes and nothing is disclosed — this is a
+software reboot, not a factory reset.
+
+### `ota_begin` / `ota_chunk` / `ota_finish`
+
+Firmware updates over this same JSON-over-serial protocol — no WiFi, no
+separate flasher tool once a device is out in the field. Adapted from
+[forgesworn/heartwood-esp32](https://github.com/forgesworn/heartwood-esp32)'s
+OTA design (see the firmware repo's README.md OTA section for the full
+story): every image must carry an ed25519 signature from this project's
+release key, checked twice — once at `ota_begin` over the *claimed* digest,
+before the owner is ever bothered, and again at `ota_finish` over the
+digest actually written to flash. Use
+[`tools/ota_push.py`](../tools/ota_push.py) rather than hand-rolling this —
+it handles signing, base64 chunking, and retries.
+
+```json
+{"cmd":"ota_begin","size":581513,"sha256":"<64-hex>","signature":"<128-hex>"}
+→ {"ok":true}
+→ {"ok":false,"error":"bad_signature"}          // signature doesn't verify — rejected before the owner is asked anything
+→ {"ok":false,"error":"user_declined"}          // physical confirm/cancel, same as export_secret
+→ {"ok":false,"error":"timeout"}                // no button press within 30s
+→ {"ok":false,"error":"bad_request"}            // size missing/out of range, or sha256/signature aren't 64/128 hex chars
+→ {"ok":false,"error":"ota_failed"}             // could not open the OTA partition
+```
+
+A new `ota_begin` implicitly discards any abandoned prior session (a host
+that crashed or gave up mid-transfer) rather than requiring a device reset
+just to retry.
+
+```json
+{"cmd":"ota_chunk","offset":0,"data":"<base64, up to 1024 raw bytes>"}
+→ {"ok":true}
+→ {"ok":false,"error":"invalid_state"}   // no active session — call ota_begin first
+→ {"ok":false,"error":"bad_request"}     // wrong offset, malformed base64, chunk too large, or it would exceed the declared size
+```
+
+Chunks must arrive strictly in order — `offset` must exactly equal the
+number of bytes already received. There's no reassembly buffer and no
+random access; a host retrying a stalled chunk just resends the same
+(already-next-expected) offset. A wrong offset is rejected but does *not*
+abort the session — the correct next chunk still succeeds. A chunk that
+would push past the declared `size`, or a flash write failure, does abort
+it.
+
+```json
+{"cmd":"ota_finish"}
+→ {"ok":true}
+→ {"ok":false,"error":"invalid_state"}    // no active session
+→ {"ok":false,"error":"bad_request"}      // fewer bytes received than declared size
+→ {"ok":false,"error":"bad_signature"}    // the digest of what was actually written doesn't match the signed one — a torn or corrupted transfer
+→ {"ok":false,"error":"ota_failed"}       // esp_ota_end / esp_ota_set_boot_partition failed
+```
+
+Any `ota_finish` failure aborts the session — the currently running
+firmware is never affected until every check above passes. On success, the
+device responds `{"ok":true}` and reboots into the new image on the same
+short delay `reset` uses (see above), for the same reason: so the response
+has a real chance to leave the TX buffer first.
 
 ## Orchestration
 
