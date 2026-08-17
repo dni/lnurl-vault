@@ -1,0 +1,13 @@
+# Classic ESP32 overrides, layered on sdkconfig.defaults by target name.
+# Board: LilyGo T-Display, the original (see src/board/board_t_display.c).
+#
+# No TinyUSB here: this chip has no USB-OTG peripheral. The host is reached
+# through a CH9102 USB-UART bridge on UART0 instead
+# (src/transport/serial_uart.c).
+
+# UART0 carries the command protocol, so the console must not also log to it.
+# Log lines interleaved with JSON responses corrupt the stream in a way that
+# presents as random protocol failures rather than as a logging problem.
+# Diagnostics for this board go on the screen, not the wire.
+
+CONFIG_ESP_CONSOLE_NONE=y
