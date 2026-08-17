@@ -11,6 +11,111 @@
 #include "qr_capacity.h"
 #include "unity_lite.h"
 
+/* ---- geometry ---------------------------------------------------------
+ *
+ * Two shipped bugs came from this arithmetic, and neither could be reached
+ * from a test while it lived inside qr_display.c. */
+
+/* ISO/IEC 18004 wants four clear modules on every side. A decoder uses the
+ * quiet zone to find the code's edge, so a short one scans on some phones and
+ * not others -- the worst kind of broken for something handed to a stranger. */
+static void test_the_quiet_zone_is_on_all_four_sides(void) {
+    const int size = 33; /* version 4 */
+    UL_CHECK(qr_square_modules(size) == size + 8,
+             "the square is the code plus four modules on each side");
+
+    /* At the top-left corner, the first four modules of the square are quiet
+     * zone, and the fifth is the code. */
+    const int scale = 3;
+    UL_CHECK(qr_module_at(0, scale) < 0, "the very first pixel is quiet zone");
+    UL_CHECK(qr_module_at(QR_QUIET_ZONE_MODULES * scale - 1, scale) < 0,
+             "and so is the last pixel before the code starts");
+    UL_CHECK(qr_module_at(QR_QUIET_ZONE_MODULES * scale, scale) == 0,
+             "module 0 begins exactly after the quiet zone");
+
+    /* And symmetrically at the far edge: the last four modules are quiet zone
+     * too, which is the half the original bug dropped. */
+    const int px = qr_square_modules(size) * scale;
+    UL_CHECK(qr_module_at(px - 1, scale) >= size,
+             "the final pixel is past the code, i.e. quiet zone");
+    UL_CHECK(qr_module_at(px - QR_QUIET_ZONE_MODULES * scale, scale) == size,
+             "the trailing quiet zone is a full four modules");
+}
+
+/* The code must never be drawn partly off the panel. A scale taken from one
+ * dimension alone produced a square wider than a landscape screen, and the
+ * centring then went negative. */
+static void test_the_code_always_fits_on_the_panel(void) {
+    const int panels[][2] = {{240, 135}, {135, 240}, {320, 170}, {170, 320}, {128, 128}};
+    bool always_fits = true, never_negative = true, always_largest = true;
+
+    for (size_t p = 0; p < sizeof(panels) / sizeof(panels[0]); p++) {
+        const int w = panels[p][0], h = panels[p][1];
+        for (int size = 21; size <= 97; size += 4) { /* versions 1..20 */
+            const int scale = qr_scale_for(size, w, h);
+            if (scale <= 0) {
+                continue; /* legitimately too big for this panel */
+            }
+            const int px = qr_square_modules(size) * scale;
+            if (px > w || px > h) {
+                always_fits = false;
+            }
+            int x0 = 0, y0 = 0;
+            qr_origin(size, scale, w, h, &x0, &y0);
+            if (x0 < 0 || y0 < 0 || x0 + px > w || y0 + px > h) {
+                never_negative = false;
+            }
+            /* One scale larger must genuinely not fit, or we wasted screen. */
+            const int bigger = qr_square_modules(size) * (scale + 1);
+            if (bigger <= w && bigger <= h) {
+                always_largest = false;
+            }
+        }
+    }
+    UL_CHECK(always_fits, "the square fits both panel dimensions, on every panel tried");
+    UL_CHECK(never_negative, "and is fully on screen, never a negative origin");
+    UL_CHECK(always_largest, "and no larger whole-pixel scale would also have fitted");
+}
+
+/* A panel too small for a given version must say so rather than return a
+ * fractional or zero scale that later divides by zero. */
+static void test_a_panel_too_small_is_refused(void) {
+    UL_CHECK(qr_scale_for(97, 64, 64) == 0, "a big version on a tiny panel is refused");
+    UL_CHECK(qr_scale_for(0, 240, 135) == 0, "a zero-size code is refused");
+    UL_CHECK(qr_scale_for(33, 0, 0) == 0, "a zero-size panel is refused");
+    UL_CHECK(qr_module_at(10, 0) < 0, "a zero scale cannot divide");
+}
+
+/* Every pixel of the square maps to a module or to quiet zone, and the code's
+ * modules are each covered by exactly scale x scale pixels. */
+static void test_every_module_gets_its_pixels(void) {
+    const int size = 25, scale = 4;
+    const int px = qr_square_modules(size) * scale;
+    int covered[64] = {0};
+    bool in_range = true;
+
+    for (int i = 0; i < px; i++) {
+        const int m = qr_module_at(i, scale);
+        if (m >= 0) {
+            if (m >= size) {
+                continue; /* trailing quiet zone */
+            }
+            covered[m]++;
+        } else if (m < -QR_QUIET_ZONE_MODULES) {
+            in_range = false;
+        }
+    }
+    UL_CHECK(in_range, "no pixel maps outside the quiet zone");
+
+    bool exact = true;
+    for (int m = 0; m < size; m++) {
+        if (covered[m] != scale) {
+            exact = false;
+        }
+    }
+    UL_CHECK(exact, "every module of the code is exactly `scale` pixels wide");
+}
+
 void test_qr_capacity_run(void) {
     /* Spot-checked against ISO/IEC 18004's byte-mode ECC-L capacities rather
      * than against the implementation, so a transcription slip in the table
@@ -61,4 +166,8 @@ void test_qr_capacity_run(void) {
     UL_CHECK(v == 5, "a realistic note URL needs version 5");
     UL_CHECK(qr_capacity_for_version(4) < strlen(real),
              "and version 4 -- the old hardcoded choice -- provably cannot hold it");
+    test_the_quiet_zone_is_on_all_four_sides();
+    test_the_code_always_fits_on_the_panel();
+    test_a_panel_too_small_is_refused();
+    test_every_module_gets_its_pixels();
 }
