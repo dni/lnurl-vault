@@ -1,10 +1,11 @@
 # lnurl-vault custom partition table
 #
-# No nvs_keys partition: that's only needed for ESP-IDF's Flash-Encryption-
-# based NVS key protection scheme. This project uses the HMAC-peripheral
-# scheme instead (the Kconfig default on ESP32-S3, which has the HMAC
-# peripheral) — confirmed by an actual build; see src/storage/nvs_storage.c
-# and sdkconfig.defaults' NVS encryption comments for the full story.
+# No nvs_keys partition: NVS encryption is off entirely (the ESP32-S3's
+# HMAC key-protection scheme burns an eFuse on first boot — see
+# sdkconfig.defaults for why that isn't the default here). Should encryption
+# ever be turned back on as part of a controlled production flash step, the
+# HMAC scheme still needs no partition; only the older Flash-Encryption-based
+# scheme would.
 #
 # Name,     Type, SubType,  Offset,   Size,     Flags
 nvs,        data, nvs,      0x9000,   0x21000,

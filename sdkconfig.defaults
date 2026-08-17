@@ -7,27 +7,34 @@
 # reconcile the affected line against `pio run -t menuconfig` on your
 # installed IDF version rather than assuming this file is wrong wholesale.
 
-# --- NVS encryption -----------------------------------------------------
-# Encrypts note storage at rest. On ESP32-S3 (which has an HMAC peripheral),
-# ESP-IDF's NVS_SEC_KEY_PROTECTION_SCHEME choice defaults to
-# NVS_SEC_KEY_PROTECT_USING_HMAC — deriving the encryption key from an eFuse
-# via the chip's HMAC peripheral, no separate `nvs_keys` partition needed
-# (unlike the older Flash-Encryption-based scheme; confirmed by an actual
-# build in this environment, which fails at compile time in ESP-IDF's own
-# nvs_sec_provider component without the eFuse key ID below — this isn't
-# guessed). This alone only protects against casual flash dumping — see
-# README.md's security posture section for why Flash Encryption + Secure
-# Boot V2 are also required before storing real value; the HMAC key itself
-# still lives in an eFuse block that must be provisioned (a one-time,
-# irreversible write, done automatically by nvs_flash_init() on first boot
-# if the block is empty).
-CONFIG_NVS_ENCRYPTION=y
-# eFuse key block (0-5) used to derive the NVS encryption key. Block 0 is
-# an arbitrary but common choice for a device with no other eFuse key use
-# yet — if you're also planning Flash Encryption or Secure Boot V2 on the
-# same board, check those don't already claim block 0 before flashing to
-# real hardware (eFuse writes cannot be undone).
-CONFIG_NVS_SEC_HMAC_EFUSE_KEY_ID=0
+# --- NVS encryption: deliberately OFF ------------------------------------
+# Note storage is NOT encrypted at rest. A physical flash dump recovers every
+# secret. Physical possession of the device is the protection model, exactly
+# as it is for the on-device browse-and-unveil gesture (see README.md).
+#
+# This was previously:
+#
+#     CONFIG_NVS_ENCRYPTION=y
+#     CONFIG_NVS_SEC_HMAC_EFUSE_KEY_ID=0
+#
+# which looks like free hardening and is not. On ESP32-S3 that selects the
+# HMAC key-protection scheme, and nvs_flash_init() then generates and burns
+# the HMAC key into eFuse key block 0 the first time a device boots with an
+# empty block. That write is irreversible, happens per device, and nothing
+# in the firmware or the flashing instructions asks anyone to choose it: it
+# is a silent side effect of first boot. A device that has burnt block 0 is
+# permanently committed, and block 0 is also what Secure Boot V2's default
+# provisioning flow claims.
+#
+# Turning any of this back on is a real option, but it belongs in a
+# controlled production flash step with a written eFuse map, not in the
+# default development build. Nothing in src/ depends on the setting:
+# nvs_storage.c calls plain nvs_flash_init(), which handles whichever scheme
+# Kconfig selects (including none).
+#
+# Prior art for the same call, with the reasoning written out:
+# https://github.com/forgesworn/heartwood-esp32/blob/main/firmware/sdkconfig.defaults
+CONFIG_NVS_ENCRYPTION=n
 
 # --- No Wi-Fi -------------------------------------------------------------
 # The device does no networking of its own (see README.md) — the mint is

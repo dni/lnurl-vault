@@ -54,7 +54,11 @@ knowing about even though they're now fixed:
   call plain `nvs_flash_init()` (which — per its own doc comment — already
   handles whichever scheme Kconfig selects internally) and pinning
   `CONFIG_NVS_SEC_HMAC_EFUSE_KEY_ID`; the now-unused `nvs_keys` partition
-  was removed from `partitions.csv`.
+  was removed from `partitions.csv`. (NVS encryption has since been turned
+  off entirely — the HMAC scheme burns an eFuse on first boot. See the
+  security posture section below, and `sdkconfig.defaults`. The
+  `nvs_storage.c` simplification and the partition removal both still
+  stand.)
 - Two mechanisms that would have auto-fetched the QR library instead of
   vendoring it by hand were tried and empirically confirmed *not* to work
   for this framework/library combination — see `platformio.ini`'s comment.
@@ -193,13 +197,19 @@ integration names them differently than expected there.
   self-test (two 16-byte draws must differ and not be all-zero) guards
   against a catastrophically stuck RNG; it is *not* a statistical
   randomness test suite.
-- **Storage**: NVS encryption is enabled by default
-  (`CONFIG_NVS_ENCRYPTION=y`, keys in the dedicated `nvs_keys` partition —
-  see `partitions.csv`). This protects against casual flash dumping only.
-  **Real protection against physical extraction requires provisioning Flash
-  Encryption + Secure Boot V2** — a deliberate, irreversible (eFuse-burning)
-  manual step, intentionally left to you before this device ever holds
-  value you care about.
+- **Storage**: notes are stored in NVS **unencrypted**
+  (`CONFIG_NVS_ENCRYPTION=n`). A physical flash dump recovers every secret;
+  physical possession of the device is the protection model, the same one
+  the on-device unveil gesture already assumes. This is a deliberate
+  default, not an oversight: enabling NVS encryption on the ESP32-S3
+  selects the HMAC key-protection scheme, and `nvs_flash_init()` then
+  **burns an eFuse key block on first boot**, irreversibly and without
+  anyone choosing it per device. **Flash Encryption and Secure Boot V2 are
+  the same shape of decision** — real protection against physical
+  extraction, at the cost of permanently committing the chip. All three
+  belong in a controlled production flash step with a written eFuse map,
+  which this project does not yet have. See `sdkconfig.defaults` for the
+  full reasoning.
 - **No networking on-device.** The only attack surface is the paired
   USB-CDC or BLE session. All mint calls are the browser's responsibility.
 - **`export_secret` over serial/BLE** — the only remote command that ever
