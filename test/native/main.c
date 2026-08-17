@@ -13,6 +13,7 @@ void test_dispatcher_run(void);
 void test_button_fsm_run(void);
 void test_note_url_run(void);
 void test_ble_frame_run(void);
+void test_line_proto_run(void);
 void test_approval_run(void);
 void test_regressions_run(void);
 void test_gated_actions_run(void);
@@ -32,6 +33,7 @@ int main(void) {
     test_button_fsm_run();
     test_note_url_run();
     test_ble_frame_run();
+    test_line_proto_run();
     test_approval_run();
     test_regressions_run();
     test_gated_actions_run();

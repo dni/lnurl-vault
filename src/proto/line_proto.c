@@ -1,7 +1,5 @@
 #include "line_proto.h"
 
-#include <stdbool.h>
-
 void line_proto_init(line_proto_t *lp) {
     lp->len = 0;
     lp->overflowed = false;

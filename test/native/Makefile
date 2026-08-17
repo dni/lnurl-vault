@@ -24,6 +24,7 @@ SRC = ../../src/vault/sha256.c \
       ../../src/proto/button_fsm.c \
       ../../src/proto/note_url.c \
       ../../src/proto/ble_frame.c \
+      ../../src/proto/line_proto.c \
       ../../src/proto/approval.c \
       ../../src/ui/qr_capacity.c \
       ../../src/ota/monocypher.c \
@@ -37,6 +38,7 @@ SRC = ../../src/vault/sha256.c \
       test_button_fsm.c \
       test_note_url.c \
       test_ble_frame.c \
+      test_line_proto.c \
       test_approval.c \
       test_qr_capacity.c \
       test_wipe.c \

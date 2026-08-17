@@ -1,6 +1,7 @@
 #ifndef LNURLVAULT_LINE_PROTO_H
 #define LNURLVAULT_LINE_PROTO_H
 
+#include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
 
