@@ -7,8 +7,14 @@
 # component). Install it first: `pacman -S cjson` (Arch) or
 # `apt-get install libcjson-dev` (Debian/Ubuntu, incl. CI).
 CC ?= gcc
-CJSON_FLAGS := $(shell pkg-config --cflags --libs libcjson)
-CFLAGS = -std=c11 -Wall -Wextra -Werror -I../../src/vault -I../../src/proto -I../../src/ota -I. $(CJSON_FLAGS)
+# Split deliberately: GNU ld resolves symbols left to right, so a library
+# named before the objects that reference it contributes nothing and the link
+# fails with "undefined reference". Apple's linker does not care about order,
+# so putting --libs in CFLAGS builds fine on macOS and fails only on CI --
+# which is exactly how it reached main.
+CJSON_CFLAGS := $(shell pkg-config --cflags libcjson)
+CJSON_LIBS := $(shell pkg-config --libs libcjson)
+CFLAGS = -std=c11 -Wall -Wextra -Werror -I../../src/vault -I../../src/proto -I../../src/ota -I. $(CJSON_CFLAGS)
 SRC = ../../src/vault/sha256.c \
       ../../src/vault/hex.c \
       ../../src/vault/vault.c \
@@ -43,7 +49,7 @@ test: $(BIN)
 	./$(BIN)
 
 $(BIN): $(SRC) $(HDR)
-	$(CC) $(CFLAGS) -o $(BIN) $(SRC)
+	$(CC) $(CFLAGS) -o $(BIN) $(SRC) $(CJSON_LIBS)
 
 clean:
 	rm -f $(BIN)
