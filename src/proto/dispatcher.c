@@ -67,6 +67,26 @@ static const char *vault_err_code(vault_err_t e) {
     }
 }
 
+/* The one place a confirm result becomes a wire error. Exhaustive on purpose:
+ * every caller asks "is it CONFIRM_YES" and routes everything else through
+ * here, so a result this does not name is reported as a refusal rather than
+ * silently passing for approval. */
+static const char *confirm_error_code(confirm_result_t r) {
+    switch (r) {
+        case CONFIRM_NO:
+            return "user_declined";
+        case CONFIRM_TIMEOUT:
+            return "timeout";
+        case CONFIRM_UNAVAILABLE:
+            return "display_unavailable";
+        case CONFIRM_YES:
+        default:
+            /* Not reachable from the call sites, which check for YES first.
+             * Naming it refused is the safe answer if it ever is. */
+            return "user_declined";
+    }
+}
+
 static void write_vault_error(char *out, size_t outcap, vault_err_t e) {
     write_error(out, outcap, vault_err_code(e), NULL);
 }
@@ -342,7 +362,7 @@ static bool confirm_action(const char *action, const char *id, char *out, size_t
     if (r == CONFIRM_YES) {
         return true;
     }
-    write_error(out, outcap, r == CONFIRM_NO ? "user_declined" : "timeout", NULL);
+    write_error(out, outcap, confirm_error_code(r), NULL);
     return false;
 }
 
@@ -382,12 +402,11 @@ static void handle_export_secret(const char *line, char *out, size_t outcap) {
 
     if (g_deps.confirm_export) {
         confirm_result_t result = g_deps.confirm_export(&meta);
-        if (result == CONFIRM_NO) {
-            write_error(out, outcap, "user_declined", NULL);
-            return;
-        }
-        if (result == CONFIRM_TIMEOUT) {
-            write_error(out, outcap, "timeout", NULL);
+        /* Only YES proceeds. This used to name the two refusals and fall
+         * through on anything else, so a result the enum gained later would
+         * have disclosed the secret. */
+        if (result != CONFIRM_YES) {
+            write_error(out, outcap, confirm_error_code(result), NULL);
             return;
         }
     }
@@ -560,12 +579,8 @@ static void handle_ota_begin(const char *line, char *out, size_t outcap) {
 
     if (g_deps.ota_approve) {
         confirm_result_t result = g_deps.ota_approve((uint32_t)size_u64, OTA_APPROVE_TIMEOUT_MS);
-        if (result == CONFIRM_NO) {
-            write_error(out, outcap, "user_declined", NULL);
-            return;
-        }
-        if (result == CONFIRM_TIMEOUT) {
-            write_error(out, outcap, "timeout", NULL);
+        if (result != CONFIRM_YES) {
+            write_error(out, outcap, confirm_error_code(result), NULL);
             return;
         }
     }
@@ -713,12 +728,8 @@ static void handle_wipe(const char *line, char *out, size_t outcap) {
     }
 
     confirm_result_t approved = g_deps.wipe_approve(WIPE_APPROVE_TIMEOUT_MS);
-    if (approved == CONFIRM_NO) {
-        write_error(out, outcap, "user_declined", NULL);
-        return;
-    }
-    if (approved == CONFIRM_TIMEOUT) {
-        write_error(out, outcap, "timeout", NULL);
+    if (approved != CONFIRM_YES) {
+        write_error(out, outcap, confirm_error_code(approved), NULL);
         return;
     }
 

@@ -215,6 +215,21 @@ static void wdt_feed(void) {
  * the loop that feeds it levels and paints the result. */
 static confirm_result_t service_remote_confirm(const remote_confirm_request_t *req) {
     const uint32_t timeout_ms = req->timeout_ms;
+    /* display.h: "Anything that discloses a secret MUST check this and refuse
+     * rather than proceed -- the physical confirmation is the security
+     * control, and a confirmation nobody can see is not one." Checked here
+     * rather than per caller, because the same is true of a wipe and of an
+     * OTA: approving what you cannot see is not approval. A blank screen is
+     * also exactly when someone is most likely to be pressing buttons, trying
+     * to work out why it is blank.
+     *
+     * display_ready() is settled at boot -- it reports whether the panel and
+     * its row buffers came up, and those are allocated once in display_init()
+     * and never freed -- so this cannot start refusing a device that is
+     * working. */
+    if (!display_ready()) {
+        return CONFIRM_UNAVAILABLE;
+    }
     if (req->has_detail) {
         display_note_detail(DISPLAY_STATE_CONFIRM_PENDING, req->amount, req->unit, req->label,
                             req->id);
