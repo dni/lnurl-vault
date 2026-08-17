@@ -163,6 +163,18 @@ static confirm_result_t wipe_approve_on_device(uint32_t timeout_ms) {
     return result;
 }
 
+/* The gate in front of mark_spent, delete, discard and rename -- see
+ * dispatcher.h's action_confirm_fn. Releases vault_lock across the wait for
+ * the same reason the other three do: ui_task is on the far side of it and
+ * takes vault_lock for its own browsing, so holding it here would wedge both.
+ * cmd_lock stays held throughout; see cmd_lock.h. */
+static confirm_result_t confirm_action_on_device(const char *action, const note_meta_t *note) {
+    vault_lock_release();
+    confirm_result_t result = ui_task_request_action_confirm(action, note, 30000);
+    vault_lock_acquire();
+    return result;
+}
+
 void app_main(void) {
     /* First: reads what the previous boot left in RTC memory before anything
      * this boot can overwrite or crash into it. */
@@ -203,6 +215,7 @@ void app_main(void) {
         .storage_state = vault_nvs_state_name,
         .trace_cmd = trace_cmd,
         .boot_report = boot_report,
+        .confirm_action = confirm_action_on_device,
     };
     dispatcher_init(&deps);
 

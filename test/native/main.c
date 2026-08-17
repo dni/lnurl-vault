@@ -14,6 +14,7 @@ void test_button_fsm_run(void);
 void test_note_url_run(void);
 void test_ble_frame_run(void);
 void test_regressions_run(void);
+void test_gated_actions_run(void);
 void test_wipe_run(void);
 void test_qr_capacity_run(void);
 void test_base64_run(void);
@@ -30,6 +31,7 @@ int main(void) {
     test_note_url_run();
     test_ble_frame_run();
     test_regressions_run();
+    test_gated_actions_run();
     test_wipe_run();
     test_qr_capacity_run();
     test_base64_run();

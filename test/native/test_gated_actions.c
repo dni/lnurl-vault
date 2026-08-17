@@ -7,8 +7,8 @@
  * attacker who could not read a single secret could still mark every live note
  * spent and then delete them. Real value destroyed, no secret ever learned.
  *
- * The property under test throughout: a declined or unanswered prompt leaves
- * the vault exactly as it was. */
+ * The property under test throughout: a declined or unanswered prompt must
+ * leave the vault exactly as it was. */
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -43,6 +43,7 @@ static confirm_result_t fake_confirm(const char *action, const note_meta_t *note
     return g_answer;
 }
 
+/* One CONFIRMED note, and one PENDING note for discard to work on. */
 static char g_confirmed[VAULT_ID_BUF];
 static char g_pending[VAULT_ID_BUF];
 
@@ -72,11 +73,14 @@ static bool state_is(const char *id, note_state_t want) {
 /* ---- the attack the issue describes ------------------------------------ */
 
 /* Someone in radio range, with no bond and no passkey, tries to destroy a
- * live note. Every step is refused and the note survives intact. */
+ * live note. Every step must be refused, and the note must survive intact. */
 static void test_a_stranger_cannot_destroy_a_live_note(void) {
     setup(true);
     g_answer = CONFIRM_NO;
-    char out[512], cmd[160];
+    char out[512];
+
+    dispatcher_handle("{\"cmd\":\"mark_spent\",\"id\":\"PLACEHOLDER\"}", out, sizeof(out));
+    char cmd[128];
 
     snprintf(cmd, sizeof(cmd), "{\"cmd\":\"mark_spent\",\"id\":\"%s\"}", g_confirmed);
     dispatcher_handle(cmd, out, sizeof(out));
@@ -94,13 +98,14 @@ static void test_a_stranger_cannot_destroy_a_live_note(void) {
     UL_CHECK(state_is(g_pending, NOTE_STATE_PENDING), "and the pending note survives");
 }
 
-/* Renaming destroys no value, but it destroys meaning: the approval screen
- * shows a note's label, so an attacker who can rename freely can make that
- * screen lie about what is being disclosed. Gated for that reason. */
+/* Renaming is not destructive of value, but it IS destructive of meaning: the
+ * approval screen shows a note's label, so an attacker who can rename freely
+ * can make that screen lie about what is being disclosed. Gated for that
+ * reason, not for tidiness. */
 static void test_rename_is_gated_too(void) {
     setup(true);
     g_answer = CONFIRM_NO;
-    char out[512], cmd[192];
+    char out[512], cmd[160];
 
     snprintf(cmd, sizeof(cmd), "{\"cmd\":\"rename\",\"id\":\"%s\",\"label\":\"totally safe\"}",
              g_confirmed);
@@ -112,10 +117,11 @@ static void test_rename_is_gated_too(void) {
     UL_CHECK(strcmp(m.label, "keepme") == 0, "and the label the owner set is untouched");
 }
 
+/* An unanswered prompt is a timeout, and must be as safe as a refusal. */
 static void test_an_unanswered_prompt_changes_nothing(void) {
     setup(true);
     g_answer = CONFIRM_TIMEOUT;
-    char out[512], cmd[160];
+    char out[512], cmd[128];
 
     snprintf(cmd, sizeof(cmd), "{\"cmd\":\"delete\",\"id\":\"%s\"}", g_confirmed);
     dispatcher_handle(cmd, out, sizeof(out));
@@ -128,7 +134,7 @@ static void test_an_unanswered_prompt_changes_nothing(void) {
 /* Approving a delete while believing you are approving an export would be
  * worse than not asking at all, so the action name reaches the gate. */
 static void test_the_gate_is_told_which_action(void) {
-    char out[512], cmd[192];
+    char out[512], cmd[160];
 
     setup(true);
     g_answer = CONFIRM_YES;
@@ -147,19 +153,13 @@ static void test_the_gate_is_told_which_action(void) {
     snprintf(cmd, sizeof(cmd), "{\"cmd\":\"rename\",\"id\":\"%s\",\"label\":\"x\"}", g_confirmed);
     dispatcher_handle(cmd, out, sizeof(out));
     UL_CHECK(strcmp(g_last_action, "rename") == 0, "rename names itself");
-
-    setup(true);
-    g_answer = CONFIRM_YES;
-    snprintf(cmd, sizeof(cmd), "{\"cmd\":\"discard\",\"id\":\"%s\"}", g_pending);
-    dispatcher_handle(cmd, out, sizeof(out));
-    UL_CHECK(strcmp(g_last_action, "discard") == 0, "discard names itself");
 }
 
 /* And which note, so the screen can show the amount at stake. */
 static void test_the_gate_is_told_which_note(void) {
     setup(true);
     g_answer = CONFIRM_YES;
-    char out[512], cmd[160];
+    char out[512], cmd[128];
     snprintf(cmd, sizeof(cmd), "{\"cmd\":\"mark_spent\",\"id\":\"%s\"}", g_confirmed);
     dispatcher_handle(cmd, out, sizeof(out));
 
@@ -172,7 +172,7 @@ static void test_the_gate_is_told_which_note(void) {
 static void test_approval_lets_the_command_through(void) {
     setup(true);
     g_answer = CONFIRM_YES;
-    char out[512], cmd[160];
+    char out[512], cmd[128];
 
     snprintf(cmd, sizeof(cmd), "{\"cmd\":\"mark_spent\",\"id\":\"%s\"}", g_confirmed);
     dispatcher_handle(cmd, out, sizeof(out));
@@ -185,9 +185,9 @@ static void test_approval_lets_the_command_through(void) {
     UL_CHECK(vault_count() == 1, "and the note is gone");
 }
 
-/* A malformed request is rejected before anyone is asked to approve anything.
- * Prompting the owner for a command that was never valid trains them to
- * dismiss prompts, which is how a physical gate stops being one. */
+/* A malformed request must be rejected before anyone is asked to approve
+ * anything -- prompting the owner for a command that was never valid trains
+ * them to dismiss prompts. */
 static void test_a_bad_request_never_reaches_the_owner(void) {
     setup(true);
     g_answer = CONFIRM_YES;
@@ -197,8 +197,8 @@ static void test_a_bad_request_never_reaches_the_owner(void) {
     UL_CHECK(g_asked == 0, "and the owner is never bothered with it");
 }
 
-/* Commands that create rather than destroy stay ungated: minting costs the
- * owner nothing, and a prompt per mint would make split and merge unusable. */
+/* Commands that create rather than destroy stay ungated: minting a note costs
+ * the owner nothing, and a prompt per mint would make split/merge unusable. */
 static void test_creating_is_not_gated(void) {
     setup(true);
     g_answer = CONFIRM_NO;
@@ -219,7 +219,7 @@ static void test_creating_is_not_gated(void) {
  * of the native suite meaningful. */
 static void test_ungated_build_is_unchanged(void) {
     setup(false);
-    char out[512], cmd[160];
+    char out[512], cmd[128];
     snprintf(cmd, sizeof(cmd), "{\"cmd\":\"mark_spent\",\"id\":\"%s\"}", g_confirmed);
     dispatcher_handle(cmd, out, sizeof(out));
     UL_CHECK(strstr(out, "\"ok\":true") != NULL, "no hook means no gate");

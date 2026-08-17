@@ -38,6 +38,7 @@ SRC = ../../src/vault/sha256.c \
       test_ble_frame.c \
       test_qr_capacity.c \
       test_wipe.c \
+      test_gated_actions.c \
       test_regressions.c \
       test_base64.c \
       test_ota_sign.c \

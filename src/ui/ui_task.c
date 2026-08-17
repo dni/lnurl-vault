@@ -296,6 +296,16 @@ confirm_result_t ui_task_request_ota_confirm(uint32_t timeout_ms) {
     return request_confirm(timeout_ms);
 }
 
+confirm_result_t ui_task_request_action_confirm(const char *action, const note_meta_t *note,
+                                                 uint32_t timeout_ms) {
+    /* The action name is not shown on screen yet -- the confirm screen has no
+     * text of its own until #9 lands, and until then this is the same generic
+     * prompt export_secret uses. It is plumbed through now rather than later
+     * so that when the screen can say it, nothing else has to change. */
+    (void)action;
+    return request_confirm(timeout_ms);
+}
+
 confirm_result_t ui_task_request_wipe_confirm(uint32_t timeout_ms) {
     return request_confirm(timeout_ms);
 }
