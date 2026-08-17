@@ -47,4 +47,15 @@ confirm_result_t ui_task_request_ota_confirm(uint32_t timeout_ms);
  * confirm state for now; see README.md's "Known limitations". */
 confirm_result_t ui_task_request_wipe_confirm(uint32_t timeout_ms);
 
+/* The gate in front of a command that changes or destroys a note the owner
+ * already holds -- mark_spent, delete, discard, rename (see dispatcher.h's
+ * action_confirm_fn, and issue #16).
+ *
+ * `action` is the command name and `note` is what it will happen to, so the
+ * screen can say which. That matters more here than for export_secret: there
+ * is only one thing an export can do, and four things this can, so approving
+ * the wrong one is a mistake a person can actually make. */
+confirm_result_t ui_task_request_action_confirm(const char *action, const note_meta_t *note,
+                                                 uint32_t timeout_ms);
+
 #endif

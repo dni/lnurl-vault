@@ -2,9 +2,10 @@
  * build (see README.md's "Status" section). Builds on buttons.c/display.c
  * and qr_display.c (which additionally depends on a vendored third-party
  * library — see its own header comment); the actual gesture logic driving
- * all of this (tap vs. chord, debounce) is src/proto/button_fsm.c, which
- * is unit-tested independent of the ESP32 build — see
- * test/native/test_button_fsm.c. vault.c access from this task is
+ * all of this lives in src/proto, unit-tested independent of the ESP32
+ * build: button_fsm.c for browsing gestures (tap vs. chord, debounce) and
+ * approval.c for the hold-to-approve gate in front of every disclosure —
+ * see test/native/test_button_fsm.c and test/native/test_approval.c. vault.c access from this task is
  * serialized against the transport task via vault_lock.h — see that
  * header's comment for why. None of this has been checked against real
  * button/display hardware. */
@@ -12,6 +13,7 @@
 
 #include <stddef.h>
 
+#include "approval.h"
 #include "buttons.h"
 #include "button_fsm.h"
 #include "display.h"
@@ -158,26 +160,71 @@ static void wdt_feed(void) {
     esp_task_wdt_reset();
 }
 
+/* The gate in front of every disclosure: a two-second hold on button 1, with
+ * the hold drawn on screen as it fills. It used to be a single tap, which is
+ * one pocket-brush away from handing out a bearer secret and gave no sign it
+ * had registered.
+ *
+ * The decision logic is src/proto/approval.c -- portable, and unit-tested a
+ * tick at a time, because that is where the bounce and edge-case bugs live
+ * and they are near-impossible to find on hardware. This function is only
+ * the loop that feeds it levels and paints the result. */
 static confirm_result_t service_remote_confirm(uint32_t timeout_ms) {
     display_set_state(DISPLAY_STATE_CONFIRM_PENDING);
-    int64_t deadline_us = esp_timer_get_time() + (int64_t)timeout_ms * 1000;
-    confirm_result_t result = CONFIRM_TIMEOUT;
+    display_progress(0);
 
-    while (esp_timer_get_time() < deadline_us) {
-        button_event_t ev = buttons_poll();
-        if (ev == BTN_EVENT_1_TAP) {
-            result = CONFIRM_YES;
-            break;
+    approval_t ap;
+    int64_t now = esp_timer_get_time();
+    approval_begin(&ap, now, timeout_ms);
+
+    approval_state_t state = APPROVAL_PENDING;
+    uint16_t drawn = 0;
+    while (state == APPROVAL_PENDING) {
+        now = esp_timer_get_time();
+        state = approval_poll(&ap, buttons_raw_1(), buttons_raw_2(), now);
+
+        /* Repaint only on a visible step. The bar is a real DMA blit and this
+         * loop runs 50 times a second; 40 steps is smooth to the eye and a
+         * fortieth of the traffic. */
+        uint16_t p = approval_progress_permille(&ap, now);
+        if (p / 25 != drawn / 25) {
+            display_progress(p);
+            drawn = p;
         }
-        if (ev == BTN_EVENT_2_TAP) {
-            result = CONFIRM_NO;
-            break;
+
+        wdt_feed(); /* a 30s hold is patience, not a wedge */
+        if (state == APPROVAL_PENDING) {
+            vTaskDelay(pdMS_TO_TICKS(20));
         }
-        wdt_feed(); /* a 30s wait must not look like a wedge */
-        vTaskDelay(pdMS_TO_TICKS(20));
     }
 
-    display_set_state(result == CONFIRM_YES ? DISPLAY_STATE_APPROVED : DISPLAY_STATE_DECLINED);
+    /* Whichever button answered is still physically down. Without this, its
+     * release arrives in button_fsm as a fresh tap and the screen after this
+     * one acts on a press the owner made for this one -- which, on a device
+     * where a tap starts browsing secrets, means an approval also scrolls to
+     * one. */
+    buttons_consume_press();
+
+    confirm_result_t result;
+    display_state_t card;
+    switch (state) {
+        case APPROVAL_GRANTED:
+            result = CONFIRM_YES;
+            card = DISPLAY_STATE_APPROVED;
+            break;
+        case APPROVAL_DENIED:
+            result = CONFIRM_NO;
+            card = DISPLAY_STATE_DECLINED;
+            break;
+        default:
+            /* Its own card, deliberately: a prompt nobody answered must not
+             * be left looking live, and must not be dressed as the owner
+             * having said no. */
+            result = CONFIRM_TIMEOUT;
+            card = DISPLAY_STATE_EXPIRED;
+            break;
+    }
+    display_set_state(card);
     vTaskDelay(pdMS_TO_TICKS(800));
     return result;
 }
@@ -293,6 +340,16 @@ confirm_result_t ui_task_request_remote_confirm(const note_meta_t *note, uint32_
 }
 
 confirm_result_t ui_task_request_ota_confirm(uint32_t timeout_ms) {
+    return request_confirm(timeout_ms);
+}
+
+confirm_result_t ui_task_request_action_confirm(const char *action, const note_meta_t *note,
+                                                 uint32_t timeout_ms) {
+    /* The action name is not shown on screen yet -- the confirm screen has no
+     * text of its own until #9 lands, and until then this is the same generic
+     * prompt export_secret uses. It is plumbed through now rather than later
+     * so that when the screen can say it, nothing else has to change. */
+    (void)action;
     return request_confirm(timeout_ms);
 }
 

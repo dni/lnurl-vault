@@ -25,6 +25,8 @@ typedef struct {
     int64_t b1_down_since_us;
     int64_t b2_down_since_us;
     bool chord_fired;
+    /* Set by button_fsm_consume_press(); see it for why. */
+    bool consumed;
 } button_fsm_t;
 
 void button_fsm_init(button_fsm_t *fsm);
@@ -44,5 +46,16 @@ void button_fsm_init(button_fsm_t *fsm);
  * bounce/glitch and produces no event. */
 button_event_t button_fsm_poll(button_fsm_t *fsm, bool b1_pressed, bool b2_pressed,
                                 int64_t now_us);
+
+/* Declares whatever is being held right now to have already been acted on,
+ * so its eventual release emits nothing. Re-arms once both buttons are up.
+ *
+ * For the approval screen, which watches raw button levels itself rather
+ * than these events (a hold is not a tap -- see approval.h). Without this,
+ * the release of the very button that approved a disclosure lands back in
+ * this state machine as a fresh tap, and the screen that follows acts on a
+ * press the owner made for the screen before it. On a device where a tap
+ * starts browsing secrets, an approval should not also scroll to one. */
+void button_fsm_consume_press(button_fsm_t *fsm);
 
 #endif
