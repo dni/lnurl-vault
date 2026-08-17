@@ -47,30 +47,40 @@ jobs:
         with:
           python-version: "3.12"
 
+      # Pinned, not --upgrade: an unpinned install means the toolchain that
+      # builds a release can change with no commit in this repo, and 6.1.19
+      # is the version every hardware result in README.md's Status section
+      # was produced against. platformio.ini pins the platform (and with it
+      # the compiler and IDF) for the same reason.
       - name: Install PlatformIO
-        run: pip install --upgrade platformio
+        run: pip install platformio==6.1.19
 
       # Only tools/ota_push.py's `sign` subcommand needs this — cryptography
       # for ed25519, not pyserial (nothing here talks to a device).
       - name: Install OTA signing dependencies
-        run: pip install --upgrade cryptography
+        run: pip install 'cryptography==50.0.0'
 
       # See ci.yml's identical step and qr_display.c's header comment: this
       # library isn't (and can't cleanly be) an automatic PlatformIO/
       # ESP-IDF dependency, so it's fetched by hand here, with the one-line
       # patch its qrcode.h needs to build under this project's ESP-IDF
       # version.
-      - name: Vendor QR library (ricmoo/QRCode)
-        run: |
-          set -euo pipefail
-          tmpdir=$(mktemp -d)
-          git clone --depth 1 https://github.com/ricmoo/QRCode "$tmpdir"
-          cp "$(find "$tmpdir" -maxdepth 2 -name 'qrcode.h' | head -1)" src/ui/qrcode.h
-          cp "$(find "$tmpdir" -maxdepth 2 -name 'qrcode.c' | head -1)" src/ui/qrcode.c
-          sed -i '/typedef unsigned char bool;/d; /static const bool false = 0;/d; /static const bool true = 1;/d' src/ui/qrcode.h
+      # Pinned to a commit and verified by hash -- see the script. This used
+      # to be an inline `git clone --depth 1`, i.e. whatever the default
+      # branch pointed at when the build ran, compiled into a firmware that
+      # holds bearer secrets.
+      - name: Vendor QR library (ricmoo/QRCode, pinned)
+        run: ./tools/vendor_qrcode.sh src/ui
 
+      # LNURLVAULT_FW_VERSION is read by tools/fw_version.py and compiled in,
+      # so get_info reports the tag this was actually cut from. It used to be
+      # hardcoded to 0.1.0 in platformio.ini, which meant every release ever
+      # built reported 0.1.0 -- worse than reporting nothing, because a bug
+      # report quoting it sends you to the wrong commit.
       - name: Build firmware
         run: pio run -e t-display-s3
+        env:
+          LNURLVAULT_FW_VERSION: ${{ github.ref_name }}
 
       - name: Collect build outputs
         run: |
@@ -161,6 +171,24 @@ jobs:
           EOF
           cat dist/manifest.json
 
+      # Every published artifact, hashed. firmware.bin also carries an
+      # ed25519 signature (firmware.bin.sig) because the device itself must
+      # verify it before an OTA install; these hashes are the other half, for
+      # a human or a mirror checking that what they downloaded is what was
+      # built. In particular merged-firmware.bin -- the image the web
+      # installer actually flashes over USB -- has no signature of its own,
+      # since nothing on the device verifies a full-flash image, so a checksum
+      # is the only integrity statement it gets.
+      #
+      # Generated last, so it covers everything the earlier steps wrote.
+      - name: Checksum the release artifacts
+        run: |
+          set -euo pipefail
+          cd dist
+          sha256sum bootloader.bin partitions.bin firmware.bin \
+                    firmware.bin.sig merged-firmware.bin manifest.json > SHA256SUMS
+          cat SHA256SUMS
+
       - name: Create GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
@@ -169,7 +197,7 @@ jobs:
             --title "${GITHUB_REF_NAME}" \
             --generate-notes \
             dist/bootloader.bin dist/partitions.bin dist/firmware.bin \
-            dist/firmware.bin.sig \
+            dist/firmware.bin.sig dist/SHA256SUMS \
             dist/merged-firmware.bin dist/manifest.json
 
   deploy-pages:

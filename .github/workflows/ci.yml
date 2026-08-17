@@ -52,8 +52,13 @@ jobs:
           key: platformio-${{ runner.os }}-${{ hashFiles('platformio.ini', 'sdkconfig.defaults', 'partitions.csv') }}
           restore-keys: platformio-${{ runner.os }}-
 
+      # Pinned, not --upgrade: an unpinned install means the toolchain that
+      # builds a release can change with no commit in this repo, and 6.1.19
+      # is the version every hardware result in README.md's Status section
+      # was produced against. platformio.ini pins the platform (and with it
+      # the compiler and IDF) for the same reason.
       - name: Install PlatformIO
-        run: pip install --upgrade platformio
+        run: pip install platformio==6.1.19
 
       # qr_display.c depends on a third-party QR encoder deliberately not
       # vendored into this repo (see its header comment and README.md's
@@ -64,14 +69,12 @@ jobs:
       # build check is actually meaningful rather than failing on a
       # known-missing file — including the one-line patch its qrcode.h
       # needs (see qr_display.c's header comment for why).
-      - name: Vendor QR library (ricmoo/QRCode)
-        run: |
-          set -euo pipefail
-          tmpdir=$(mktemp -d)
-          git clone --depth 1 https://github.com/ricmoo/QRCode "$tmpdir"
-          cp "$(find "$tmpdir" -maxdepth 2 -name 'qrcode.h' | head -1)" src/ui/qrcode.h
-          cp "$(find "$tmpdir" -maxdepth 2 -name 'qrcode.c' | head -1)" src/ui/qrcode.c
-          sed -i '/typedef unsigned char bool;/d; /static const bool false = 0;/d; /static const bool true = 1;/d' src/ui/qrcode.h
+      # Pinned to a commit and verified by hash -- see the script. This used
+      # to be an inline `git clone --depth 1`, i.e. whatever the default
+      # branch pointed at when the build ran, compiled into a firmware that
+      # holds bearer secrets.
+      - name: Vendor QR library (ricmoo/QRCode, pinned)
+        run: ./tools/vendor_qrcode.sh src/ui
 
       - name: Build firmware
         run: pio run -e t-display-s3
