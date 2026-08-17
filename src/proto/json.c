@@ -46,19 +46,82 @@ bool json_get_str(const char *json, const char *key, char *out, size_t outcap) {
     return ok;
 }
 
+/* Finds the raw text of a top-level number and parses it as an exact integer.
+ *
+ * cJSON stores every number as a double, so going through item->valuedouble
+ * is wrong for a uint64 money field in three separate ways: values above 2^53
+ * lose precision silently, 2^64 casts out of range (undefined behaviour), and
+ * "1e999" parses to inf. amount_msat is uint64 in the protocol and must round
+ * trip exactly, so the digits are read from the source text instead.
+ *
+ * cJSON has already validated the document's structure by the time this is
+ * called, and docs/PROTOCOL.md's schema is flat, so this only needs to find a
+ * key at depth 1 -- it deliberately does not descend into nested objects. */
+static bool raw_u64_at_top_level(const char *json, const char *key, uint64_t *out) {
+    const size_t keylen = strlen(key);
+    int depth = 0;
+    bool in_str = false;
+
+    for (const char *p = json; *p; p++) {
+        if (in_str) {
+            if (*p == '\\' && p[1]) {
+                p++;
+            } else if (*p == '"') {
+                in_str = false;
+            }
+            continue;
+        }
+        if (*p == '"') {
+            /* Candidate key: only interesting at depth 1. */
+            if (depth == 1 && strncmp(p + 1, key, keylen) == 0 && p[1 + keylen] == '"') {
+                const char *q = p + 2 + keylen;
+                while (*q == ' ' || *q == '\t' || *q == '\n' || *q == '\r') q++;
+                if (*q != ':') { in_str = true; continue; }
+                q++;
+                while (*q == ' ' || *q == '\t' || *q == '\n' || *q == '\r') q++;
+                if (*q < '0' || *q > '9') {
+                    return false; /* present but not a bare non-negative integer */
+                }
+                uint64_t val = 0;
+                for (; *q >= '0' && *q <= '9'; q++) {
+                    uint64_t digit = (uint64_t)(*q - '0');
+                    if (val > UINT64_MAX / 10) return false;
+                    val *= 10;
+                    if (val > UINT64_MAX - digit) return false;
+                    val += digit;
+                }
+                /* Anything trailing the digits (".", "e", ...) means this was
+                 * not an integer; refuse rather than silently truncate. */
+                if (*q != ',' && *q != '}' && *q != ' ' && *q != '\t' && *q != '\n' &&
+                    *q != '\r') {
+                    return false;
+                }
+                *out = val;
+                return true;
+            }
+            in_str = true;
+            continue;
+        }
+        if (*p == '{' || *p == '[') depth++;
+        else if (*p == '}' || *p == ']') depth--;
+    }
+    return false;
+}
+
 bool json_get_u64(const char *json, const char *key, uint64_t *out) {
+    /* Structure is still validated by cJSON -- a malformed document must not
+     * be salvaged by the raw scan below. */
     cJSON *root = cJSON_Parse(json);
     if (!root) {
         return false;
     }
     cJSON *item = cJSON_GetObjectItemCaseSensitive(root, key);
-    bool ok = false;
-    if (cJSON_IsNumber(item) && item->valuedouble >= 0) {
-        *out = (uint64_t)item->valuedouble;
-        ok = true;
-    }
+    bool present = cJSON_IsNumber(item);
     cJSON_Delete(root);
-    return ok;
+    if (!present) {
+        return false;
+    }
+    return raw_u64_at_top_level(json, key, out);
 }
 
 bool json_get_bool(const char *json, const char *key, bool *out) {

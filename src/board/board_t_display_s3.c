@@ -81,6 +81,48 @@ static void drive_high(int pin) {
     gpio_set_level(pin, 1);
 }
 
+/* Extra ST7789 register tuning this exact panel needs beyond ESP-IDF's
+ * generic init (SLPOUT/MADCTL/COLMOD/RAMCTRL only) — command bytes and
+ * parameter values transcribed verbatim from TFT_eSPI's
+ * `#else // TTGO ESP32 S3 T-Display` branch (TFT_Drivers/ST7789_Init.h),
+ * not invented. Command opcodes cross-checked against TFT_eSPI's
+ * ST7789_Defines.h (0xD6 is undocumented/manufacturer-specific there too —
+ * TFT_eSPI sends it with no named constant, so neither do we). Sent after
+ * esp_lcd_panel_init() and before disp_on_off(true), matching where these
+ * commands sit in TFT_eSPI's own sequence (all before its DISPON). */
+static esp_err_t send_lilygo_t_display_s3_tuning(esp_lcd_panel_io_handle_t io) {
+    esp_err_t err;
+#define TX(cmd, ...)                                                                             \
+    do {                                                                                          \
+        uint8_t params[] = {__VA_ARGS__};                                                         \
+        err = esp_lcd_panel_io_tx_param(io, (cmd), params, sizeof(params));                       \
+        if (err != ESP_OK) {                                                                      \
+            return err;                                                                           \
+        }                                                                                          \
+    } while (0)
+
+    err = esp_lcd_panel_io_tx_param(io, 0x13 /* NORON */, NULL, 0); /* Normal display mode on */
+    if (err != ESP_OK) {
+        return err;
+    }
+    TX(0xB2 /* PORCTRL */, 0x0b, 0x0b, 0x00, 0x33, 0x33);
+    TX(0xB7 /* GCTRL */, 0x75);
+    TX(0xBB /* VCOMS */, 0x28);
+    TX(0xC0 /* LCMCTRL */, 0x2C);
+    TX(0xC2 /* VDVVRHEN */, 0x01);
+    TX(0xC3 /* VRHS */, 0x1F);
+    TX(0xC6 /* FRCTR2 */, 0x13);
+    TX(0xD0 /* PWCTRL1 */, 0xa7);
+    TX(0xD0 /* PWCTRL1, sent again with a second payload — matches TFT_eSPI exactly */, 0xa4, 0xa1);
+    TX(0xD6 /* undocumented/manufacturer-specific, per TFT_eSPI */, 0xa1);
+    TX(0xE0 /* PVGAMCTRL */, 0xf0, 0x05, 0x0a, 0x06, 0x06, 0x03, 0x2b, 0x32, 0x43, 0x36, 0x11, 0x10,
+       0x2b, 0x32);
+    TX(0xE1 /* NVGAMCTRL */, 0xf0, 0x08, 0x0c, 0x0b, 0x09, 0x24, 0x2b, 0x22, 0x43, 0x38, 0x15, 0x16,
+       0x2f, 0x37);
+#undef TX
+    return ESP_OK;
+}
+
 board_display_t board_display_init(void) {
     board_display_t out = {.panel = NULL, .width = PANEL_W, .height = PANEL_H};
 
@@ -145,6 +187,15 @@ board_display_t board_display_init(void) {
 
     esp_lcd_panel_reset(panel);
     esp_lcd_panel_init(panel);
+
+    /* Panel-specific register tuning, sent after the generic init and before
+     * the display is switched on -- which is where TFT_eSPI's own sequence
+     * puts it. Arrived on main inside display.c; it belongs here with the
+     * rest of this panel's bring-up, since nothing about it generalises to
+     * another board. */
+    if (send_lilygo_t_display_s3_tuning(io) != ESP_OK) {
+        ESP_LOGW(TAG, "panel tuning failed; continuing with generic init");
+    }
 
     /* The orientation triple, straight from LilyGo's factory example. Getting
      * any one of these wrong gives a picture that is drawn but wrong -- offset
