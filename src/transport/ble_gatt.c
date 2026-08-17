@@ -33,6 +33,7 @@
 
 #include <string.h>
 
+#include "ble_frame.h"
 #include "dispatcher.h"
 #include "esp_log.h"
 #include "host/ble_hs.h"
@@ -65,10 +66,12 @@ static uint16_t g_conn_handle = BLE_HS_CONN_HANDLE_NONE;
 static uint16_t g_tx_val_handle;
 static bool g_tx_notify_enabled = false;
 
-#define RX_BUF_SIZE 4096
-static uint8_t g_rx_buf[RX_BUF_SIZE];
-static size_t g_rx_have = 0;
-static size_t g_rx_want = 0;
+/* Reassembly of the [2-byte LE length][payload] framing lives in
+ * src/proto/ble_frame.c, not here, so it can be driven a byte at a time by
+ * test/native/test_ble_frame.c. It used to be inline in rx_chr_access()
+ * below, where four of its edge cases were wrong and none of them were
+ * reachable from a test — see that test file. */
+static ble_frame_t g_rx;
 
 #define TX_BUF_SIZE 4096
 static uint8_t g_tx_buf[TX_BUF_SIZE]; /* [0..1]=LE length header, [2..]=JSON payload */
@@ -96,6 +99,25 @@ static void send_next_tx_chunk(void) {
     }
 }
 
+static void on_message(const char *msg, size_t len, void *ctx) {
+    (void)len;
+    (void)ctx;
+
+    vault_lock_acquire();
+    dispatcher_handle(msg, (char *)g_tx_buf + 2, TX_BUF_SIZE - 2);
+    vault_lock_release();
+
+    size_t resp_len = strlen((const char *)g_tx_buf + 2);
+    g_tx_buf[0] = (uint8_t)(resp_len & 0xFF);
+    g_tx_buf[1] = (uint8_t)((resp_len >> 8) & 0xFF);
+    g_tx_len = resp_len + 2;
+    g_tx_sent = 0;
+
+    if (g_tx_notify_enabled) {
+        send_next_tx_chunk();
+    }
+}
+
 static int rx_chr_access(uint16_t conn_handle, uint16_t attr_handle,
                           struct ble_gatt_access_ctxt *ctxt, void *arg) {
     (void)conn_handle;
@@ -105,53 +127,22 @@ static int rx_chr_access(uint16_t conn_handle, uint16_t attr_handle,
         return BLE_ATT_ERR_UNLIKELY;
     }
 
-    uint16_t len = OS_MBUF_PKTLEN(ctxt->om);
+    /* One ATT write cannot exceed the negotiated MTU minus 3, and NimBLE's
+     * own ceiling on that (BLE_ATT_MTU_MAX) keeps it under this buffer — so
+     * the EMSGSIZE branch below is defensive, not an expected path. If it
+     * ever does fire, bytes have been lost, and reassembly must be abandoned
+     * rather than resumed across the hole: splicing the two sides of a gap
+     * together makes one command out of two halves that were never adjacent. */
     uint8_t chunk[512];
-    if (len > sizeof(chunk)) {
-        g_rx_have = 0; /* drop an oversized single write, resync on next */
+    uint16_t copied = 0;
+    if (ble_hs_mbuf_to_flat(ctxt->om, chunk, sizeof(chunk), &copied) != 0) {
+        ESP_LOGW(TAG, "write larger than %u bytes; dropping and resyncing",
+                 (unsigned)sizeof(chunk));
+        ble_frame_reset(&g_rx);
         return 0;
     }
-    ble_hs_mbuf_to_flat(ctxt->om, chunk, len, NULL);
 
-    size_t offset = 0;
-    if (g_rx_have == 0) {
-        if (len < 2) {
-            return 0;
-        }
-        g_rx_want = (size_t)chunk[0] | ((size_t)chunk[1] << 8);
-        if (g_rx_want > RX_BUF_SIZE - 1) {
-            g_rx_want = 0;
-            return 0; /* refuse an oversized message rather than overflow */
-        }
-        offset = 2;
-    }
-
-    size_t take = len - offset;
-    if (g_rx_have + take > RX_BUF_SIZE - 1) {
-        take = RX_BUF_SIZE - 1 - g_rx_have;
-    }
-    memcpy(g_rx_buf + g_rx_have, chunk + offset, take);
-    g_rx_have += take;
-
-    if (g_rx_want > 0 && g_rx_have >= g_rx_want) {
-        g_rx_buf[g_rx_have < RX_BUF_SIZE ? g_rx_have : RX_BUF_SIZE - 1] = '\0';
-
-        vault_lock_acquire();
-        dispatcher_handle((const char *)g_rx_buf, (char *)g_tx_buf + 2, TX_BUF_SIZE - 2);
-        vault_lock_release();
-        size_t resp_len = strlen((const char *)g_tx_buf + 2);
-        g_tx_buf[0] = (uint8_t)(resp_len & 0xFF);
-        g_tx_buf[1] = (uint8_t)((resp_len >> 8) & 0xFF);
-        g_tx_len = resp_len + 2;
-        g_tx_sent = 0;
-
-        g_rx_have = 0;
-        g_rx_want = 0;
-
-        if (g_tx_notify_enabled) {
-            send_next_tx_chunk();
-        }
-    }
+    ble_frame_feed(&g_rx, chunk, copied, on_message, NULL);
     return 0;
 }
 
@@ -225,6 +216,11 @@ static int gap_event_handler(struct ble_gap_event *event, void *arg) {
         case BLE_GAP_EVENT_DISCONNECT:
             g_conn_handle = BLE_HS_CONN_HANDLE_NONE;
             g_tx_notify_enabled = false;
+            /* A half-received message belongs to the connection that was
+             * carrying it. Without this, the next client's first write lands
+             * on the previous client's leftovers and the two are spliced
+             * into one command. */
+            ble_frame_reset(&g_rx);
             start_advertising();
             return 0;
         case BLE_GAP_EVENT_SUBSCRIBE:
@@ -267,6 +263,8 @@ void ble_gatt_start(void) {
      * this function called a separate esp_nimble_hci_and_controller_init(),
      * which doesn't exist in this ESP-IDF version (nor, it turns out,
      * anywhere in this framework at all) and failed to compile. */
+    ble_frame_init(&g_rx);
+
     esp_err_t err = nimble_port_init();
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "nimble_port_init failed: %s", esp_err_to_name(err));
