@@ -79,6 +79,10 @@ be a tag, or a `git describe` string for a local build.
 > **Bench record — 2026-08-17.** Classic T-Display, `0.0.2-25-g0b3477c`.
 > `get_info` round-trips; `fw_version='0.0.2-25-g0b3477c'`,
 > `board='t-display'`, `storage='ok'`. Via `bench.py`.
+>
+> Re-confirmed against a real release tag rather than a dev build: `main` at
+> v0.0.4 reports `fw_version` exactly `0.0.4`, so the version reaches the wire
+> from the tag and not from a hardcoded literal.
 
 ## 3. Host transport — BLE
 
@@ -287,18 +291,42 @@ After an unexpected reset, `get_info` must say what happened.
 > `ui_task` needs code that would then have to be removed. The subscribe and
 > feed calls run every boot; the timeout path itself is ESP-IDF's.
 
-## 15. OTA — NOT YET BENCH-RUN
+## 15. OTA
 
 Sign an image, push it with `tools/ota_push.py`, approve on the device, and
 confirm it boots the new firmware and reports the new version.
 
-**NOT YET BENCH-RUN.** Needs the release signing seed, which is a CI secret
-and not in this repo. The signature verification and session sequencing are
-covered by `test/native/test_ota_dispatch.c` and `test_ota_sign.c` against a
-fake in-memory flash; nothing about the real `esp_ota_*` writes, the partition
-switch, or a rollback has been exercised on hardware.
+> **Bench record — 2026-08-17.** Classic T-Display, `0.0.4-1-g23cd436`, using
+> the genuinely signed `firmware.bin` from release v0.0.4. Only `ota_begin`
+> was sent, never a chunk, so nothing was written to the OTA partition — and
+> `ota_begin` verifies the signature *before* the owner is asked anything,
+> which is precisely the half that can be checked without a press.
+>
+> | Sent | Result |
+> |---|---|
+> | tampered signature | `bad_signature` in 0.2s, no prompt |
+> | genuine signature over a different digest | `bad_signature` in 0.2s |
+> | the real v0.0.4 signature | accepted, prompt raised, timed out at 31.2s |
+>
+> The third line is the one that matters: the device's own ed25519
+> verification, against the key compiled into it, accepted a signature made by
+> the CI seed. The two ends of the release chain meet on hardware. The first
+> two matter for a different reason — a bad image is refused *before* the
+> owner is bothered, so it cannot train anyone into dismissing prompts.
+>
+> Note the image was an ESP32-S3 build offered to a classic ESP32. That is
+> harmless here and deliberate: `ota_begin` checks the signature over the
+> claimed digest and nothing else, so it exercises verification without the
+> image ever being written. Do not extend this into a real transfer on the
+> wrong chip.
+>
+> **Still NOT YET BENCH-RUN:** an approved transfer — `ota_chunk` streaming,
+> `ota_finish` re-verifying the digest actually written, the partition switch,
+> the reboot into the new image, and rollback. Everything past the owner's
+> press is still only covered by `test/native/test_ota_dispatch.c` against a
+> fake in-memory flash.
 
-## 16. Release artefacts — NOT YET BENCH-RUN
+## 16. Release artefacts
 
 Cut a tag, then check the published release carries `firmware.bin`,
 `firmware.bin.sig`, `SHA256SUMS` and `manifest.json`; that the checksums
@@ -306,5 +334,25 @@ match; that `firmware.bin.sig` verifies against the committed public key; and
 that the web installer flashes `merged-firmware.bin` onto a blank board which
 then boots and reports the tag as its `fw_version`.
 
-**NOT YET BENCH-RUN** since the release pipeline was pinned and given
-checksums.
+> **Bench record — 2026-08-17, release v0.0.4.** The first release cut since
+> the pipeline was pinned and given checksums, and the first with a signing
+> seed configured. Verified independently of CI, from the published artefacts:
+>
+> - all seven assets present, including `SHA256SUMS`, which v0.0.3 and earlier
+>   do not carry
+> - `shasum -a 256 -c SHA256SUMS` passes for all six files
+> - `firmware.bin.sig` verifies against the public key compiled into the
+>   firmware (`283761ec…62ee`), over the domain-separated message
+>   `"lnurlvault-ota-v1" || 0x00 || sha256(firmware.bin)` that
+>   `ota_signing_message()` builds — **not** the bare digest, which is what a
+>   first attempt at this check verified against and wrongly reported as a
+>   failure. Verify the message the firmware actually verifies.
+>
+> That the signature checks out against the committed key is the end-to-end
+> proof that the signing seed and the shipped key are the same key — the thing
+> `tools/check_release_key.py` asserts at build time, confirmed here against
+> the artefact a device would actually be offered.
+>
+> **Still not bench-run:** flashing `merged-firmware.bin` onto a blank board
+> via the web installer, and an actual OTA transfer of `firmware.bin` to a
+> device. The signature is proven acceptable; nothing has yet accepted it.
