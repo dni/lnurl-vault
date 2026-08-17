@@ -1,22 +1,24 @@
 # Builds firmware and publishes it as a GitHub Release on every `v*` tag,
 # then (always, tag or not) regenerates and deploys the web installer to
 # GitHub Pages from whatever releases currently exist. See webinstaller/ and
-# README.md's "Releases & web installer" section.
+# README.md's "Releases & web installer" section. Confirmed to actually run
+# end to end (a real tagged release has gone through this workflow) — see
+# README.md's "Status" section.
 #
-# NOTE: this workflow itself has never actually run (no GitHub remote was
-# configured for this repo when it was written), but the `pio run` command
-# it depends on has been confirmed to succeed against ESP-IDF 6.0.1 in a
-# real build — see README.md's "Status" section. `pio run`'s output
-# filenames under .pio/build/t-display-s3/ are still located by pattern
-# rather than a hardcoded path, since a different ESP-IDF/PlatformIO
-# version resolved by a GitHub-hosted runner could still name them
-# differently — if the "Collect build outputs" step comes up empty, that's
-# the one to check.
+# "Sign firmware for OTA" below requires the OTA_SIGNING_SEED repository
+# secret (Settings -> Secrets and variables -> Actions) — a hex-encoded
+# 32-byte ed25519 seed from `python3 tools/ota_push.py keygen`. Fails the
+# whole release closed if that secret isn't set, deliberately: an
+# unreachable signing key should stop a release, not silently ship one that
+# devices in the field can never install over OTA. See README.md's "OTA
+# firmware updates" section and tools/ota_push.py for the full key-custody
+# story (adapted from forgesworn/heartwood-esp32's docs/ota-signing.md).
 #
 # One-time manual setup this workflow can't do for you: Settings -> Pages ->
 # Source: "GitHub Actions" (this repo's github.io URL only starts serving
-# once that's set), and confirm dist/manifest.json's "path"/"offset" values
-# still match partitions.csv if you ever change it.
+# once that's set), the OTA_SIGNING_SEED secret above, and confirm
+# dist/manifest.json's "path"/"offset" values still match partitions.csv if
+# you ever change it.
 name: Release
 
 on:
@@ -48,6 +50,11 @@ jobs:
       - name: Install PlatformIO
         run: pip install --upgrade platformio
 
+      # Only tools/ota_push.py's `sign` subcommand needs this — cryptography
+      # for ed25519, not pyserial (nothing here talks to a device).
+      - name: Install OTA signing dependencies
+        run: pip install --upgrade cryptography
+
       # See ci.yml's identical step and qr_display.c's header comment: this
       # library isn't (and can't cleanly be) an automatic PlatformIO/
       # ESP-IDF dependency, so it's fetched by hand here, with the one-line
@@ -74,6 +81,31 @@ jobs:
           cp "$(find "$BUILD_DIR" -maxdepth 1 -name 'partition*.bin' | head -1)" dist/partitions.bin
           cp "$(find "$BUILD_DIR" -maxdepth 1 -name 'firmware.bin' | head -1)" dist/firmware.bin
           ls -la dist
+
+      # Signs dist/firmware.bin — the plain app image esp_ota_write() writes
+      # to the OTA partition, NOT dist/merged-firmware.bin below (that's a
+      # bootloader+partition-table+app image for the *initial* full flash,
+      # which OTA never touches). See docs/PROTOCOL.md's ota_begin and
+      # tools/ota_push.py's own docstring.
+      - name: Sign firmware for OTA
+        run: |
+          set -euo pipefail
+          if [ -z "${OTA_SIGNING_SEED:-}" ]; then
+            echo "::error::OTA_SIGNING_SEED secret is not set. Generate one with" \
+                 "'python3 tools/ota_push.py keygen', paste the printed public key into" \
+                 "src/ota/release_key.c's OTA_RELEASE_PUBKEY, and set the printed hex seed" \
+                 "as this repo's OTA_SIGNING_SEED secret. See README.md's" \
+                 "'OTA firmware updates' section." >&2
+            exit 1
+          fi
+          seed_file="$(mktemp)"
+          trap 'rm -f "$seed_file"' EXIT
+          python3 -c "import sys; open(sys.argv[1], 'wb').write(bytes.fromhex(sys.argv[2]))" \
+            "$seed_file" "$OTA_SIGNING_SEED"
+          python3 tools/ota_push.py sign --seed "$seed_file" --image dist/firmware.bin --out dist/firmware.bin.sig
+          cat dist/firmware.bin.sig
+        env:
+          OTA_SIGNING_SEED: ${{ secrets.OTA_SIGNING_SEED }}
 
       # esp-web-tools' own docs are explicit that it can't patch SPI flash
       # parameters on the fly when writing multiple separate binary parts
@@ -137,6 +169,7 @@ jobs:
             --title "${GITHUB_REF_NAME}" \
             --generate-notes \
             dist/bootloader.bin dist/partitions.bin dist/firmware.bin \
+            dist/firmware.bin.sig \
             dist/merged-firmware.bin dist/manifest.json
 
   deploy-pages:

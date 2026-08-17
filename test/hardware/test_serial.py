@@ -63,7 +63,11 @@ class Device:
         self.ser = serial.Serial(port, baudrate=115200, timeout=0.05)
         self.port_timeout = timeout
         self.buf = b""
-        time.sleep(0.3)  # let the port settle before the first write
+        time.sleep(1.5)  # let the port settle before the first write — the
+        # very first command sent right after opening the port can otherwise
+        # go unheard (observed directly: identical bad_request-triggering
+        # inputs sent later always succeed, only ever the very first one
+        # after opening flakes)
         self.ser.reset_input_buffer()
 
     def _drain(self, deadline):
@@ -120,6 +124,25 @@ def run(dev):
     # separate delayed-response behavior these checks now have to tolerate.
     W = 6.0
 
+    # --- actual protocol smoke tests first: establish the happy path works
+    # before spending the boot's budget on inputs designed to be rejected.
+    # (Checks later in this run are more likely to see the documented
+    # gets-worse-over-a-boot degradation — see the module docstring — so
+    # the commands we most want a clean read on go first.) ---
+    resp = dev.send({"cmd": "get_info"}, wait=W)
+    check("get_info responds at all", resp is not None, str(resp))
+    if resp is not None:
+        check("get_info response has ok:true", resp.get("ok") is True, str(resp))
+        check("get_info response has fw_version", "fw_version" in resp, str(resp))
+        check("get_info response has note_count", "note_count" in resp, str(resp))
+        check("get_info response has pending_count", "pending_count" in resp, str(resp))
+
+    resp = dev.send({"cmd": "list_notes"}, wait=W)
+    check("list_notes responds at all", resp is not None, str(resp))
+    if resp is not None:
+        check("list_notes response has ok:true", resp.get("ok") is True, str(resp))
+        check("list_notes response has a notes array", isinstance(resp.get("notes"), list), str(resp))
+
     # --- baseline: does the device respond to anything at all? ---
     resp = dev.send_raw("not json at all", wait=W)
     check(
@@ -143,21 +166,6 @@ def run(dev):
 
     resp = dev.send({"cmd": "totally_bogus_command_name"}, wait=W)
     check("a syntactically valid but unrecognized cmd name gets a response", resp is not None, str(resp))
-
-    # --- actual protocol smoke tests ---
-    resp = dev.send({"cmd": "get_info"}, wait=W)
-    check("get_info responds at all", resp is not None, str(resp))
-    if resp is not None:
-        check("get_info response has ok:true", resp.get("ok") is True, str(resp))
-        check("get_info response has fw_version", "fw_version" in resp, str(resp))
-        check("get_info response has note_count", "note_count" in resp, str(resp))
-        check("get_info response has pending_count", "pending_count" in resp, str(resp))
-
-    resp = dev.send({"cmd": "list_notes"}, wait=W)
-    check("list_notes responds at all", resp is not None, str(resp))
-    if resp is not None:
-        check("list_notes response has ok:true", resp.get("ok") is True, str(resp))
-        check("list_notes response has a notes array", isinstance(resp.get("notes"), list), str(resp))
 
 
 def main():

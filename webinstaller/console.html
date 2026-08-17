@@ -316,6 +316,10 @@
       fields: [{ name: "id", label: "Note ID" }],
       note: "Only succeeds on a SPENT note — discard a PENDING one, or mark_spent a CONFIRMED one first.",
     },
+    reset: {
+      fields: [],
+      note: "Reboots the device (no note data is touched). Responds first, then reboots a few seconds later — the connection will drop on its own; reconnect once the board comes back up. Useful if commands have been getting slower or dropping — this device is documented to get flakier the longer it runs without a power cycle.",
+    },
   };
 
   const el = (id) => document.getElementById(id);

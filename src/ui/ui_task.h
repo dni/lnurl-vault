@@ -31,4 +31,13 @@ void ui_task_start(void);
  * buttons itself. */
 confirm_result_t ui_task_request_remote_confirm(const note_meta_t *note, uint32_t timeout_ms);
 
+/* Same physical confirm/cancel gate and the same underlying request queue
+ * as ui_task_request_remote_confirm() above, for an incoming OTA image
+ * (dispatcher.c's ota_begin) instead of a note export — there's no note to
+ * pass, so this is its own entry point rather than overloading the note
+ * one with NULL. Shows the same generic "confirm pending" display state;
+ * see README.md's "Known limitations" on why this can't yet show the
+ * image size on-screen. */
+confirm_result_t ui_task_request_ota_confirm(uint32_t timeout_ms);
+
 #endif

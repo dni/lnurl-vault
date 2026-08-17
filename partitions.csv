@@ -6,7 +6,20 @@
 # peripheral) — confirmed by an actual build; see src/storage/nvs_storage.c
 # and sdkconfig.defaults' NVS encryption comments for the full story.
 #
+# Two OTA app slots (replacing the single `factory` partition this project
+# started with) plus otadata, for src/ota/ — see docs/PROTOCOL.md's
+# ota_begin/ota_chunk/ota_finish and README.md's OTA section. ota_0/ota_1
+# are 2MB each (app-partition offsets must stay 0x10000-aligned, per
+# ESP-IDF's gen_esp32part.py) — matches src/proto/dispatcher.c's
+# OTA_MAX_SIZE; keep both in sync if this ever changes. Actual firmware is
+# currently ~550KB (see README.md's Status section for a real `pio run`
+# size report), so there's no pressure to shrink this on a 16MB flash board
+# — a full 16MB budget check: nvs+phy_init+otadata+ota_0+ota_1 = ~4.14MB of
+# 16MB, plenty of headroom left over.
+#
 # Name,     Type, SubType,  Offset,   Size,     Flags
 nvs,        data, nvs,      0x9000,   0x21000,
 phy_init,   data, phy,      0x2a000,  0x1000,
-factory,    app,  factory,  0x30000,  0x200000,
+otadata,    data, ota,      0x2b000,  0x2000,
+ota_0,      app,  ota_0,    0x30000,  0x200000,
+ota_1,      app,  ota_1,    0x230000, 0x200000,

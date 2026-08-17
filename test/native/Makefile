@@ -1,15 +1,25 @@
 # Builds and runs the portable core's unit tests with the host's plain gcc —
 # no PlatformIO, no ESP-IDF, no board required. See README.md's Verification
 # section.
+#
+# json.c links against the system cJSON library (same upstream version the
+# firmware pulls via src/idf_component.yml's espressif/cjson managed
+# component). Install it first: `pacman -S cjson` (Arch) or
+# `apt-get install libcjson-dev` (Debian/Ubuntu, incl. CI).
 CC ?= gcc
-CFLAGS = -std=c11 -Wall -Wextra -Werror -I../../src/vault -I../../src/proto -I.
+CJSON_FLAGS := $(shell pkg-config --cflags --libs libcjson)
+CFLAGS = -std=c11 -Wall -Wextra -Werror -I../../src/vault -I../../src/proto -I../../src/ota -I. $(CJSON_FLAGS)
 SRC = ../../src/vault/sha256.c \
       ../../src/vault/hex.c \
       ../../src/vault/vault.c \
       ../../src/proto/json.c \
+      ../../src/proto/base64.c \
       ../../src/proto/dispatcher.c \
       ../../src/proto/button_fsm.c \
       ../../src/proto/note_url.c \
+      ../../src/ota/monocypher.c \
+      ../../src/ota/monocypher-ed25519.c \
+      ../../src/ota/ota_sign.c \
       test_sha256.c \
       test_hex.c \
       test_json.c \
@@ -17,6 +27,9 @@ SRC = ../../src/vault/sha256.c \
       test_dispatcher.c \
       test_button_fsm.c \
       test_note_url.c \
+      test_base64.c \
+      test_ota_sign.c \
+      test_ota_dispatch.c \
       main.c
 BIN = vault_tests
 

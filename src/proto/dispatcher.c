@@ -2,7 +2,11 @@
 
 #include <string.h>
 
+#include "base64.h"
+#include "hex.h"
 #include "json.h"
+#include "ota_sign.h"
+#include "sha256.h"
 
 #ifndef LNURLVAULT_FW_VERSION
 #define LNURLVAULT_FW_VERSION "0.0.0-native"
@@ -315,6 +319,205 @@ static void handle_rename(const char *line, char *out, size_t outcap) {
     write_ok(out, outcap);
 }
 
+/* Responds first, reboots second — g_deps.reset (when set) is expected to
+ * schedule a *delayed* restart, not call esp_restart() synchronously here,
+ * so this response actually has a chance to reach the client first. See
+ * dispatcher.h's reset_fn comment. */
+static void handle_reset(char *out, size_t outcap) {
+    write_ok(out, outcap);
+    if (g_deps.reset) {
+        g_deps.reset();
+    }
+}
+
+/* --- OTA: see dispatcher.h's ota_*_fn comments and docs/PROTOCOL.md's
+ * ota_begin/ota_chunk/ota_finish for the full design. This block owns
+ * everything portable: parsing, base64, signature verification, and
+ * sequencing; only the ESP-IDF-specific flash writes and the physical
+ * approval prompt are injected via g_deps. */
+
+#define OTA_MAX_SIZE (2 * 1024 * 1024) /* must match partitions.csv's ota_0/ota_1 slot size */
+#define OTA_CHUNK_MAX_RAW 1024         /* the protocol limit a chunk's DECODED length must fit — checked
+                                         * against the actual decode result, not an estimate (see below) */
+#define OTA_CHUNK_B64_BUF 1400         /* text buffer for the base64 "data" field; > base64_encoded_len(OTA_CHUNK_MAX_RAW)+1 */
+/* base64_decoded_len() is a naive upper-bound formula ((len/4)*3) that
+ * doesn't subtract padding, so it can overestimate a real decode by up to
+ * 2 bytes — sizing the decode buffer to it directly and rejecting anything
+ * bigger, BEFORE decoding, would wrongly reject a legitimate
+ * OTA_CHUNK_MAX_RAW-byte chunk whose base64 happens to be padded. Instead
+ * this decode buffer is sized to the worst case that could ever fit in
+ * OTA_CHUNK_B64_BUF, and OTA_CHUNK_MAX_RAW is enforced afterward against
+ * the real decoded length. */
+#define OTA_CHUNK_DECODE_BUF 1050
+#define OTA_APPROVE_TIMEOUT_MS 30000 /* matches export_secret's confirm window */
+
+typedef struct {
+    bool active;
+    uint32_t total_size;
+    uint32_t bytes_received;
+    uint8_t signature[OTA_SIGNATURE_LEN];
+    sha256_ctx_t hasher;
+} ota_session_t;
+
+static ota_session_t g_ota;
+
+/* Never touches the boot partition — the currently running firmware is
+ * unaffected. Safe to call whether or not a session is active. */
+static void ota_abort_session(void) {
+    if (g_ota.active && g_deps.ota_write_abort) {
+        g_deps.ota_write_abort();
+    }
+    g_ota.active = false;
+}
+
+static void handle_ota_begin(const char *line, char *out, size_t outcap) {
+    /* A new ota_begin implicitly discards any abandoned prior session
+     * (e.g. a host that crashed or gave up mid-transfer) rather than
+     * requiring a full device reset just to retry. */
+    ota_abort_session();
+
+    uint64_t size_u64;
+    char sha_hex[65], sig_hex[129];
+    if (!json_get_u64(line, "size", &size_u64) ||
+        !json_get_str(line, "sha256", sha_hex, sizeof(sha_hex)) || strlen(sha_hex) != 64 ||
+        !json_get_str(line, "signature", sig_hex, sizeof(sig_hex)) || strlen(sig_hex) != 128) {
+        write_error(out, outcap, "bad_request", "ota_begin requires size, sha256 (64 hex), signature (128 hex)");
+        return;
+    }
+    if (size_u64 == 0 || size_u64 > OTA_MAX_SIZE) {
+        write_error(out, outcap, "bad_request", "size out of range");
+        return;
+    }
+
+    uint8_t digest[OTA_DIGEST_LEN], signature[OTA_SIGNATURE_LEN];
+    if (!hex_decode(sha_hex, 64, digest, sizeof(digest)) ||
+        !hex_decode(sig_hex, 128, signature, sizeof(signature))) {
+        write_error(out, outcap, "bad_request", "sha256/signature must be hex");
+        return;
+    }
+
+    /* Verified over the CLAIMED digest, before the owner is bothered at
+     * all — an unsigned or wrongly-signed image is refused up front, same
+     * order as heartwood-esp32's OTA_BEGIN. ota_finish re-verifies this
+     * same signature against the digest actually written to flash. */
+    if (!g_deps.ota_pubkey || !ota_verify_signature(g_deps.ota_pubkey, digest, signature)) {
+        write_error(out, outcap, "bad_signature", NULL);
+        return;
+    }
+
+    if (g_deps.ota_approve) {
+        confirm_result_t result = g_deps.ota_approve((uint32_t)size_u64, OTA_APPROVE_TIMEOUT_MS);
+        if (result == CONFIRM_NO) {
+            write_error(out, outcap, "user_declined", NULL);
+            return;
+        }
+        if (result == CONFIRM_TIMEOUT) {
+            write_error(out, outcap, "timeout", NULL);
+            return;
+        }
+    }
+
+    if (g_deps.ota_write_begin && !g_deps.ota_write_begin((uint32_t)size_u64)) {
+        write_error(out, outcap, "ota_failed", "could not open the OTA partition");
+        return;
+    }
+
+    g_ota.active = true;
+    g_ota.total_size = (uint32_t)size_u64;
+    g_ota.bytes_received = 0;
+    memcpy(g_ota.signature, signature, sizeof(signature));
+    sha256_init(&g_ota.hasher);
+
+    write_ok(out, outcap);
+}
+
+static void handle_ota_chunk(const char *line, char *out, size_t outcap) {
+    if (!g_ota.active) {
+        write_error(out, outcap, "invalid_state", "no active OTA session — call ota_begin first");
+        return;
+    }
+
+    uint64_t offset_u64;
+    char data_b64[OTA_CHUNK_B64_BUF];
+    if (!json_get_u64(line, "offset", &offset_u64) || !json_get_str(line, "data", data_b64, sizeof(data_b64))) {
+        write_error(out, outcap, "bad_request", "ota_chunk requires offset, data");
+        return;
+    }
+    /* Chunks must arrive strictly in order — no reassembly buffer, no
+     * random access. A host that needs to retry a stalled chunk just
+     * resends the same (already-next-expected) offset; anything else gets
+     * a clear bad_request instead of silently corrupting the image. */
+    if (offset_u64 != g_ota.bytes_received) {
+        write_error(out, outcap, "bad_request", "offset does not match the next expected byte");
+        return;
+    }
+
+    size_t b64_len = strlen(data_b64);
+    uint8_t chunk_raw[OTA_CHUNK_DECODE_BUF];
+    if (base64_decoded_len(b64_len) > sizeof(chunk_raw)) {
+        /* Should be unreachable — data_b64's own size already bounds this
+         * — but never decode into a buffer that might not fit. */
+        write_error(out, outcap, "bad_request", "data too long");
+        return;
+    }
+    size_t chunk_len = 0;
+    if (!base64_decode(data_b64, b64_len, chunk_raw, &chunk_len)) {
+        write_error(out, outcap, "bad_request", "malformed base64 in data");
+        return;
+    }
+    if (chunk_len > OTA_CHUNK_MAX_RAW) {
+        write_error(out, outcap, "bad_request", "chunk too large");
+        return;
+    }
+    if ((uint64_t)g_ota.bytes_received + chunk_len > g_ota.total_size) {
+        write_error(out, outcap, "bad_request", "chunk would exceed the declared size");
+        ota_abort_session();
+        return;
+    }
+
+    if (g_deps.ota_write_chunk && !g_deps.ota_write_chunk(chunk_raw, chunk_len)) {
+        write_error(out, outcap, "ota_failed", "flash write failed");
+        ota_abort_session();
+        return;
+    }
+    sha256_update(&g_ota.hasher, chunk_raw, chunk_len);
+    g_ota.bytes_received += (uint32_t)chunk_len;
+
+    write_ok(out, outcap);
+}
+
+static void handle_ota_finish(char *out, size_t outcap) {
+    if (!g_ota.active) {
+        write_error(out, outcap, "invalid_state", "no active OTA session — call ota_begin first");
+        return;
+    }
+    if (g_ota.bytes_received != g_ota.total_size) {
+        write_error(out, outcap, "bad_request", "fewer bytes received than declared");
+        ota_abort_session();
+        return;
+    }
+
+    /* The check that actually carries the security guarantee: re-verify
+     * the signature against the digest of the bytes truly written to
+     * flash, not just the claimed one from ota_begin. */
+    uint8_t digest[OTA_DIGEST_LEN];
+    sha256_final(&g_ota.hasher, digest);
+    if (!g_deps.ota_pubkey || !ota_verify_signature(g_deps.ota_pubkey, digest, g_ota.signature)) {
+        write_error(out, outcap, "bad_signature", "written bytes do not match the signed digest");
+        ota_abort_session();
+        return;
+    }
+
+    if (g_deps.ota_write_finish && !g_deps.ota_write_finish()) {
+        write_error(out, outcap, "ota_failed", "could not finalize the update");
+        ota_abort_session();
+        return;
+    }
+
+    g_ota.active = false;
+    write_ok(out, outcap);
+}
+
 static void handle_delete(const char *line, char *out, size_t outcap) {
     char id[VAULT_ID_BUF];
     if (!json_get_str(line, "id", id, sizeof(id))) {
@@ -359,6 +562,14 @@ void dispatcher_handle(const char *line, char *out, size_t outcap) {
         handle_rename(line, out, outcap);
     } else if (strcmp(cmd, "delete") == 0) {
         handle_delete(line, out, outcap);
+    } else if (strcmp(cmd, "reset") == 0) {
+        handle_reset(out, outcap);
+    } else if (strcmp(cmd, "ota_begin") == 0) {
+        handle_ota_begin(line, out, outcap);
+    } else if (strcmp(cmd, "ota_chunk") == 0) {
+        handle_ota_chunk(line, out, outcap);
+    } else if (strcmp(cmd, "ota_finish") == 0) {
+        handle_ota_finish(out, outcap);
     } else {
         write_error(out, outcap, "bad_request", "unknown cmd");
     }

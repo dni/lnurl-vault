@@ -164,8 +164,11 @@ static void ui_task_fn(void *arg) {
     for (;;) {
         /* A pending remote confirm request always takes priority over
          * local browsing, and owns buttons/display exclusively until it
-         * resolves — see vault_lock.h's header comment on why that's safe
-         * even though it can hold the lock for up to `timeout_ms`. */
+         * resolves. This wait itself never holds vault_lock for
+         * export_secret (main.c's confirm_export_on_device() releases it
+         * first — see vault_lock.h's header comment); ota_begin's confirm
+         * still does, a known, separately-tracked gap (see
+         * ota_approve_on_device()'s comment in main.c). */
         remote_confirm_request_t req;
         if (xQueueReceive(g_request_q, &req, 0) == pdTRUE) {
             confirm_result_t result = service_remote_confirm(req.timeout_ms);
@@ -234,8 +237,7 @@ void ui_task_start(void) {
     xTaskCreate(ui_task_fn, "ui_task", 4096, NULL, 5, NULL);
 }
 
-confirm_result_t ui_task_request_remote_confirm(const note_meta_t *note, uint32_t timeout_ms) {
-    (void)note; /* not shown on-screen yet — see display.c's header comment */
+static confirm_result_t request_confirm(uint32_t timeout_ms) {
     QueueHandle_t resp_q = xQueueCreate(1, sizeof(confirm_result_t));
     remote_confirm_request_t req = {.timeout_ms = timeout_ms, .response_q = resp_q};
     xQueueSend(g_request_q, &req, portMAX_DELAY);
@@ -243,4 +245,13 @@ confirm_result_t ui_task_request_remote_confirm(const note_meta_t *note, uint32_
     xQueueReceive(resp_q, &result, portMAX_DELAY);
     vQueueDelete(resp_q);
     return result;
+}
+
+confirm_result_t ui_task_request_remote_confirm(const note_meta_t *note, uint32_t timeout_ms) {
+    (void)note; /* not shown on-screen yet — see display.c's header comment */
+    return request_confirm(timeout_ms);
+}
+
+confirm_result_t ui_task_request_ota_confirm(uint32_t timeout_ms) {
+    return request_confirm(timeout_ms);
 }
