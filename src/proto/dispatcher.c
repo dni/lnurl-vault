@@ -18,6 +18,28 @@ void dispatcher_init(const dispatcher_deps_t *deps) {
     g_deps = *deps;
 }
 
+/* Closes a response and, if it did not fit, replaces it with an explicit
+ * error instead of shipping a truncated object.
+ *
+ * Issue #7: handlers used to call jw_end_obj() and return whatever was in the
+ * buffer. The writer tracked overflow correctly and nobody asked it. A client
+ * then received a string that stopped mid-object with no error field, so a
+ * vault that filled up simply stopped being readable and the failure was
+ * silent -- the worst shape for a device holding money. Every response now
+ * goes through here, including the ones whose fields are fixed-size and
+ * cannot overflow today, because "cannot overflow today" is a property that
+ * quietly stops being true when someone adds a field. */
+static void write_error(char *out, size_t outcap, const char *code, const char *message);
+
+static void finish(json_writer_t *w, char *out, size_t outcap) {
+    jw_end_obj(w);
+    if (!jw_ok(w)) {
+        /* Re-initialises the writer over the same buffer, so the partial
+         * response is discarded rather than appended to. */
+        write_error(out, outcap, "response_too_large", NULL);
+    }
+}
+
 static void write_error(char *out, size_t outcap, const char *code, const char *message) {
     json_writer_t w;
     jw_init(&w, out, outcap);
@@ -54,7 +76,7 @@ static void write_ok(char *out, size_t outcap) {
     jw_init(&w, out, outcap);
     jw_begin_obj(&w, NULL);
     jw_bool(&w, "ok", true);
-    jw_end_obj(&w);
+    finish(&w, out, outcap);
 }
 
 static const char *note_state_name(note_state_t s) {
@@ -133,36 +155,101 @@ static void handle_get_info(char *out, size_t outcap) {
             jw_str(&w, "last_cmd_in_flight", boot.last_cmd);
         }
     }
-    jw_end_obj(&w);
+    finish(&w, out, outcap);
 }
 
-static void handle_list_notes(char *out, size_t outcap) {
+/* Builds one page of the listing. Returns false if it did not fit, having
+ * left nothing usable in `out` -- the caller decides what to do about that. */
+static bool build_listing(char *out, size_t outcap, size_t offset, size_t count, size_t total) {
     json_writer_t w;
     jw_init(&w, out, outcap);
     jw_begin_obj(&w, NULL);
     jw_bool(&w, "ok", true);
+    /* total and offset go in unconditionally: a client has to be able to tell
+     * "this vault holds three notes" from "this is the first three of thirty",
+     * and before paging existed it could not. */
+    jw_uint64(&w, "total", total);
+    jw_uint64(&w, "offset", offset);
     jw_begin_arr(&w, "notes");
-    size_t total = vault_count();
-    for (size_t i = 0; i < total; i++) {
+    for (size_t i = 0; i < count; i++) {
         note_meta_t n;
-        if (vault_get_meta_at(i, &n)) {
+        if (vault_get_meta_at(offset + i, &n)) {
             write_note_obj(&w, &n);
         }
     }
     jw_end_arr(&w);
-    jw_end_obj(&w);
-
-    /* The only unbounded response we build: every other handler writes a
-     * fixed set of fields that cannot overflow a transport buffer. Without
-     * this check an overflowing listing went out as a silently truncated
-     * string, so the client hit a JSON syntax error with nothing to
-     * distinguish "device is broken" from "you have too many notes".
-     * write_error() re-initialises the writer over the same buffer, so the
-     * partial listing is discarded rather than appended to. */
-    if (!jw_ok(&w)) {
-        write_error(out, outcap, "response_too_large",
-                    "too many notes to return in one response");
+    if (offset + count < total) {
+        jw_uint64(&w, "next_offset", offset + count);
     }
+    jw_end_obj(&w);
+    return jw_ok(&w);
+}
+
+/* The only unbounded response in the protocol, and the one that used to break.
+ *
+ * Issue #7 measured it: output stopped being parseable at 29 notes, or 15 once
+ * each carried a signature, against a declared VAULT_MAX_NOTES of 128. So a
+ * vault could hold four times more notes than it could ever list, and said
+ * nothing about it.
+ *
+ * `offset` and `limit` are both optional, and omitting them is deliberately
+ * NOT an error: a client written against the old protocol gets as many notes
+ * as fit -- the same ones it used to get -- plus a `next_offset` telling it
+ * there are more. Nothing that worked before works less well, and a client
+ * that ignores the new fields is no worse off than it was.
+ *
+ * An explicit `limit` is honoured or refused, never silently shrunk. A client
+ * that asked for fifty and got eight without being told would build a wrong
+ * picture of the vault, which is the same class of failure as the truncation
+ * this replaced. */
+static void handle_list_notes(const char *line, char *out, size_t outcap) {
+    const size_t total = vault_count();
+
+    uint64_t offset_u64 = 0;
+    if (json_get_u64(line, "offset", &offset_u64) && offset_u64 > total) {
+        write_error(out, outcap, "bad_request", "offset is past the end of the list");
+        return;
+    }
+    const size_t offset = (size_t)offset_u64;
+    const size_t available = total - offset;
+
+    uint64_t limit_u64 = 0;
+    const bool has_limit = json_get_u64(line, "limit", &limit_u64);
+    size_t want = has_limit ? (size_t)limit_u64 : available;
+    if (want > available) {
+        want = available;
+    }
+
+    /* The common case: it fits, in one pass. */
+    if (build_listing(out, outcap, offset, want, total)) {
+        return;
+    }
+    if (has_limit) {
+        write_error(out, outcap, "response_too_large",
+                    "too many notes for one response at that limit; ask for fewer");
+        return;
+    }
+
+    /* No limit given, and the whole remainder does not fit. Find the largest
+     * page that does, by bisection rather than by halving: halving would drop
+     * a page of 29 to 15 when 29 was only one note too many, and this runs at
+     * most a handful of times for VAULT_MAX_NOTES. */
+    size_t lo = 0, hi = want;
+    while (lo < hi) {
+        const size_t mid = lo + (hi - lo + 1) / 2;
+        if (build_listing(out, outcap, offset, mid, total)) {
+            lo = mid;
+        } else {
+            hi = mid - 1;
+        }
+    }
+    if (lo == 0) {
+        /* Not even one note fits. Nothing to page down to. */
+        write_error(out, outcap, "response_too_large",
+                    "a single note does not fit in one response");
+        return;
+    }
+    build_listing(out, outcap, offset, lo, total);
 }
 
 static void handle_new_secret(const char *line, char *out, size_t outcap) {
@@ -184,7 +271,7 @@ static void handle_new_secret(const char *line, char *out, size_t outcap) {
     jw_bool(&w, "ok", true);
     jw_str(&w, "id", id);
     jw_str(&w, "h", h);
-    jw_end_obj(&w);
+    finish(&w, out, outcap);
 }
 
 static void handle_new_secret_pair(const char *line, char *out, size_t outcap) {
@@ -210,7 +297,7 @@ static void handle_new_secret_pair(const char *line, char *out, size_t outcap) {
     jw_str(&w, "h", h);
     jw_str(&w, "id2", id2);
     jw_str(&w, "h2", h2);
-    jw_end_obj(&w);
+    finish(&w, out, outcap);
 }
 
 static void handle_confirm(const char *line, char *out, size_t outcap) {
@@ -290,7 +377,7 @@ static void handle_export_secret(const char *line, char *out, size_t outcap) {
     jw_begin_obj(&w, NULL);
     jw_bool(&w, "ok", true);
     jw_str(&w, "k1", k1);
-    jw_end_obj(&w);
+    finish(&w, out, outcap);
 }
 
 static void handle_import_secret(const char *line, char *out, size_t outcap) {
@@ -318,7 +405,7 @@ static void handle_import_secret(const char *line, char *out, size_t outcap) {
     jw_begin_obj(&w, NULL);
     jw_bool(&w, "ok", true);
     jw_str(&w, "id", id);
-    jw_end_obj(&w);
+    finish(&w, out, outcap);
 }
 
 static void handle_mark_spent(const char *line, char *out, size_t outcap) {
@@ -619,7 +706,7 @@ static void handle_wipe(const char *line, char *out, size_t outcap) {
     jw_begin_obj(&w, NULL);
     jw_bool(&w, "ok", true);
     jw_bool(&w, "wiped", true);
-    jw_end_obj(&w);
+    finish(&w, out, outcap);
 
     /* Reboot last, and delayed, so this response leaves first -- same
      * reasoning as handle_reset(). A fresh boot after a wipe means nothing
@@ -660,7 +747,7 @@ void dispatcher_handle(const char *line, char *out, size_t outcap) {
     if (strcmp(cmd, "get_info") == 0) {
         handle_get_info(out, outcap);
     } else if (strcmp(cmd, "list_notes") == 0) {
-        handle_list_notes(out, outcap);
+        handle_list_notes(line, out, outcap);
     } else if (strcmp(cmd, "new_secret") == 0) {
         handle_new_secret(line, out, outcap);
     } else if (strcmp(cmd, "new_secret_pair") == 0) {
