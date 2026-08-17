@@ -129,8 +129,26 @@ void vault_init(const vault_storage_t *storage, vault_time_fn now_fn) {
         return;
     }
     for (size_t i = 0; i < count && g_note_count < VAULT_MAX_NOTES; i++) {
-        note_t n;
+        /* Zeroed, not just declared: load_note fills `out` from storage, and a
+         * backend that reports success while writing fewer bytes than a whole
+         * note_t (ESP-IDF's nvs_get_blob does exactly that for a blob shorter
+         * than the buffer) would otherwise leave the tail of this struct as
+         * whatever was last on the stack. parent_count lives in that tail and
+         * is a loop bound. */
+        note_t n = {0};
         if (storage->load_note && storage->load_note(ids[i], &n, storage->ctx)) {
+            /* Nothing downstream re-checks this: new_note() bounds
+             * parent_count on the creation path, but a note arriving from
+             * storage has never been through it. dispatcher.c serializes
+             * parent_ids[0 .. parent_count), so a count past the end of the
+             * array walks into the next note in g_notes -- whose first fields
+             * are id then secret -- and puts it on the wire. Lineage is
+             * explicitly informational (see parse_parent_ids), so clamp it
+             * and keep the note rather than hiding real value over bad
+             * metadata. */
+            if (n.parent_count > VAULT_MAX_PARENTS) {
+                n.parent_count = VAULT_MAX_PARENTS;
+            }
             g_notes[g_note_count++] = n;
         } else if (g_unloaded_count < VAULT_MAX_NOTES) {
             /* Remember it rather than forgetting it: persist_index() carries

@@ -190,8 +190,25 @@ static bool nvs_load_note(const char *id, note_t *out, void *ctx) {
     if (!g_open) {
         return false;
     }
+    /* nvs_get_blob's `size` is in/out: it reports ESP_OK for a stored blob
+     * SHORTER than the buffer, having written only that many bytes. A note
+     * written by a build with a different note_t layout would come back
+     * partially filled and look like a successful load, with the untouched
+     * tail (state, parent_count, timestamps) carrying whatever the caller's
+     * buffer already held. Insist on a whole note: returning false here
+     * routes the id to vault_init's unloaded list, which keeps it in the
+     * index and leaves the blob on flash for a firmware that understands
+     * it, rather than orphaning or half-reading it. */
     size_t size = sizeof(*out);
-    return nvs_get_blob(g_handle, id, out, &size) == ESP_OK;
+    if (nvs_get_blob(g_handle, id, out, &size) != ESP_OK) {
+        return false;
+    }
+    if (size != sizeof(*out)) {
+        ESP_LOGE(TAG, "load_note %s: stored blob is %u bytes, expected %u; refusing a partial note",
+                 id, (unsigned)size, (unsigned)sizeof(*out));
+        return false;
+    }
+    return true;
 }
 
 static bool nvs_save_note(const note_t *note, void *ctx) {
