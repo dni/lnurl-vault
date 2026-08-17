@@ -1,40 +1,52 @@
-/* Confirmed to compile against ESP-IDF 6.0.1 as part of a full firmware
- * build (see README.md's "Status" section) — including the esp_lcd
- * panel-io/panel-vendor struct field names below (`rgb_ele_order` etc.),
- * which have changed across ESP-IDF releases before (e.g. IDF 5.x renamed
- * `color_space` to `rgb_ele_order` with a different enum). On a different
- * installed IDF version, that's still the first thing to check if a build
- * error points here — esp_lcd_panel_io.h / esp_lcd_panel_vendor.h. Actual
- * on-screen rendering has never been checked against a real display.
+/* Drawing only. Panel bring-up -- bus type, pins, rotation, colour inversion,
+ * controller-RAM offset -- belongs to src/board/, so nothing here knows or
+ * cares which board it is running on or how the glass is wired.
  *
- * v1 deliberately does NOT render note text (id/amount/label) on-screen —
- * see README.md's "Known limitations" section for why (a hand-transcribed
- * bitmap font couldn't be visually verified in this environment, and a
- * wrong glyph is a silent correctness risk this project would rather not
- * ship) and what's needed to add it later (LVGL, most likely). This still
- * gives a real, meaningful visual signal — a distinct full-screen color per
- * state — and the actual security-relevant gating (confirm/cancel/timeout)
- * in ui/buttons.c is fully functional regardless of what's drawn. */
+ * v1 deliberately does NOT render note text (id/amount/label) on screen. See
+ * README.md's "Known limitations" for why, and note that this is the single
+ * biggest remaining gap in the security model: a confirm prompt that cannot
+ * name the note it is asking about is a "press to continue", not a
+ * confirmation. Adding real text is the natural next step now that a panel
+ * can actually be brought up and checked on a bench.
+ *
+ * Until then this still gives a real signal -- a distinct full-screen colour
+ * per state, and a blinked-out position count while browsing -- and the
+ * gating itself (confirm/cancel/timeout) is fully functional regardless of
+ * what is drawn. */
 #include "display.h"
 
-#include "board_pins.h"
-#include "driver/gpio.h"
-#include "driver/spi_master.h"
-#include "esp_lcd_panel_io.h"
+#include "board.h"
+#include "esp_heap_caps.h"
 #include "esp_lcd_panel_ops.h"
-#include "esp_lcd_panel_st7789.h"
-#include "esp_lcd_panel_vendor.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
-#define LCD_SPI_HOST SPI2_HOST
-
 static esp_lcd_panel_handle_t g_panel = NULL;
+static int g_width = 0;
+static int g_height = 0;
+
+/* Two full-width rows of pixels, ping-ponged between calls.
+ *
+ * esp_lcd_panel_draw_bitmap() queues a DMA transfer against the caller's
+ * buffer and returns; the bytes are read later. Within one fill that is
+ * harmless because every row holds the identical colour, so an in-flight
+ * transfer reading a row we have "reused" sees exactly what it expected.
+ * Across two fills of *different* colours it is not: the tail of the first
+ * fill can still be in flight when the second overwrites the buffer, and
+ * those rows land in the new colour. Alternating buffers per call gives the
+ * previous fill its own intact copy to drain from.
+ *
+ * Allocated rather than static because geometry is now a runtime property of
+ * the board, and DMA-capable because that is what the panel bus sends from. */
+static uint16_t *g_rows[2] = {NULL, NULL};
+static int g_row_turn = 0;
+
+static display_state_t g_current_state = DISPLAY_STATE_IDLE;
 
 static uint16_t color_for_state(display_state_t state) {
     switch (state) {
         case DISPLAY_STATE_IDLE:
-            return 0x39C7; /* muted blue, RGB565 */
+            return 0x39C7; /* muted grey-blue, RGB565 */
         case DISPLAY_STATE_BROWSE:
             return 0x781F; /* purple */
         case DISPLAY_STATE_CONFIRM_PENDING:
@@ -49,70 +61,59 @@ static uint16_t color_for_state(display_state_t state) {
 }
 
 void display_init(void) {
-    gpio_config_t power_cfg = {
-        .pin_bit_mask = 1ULL << PIN_TFT_POWER_ON,
-        .mode = GPIO_MODE_OUTPUT,
-    };
-    gpio_config(&power_cfg);
-    gpio_set_level(PIN_TFT_POWER_ON, 1);
+    board_display_t d = board_display_init();
+    g_panel = d.panel;
+    g_width = d.width;
+    g_height = d.height;
 
-    gpio_config_t bl_cfg = {
-        .pin_bit_mask = 1ULL << PIN_TFT_BL,
-        .mode = GPIO_MODE_OUTPUT,
-    };
-    gpio_config(&bl_cfg);
-    gpio_set_level(PIN_TFT_BL, 1);
-
-    spi_bus_config_t buscfg = {
-        .sclk_io_num = PIN_TFT_SCLK,
-        .mosi_io_num = PIN_TFT_MOSI,
-        .miso_io_num = -1,
-        .quadwp_io_num = -1,
-        .quadhd_io_num = -1,
-        .max_transfer_sz = LCD_WIDTH * LCD_HEIGHT * 2,
-    };
-    spi_bus_initialize(LCD_SPI_HOST, &buscfg, SPI_DMA_CH_AUTO);
-
-    esp_lcd_panel_io_handle_t io_handle = NULL;
-    esp_lcd_panel_io_spi_config_t io_config = {
-        .cs_gpio_num = PIN_TFT_CS,
-        .dc_gpio_num = PIN_TFT_DC,
-        .spi_mode = 0,
-        .pclk_hz = 40 * 1000 * 1000,
-        .lcd_cmd_bits = 8,
-        .lcd_param_bits = 8,
-        .trans_queue_depth = 10,
-    };
-    esp_lcd_new_panel_io_spi((esp_lcd_spi_bus_handle_t)LCD_SPI_HOST, &io_config, &io_handle);
-
-    esp_lcd_panel_dev_config_t panel_config = {
-        .reset_gpio_num = PIN_TFT_RST,
-        .rgb_ele_order = LCD_RGB_ELEMENT_ORDER_RGB,
-        .bits_per_pixel = 16,
-    };
-    esp_lcd_new_panel_st7789(io_handle, &panel_config, &g_panel);
-
-    esp_lcd_panel_reset(g_panel);
-    esp_lcd_panel_init(g_panel);
-    esp_lcd_panel_invert_color(g_panel, true);
-    esp_lcd_panel_disp_on_off(g_panel, true);
+    if (g_panel) {
+        for (int i = 0; i < 2; i++) {
+            g_rows[i] = heap_caps_malloc((size_t)g_width * sizeof(uint16_t), MALLOC_CAP_DMA);
+        }
+        if (!g_rows[0] || !g_rows[1]) {
+            /* No row buffers means no drawing. Report it as no panel rather
+             * than as half-working, so display_ready() tells the truth and
+             * the secret-disclosing paths refuse instead of proceeding
+             * blind. */
+            g_panel = NULL;
+        }
+    }
 
     display_set_state(DISPLAY_STATE_IDLE);
 }
 
-static display_state_t g_current_state = DISPLAY_STATE_IDLE;
+bool display_ready(void) {
+    return g_panel != NULL && g_rows[0] != NULL && g_rows[1] != NULL;
+}
 
-static void fill_screen(uint16_t color) {
-    if (!g_panel) {
+int display_width(void) {
+    return g_width;
+}
+
+int display_height(void) {
+    return g_height;
+}
+
+void display_fill_rect(int x, int y, int w, int h, uint16_t color) {
+    if (!display_ready() || w <= 0 || h <= 0) {
         return;
     }
-    static uint16_t line[LCD_WIDTH];
-    for (int i = 0; i < LCD_WIDTH; i++) {
-        line[i] = color;
+    if (x < 0 || y < 0 || x + w > g_width || y + h > g_height) {
+        return;
     }
-    for (int y = 0; y < LCD_HEIGHT; y++) {
-        esp_lcd_panel_draw_bitmap(g_panel, 0, y, LCD_WIDTH, y + 1, line);
+    uint16_t *row = g_rows[g_row_turn];
+    g_row_turn ^= 1;
+
+    for (int i = 0; i < w; i++) {
+        row[i] = color;
     }
+    for (int r = 0; r < h; r++) {
+        esp_lcd_panel_draw_bitmap(g_panel, x, y + r, x + w, y + r + 1, row);
+    }
+}
+
+static void fill_screen(uint16_t color) {
+    display_fill_rect(0, 0, g_width, g_height, color);
 }
 
 void display_set_state(display_state_t state) {
@@ -121,7 +122,7 @@ void display_set_state(display_state_t state) {
 }
 
 void display_flash_count(int count) {
-    if (count < 1 || !g_panel) {
+    if (count < 1 || !display_ready()) {
         return;
     }
     if (count > 20) {

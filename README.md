@@ -55,6 +55,14 @@ knowing about even though they're now fixed:
   handles whichever scheme Kconfig selects internally) and pinning
   `CONFIG_NVS_SEC_HMAC_EFUSE_KEY_ID`; the now-unused `nvs_keys` partition
   was removed from `partitions.csv`.
+- The display was driven as SPI on GPIO 12/13. This board's ST7789 is on an
+  8-bit i80 *parallel* bus (D0–D7 on 39/40/41/42/45/46/47/48, WR 8, RD 9);
+  GPIO 12/13 are not connected to the panel at all, so the backlight came on
+  and nothing was ever drawn — indistinguishable from a working board until
+  you notice the screen stays blank. Since every path that discloses a secret
+  is gated on something appearing there, the security model was inert. Fixed
+  by adding `src/board/` and writing the i80 bring-up against LilyGo's own
+  pin map.
 - Two mechanisms that would have auto-fetched the QR library instead of
   vendoring it by hand were tried and empirically confirmed *not* to work
   for this framework/library combination — see `platformio.ini`'s comment.
@@ -63,8 +71,9 @@ knowing about even though they're now fixed:
 real hardware. On-screen rendering, physical button timing, BLE pairing
 against a real central, and NVS persistence across real power cycles are
 all still unverified — a compiling program can still be wrong about timing,
-electrical behavior, or the exact pin numbers in `src/ui/board_pins.h`
-(never independently checked against a physical board revision). A
+electrical behavior, or the exact pin numbers in
+`src/board/board_t_display_s3.c` (taken from LilyGo's own pin_config.h, but
+never checked against a physical board revision). A
 different installed ESP-IDF/PlatformIO version than the one used here could
 also still turn up something new; each fix above is documented in the
 relevant file's own header comment as a starting point if it does.
@@ -89,11 +98,16 @@ src/
   storage/   NVS-backed vault_storage_t implementation (ESP-IDF only)
   transport/ serial_cdc.c (USB-CDC/WebSerial), ble_gatt.c (NimBLE) — both
              take vault_lock.h's mutex around each dispatcher_handle() call
-  ui/        ST7789 display, buttons.c (thin GPIO adapter over
+  board/     the hardware-abstraction seam: one board_*.c per physical
+             board brings up the panel (bus, pins, rotation, offsets) and
+             the buttons, and hands back a plain width x height surface.
+             Nothing above this layer names a pin or a bus type. Adding a
+             board is one file plus one line in CMakeLists.txt
+  ui/        display.c (drawing only), buttons.c (thin adapter over
              proto/button_fsm.c), qr_display.c (needs a vendored QR
              library, see Build & flash), and ui_task.c — the single task
              owning buttons+display for both local note browsing and
-             remote export_secret confirm requests (T-Display S3)
+             remote export_secret confirm requests
   vault_lock.c  the mutex serializing vault.c access between the transport
                 task and ui_task (ESP-IDF only, see its header comment)
   main.c     wires RNG, storage, transports, and UI together
@@ -139,9 +153,11 @@ pio device monitor
 ```
 
 Board: [LilyGo T-Display S3](https://github.com/Xinyuan-LilyGO/T-Display-S3)
-(ESP32-S3R8, 170×320 ST7789 LCD, 2 buttons). **Verify `src/ui/board_pins.h`
-against your specific board revision** using LilyGo's own example repo
-before flashing — see that file's header comment.
+(ESP32-S3R8, 170×320 ST7789 LCD on an 8-bit i80 parallel bus, 2 buttons).
+**Verify `src/board/board_t_display_s3.c` against your specific board
+revision** using LilyGo's own `pin_config.h` before flashing — LilyGo has
+shipped more than one board under similar names. See that file's header
+comment.
 
 If `pio run` fails on a specific symbol (an NVS-encryption call, a NimBLE
 header, an esp_lcd struct field), that's expected per the Status section

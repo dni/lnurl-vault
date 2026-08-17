@@ -1,10 +1,10 @@
 #ifndef LNURLVAULT_DISPLAY_H
 #define LNURLVAULT_DISPLAY_H
 
-#include "esp_lcd_panel_ops.h" /* esp_lcd_panel_handle_t */
+#include <stdbool.h>
+#include <stdint.h>
 
-#define LCD_WIDTH 320
-#define LCD_HEIGHT 170
+#include "esp_lcd_panel_ops.h" /* esp_lcd_panel_handle_t */
 
 typedef enum {
     DISPLAY_STATE_IDLE,
@@ -14,21 +14,40 @@ typedef enum {
     DISPLAY_STATE_DECLINED,
 } display_state_t;
 
+/* Brings up whatever panel src/board/ describes and clears it to the idle
+ * colour. Never fails loudly: check display_ready() afterwards. */
 void display_init(void);
+
+/* False when the panel could not be brought up. Anything that discloses a
+ * secret MUST check this and refuse rather than proceed -- the physical
+ * confirmation is the security control, and a confirmation nobody can see is
+ * not one. */
+bool display_ready(void);
+
+/* Usable surface, in the orientation the board has already applied. Runtime
+ * rather than compile-time constants, so drawing code stays board-agnostic
+ * and a second board does not silently inherit the first one's geometry. */
+int display_width(void);
+int display_height(void);
+
 void display_set_state(display_state_t state);
 
+/* Fills an axis-aligned rectangle. Out-of-bounds rectangles are dropped
+ * rather than clipped: a caller computing a negative origin has a bug, and
+ * silently drawing something slightly wrong on a device that shows bearer
+ * secrets is worse than drawing nothing. */
+void display_fill_rect(int x, int y, int w, int h, uint16_t color);
+
 /* Flashes the screen white `count` times (150ms on/150ms off each), then
- * restores whatever state display_set_state last showed. A lightweight,
- * font-free way to indicate "note #N (of however many CONFIRMED notes
- * exist) is currently selected" while browsing — see README.md's "Known
- * limitations" on why there's no on-screen text yet. Clamped to 20 flashes
- * regardless of count, so a large note collection doesn't turn selection
- * into a multi-second light show. count < 1 is a no-op. */
+ * restores whatever state display_set_state last showed. A font-free way to
+ * indicate "note #N of the CONFIRMED ones is selected" while browsing -- see
+ * README.md's "Known limitations" on why there is no on-screen text yet.
+ * Clamped to 20 flashes. count < 1 is a no-op. */
 void display_flash_count(int count);
 
-/* The already-initialized panel handle, for qr_display.c to draw directly
- * onto rather than opening a second, conflicting panel instance. Valid only
- * after display_init(). */
+/* The initialised panel handle, for qr_display.c to draw onto rather than
+ * opening a second, conflicting panel instance. NULL until display_init()
+ * has run successfully. */
 esp_lcd_panel_handle_t display_panel_handle(void);
 
 #endif

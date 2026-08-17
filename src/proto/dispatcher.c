@@ -104,6 +104,9 @@ static void handle_get_info(char *out, size_t outcap) {
     jw_begin_obj(&w, NULL);
     jw_bool(&w, "ok", true);
     jw_str(&w, "fw_version", LNURLVAULT_FW_VERSION);
+    if (g_deps.board) {
+        jw_str(&w, "board", g_deps.board);
+    }
     jw_uint64(&w, "note_count", note_count);
     jw_uint64(&w, "pending_count", pending_count);
     jw_end_obj(&w);

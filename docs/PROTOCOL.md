@@ -52,8 +52,12 @@ Every response has a boolean `ok`. On failure: `{"ok":false,"error":"<code>","me
 
 ```json
 {"cmd":"get_info"}
-→ {"ok":true,"fw_version":"0.1.0","note_count":3,"pending_count":1}
+→ {"ok":true,"fw_version":"0.1.0","board":"t-display-s3","note_count":3,"pending_count":1}
 ```
+
+`board` identifies the hardware and therefore the pin map -- useful in a bug
+report, and for a client that wants to warn about a build it does not
+recognise. Absent on a build with no board identifier compiled in.
 
 ### `list_notes`
 
