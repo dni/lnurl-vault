@@ -28,14 +28,39 @@
  *   [2-byte little-endian total length][chunk bytes...]
  * possibly split across several writes/notifications when the message
  * exceeds the negotiated MTU - 3. See docs/PROTOCOL.md for the full framing
- * spec and these UUIDs (also listed there for the browser side). */
+ * spec and these UUIDs (also listed there for the browser side).
+ *
+ * WHAT RUNS WHERE, AND WHY — read before moving work between them.
+ * The NimBLE host task is the only thing servicing ATT and GAP for this
+ * connection, so anything it waits on, the whole link waits on. It used to
+ * run dispatcher_handle() directly from the GATT write callback below, and
+ * two of the commands there stop and ask the device's owner to press a
+ * button — up to 30 seconds during which no ATT or GAP event is processed
+ * at all. Link supervision drops the connection well inside that window, so
+ * export_secret and ota_begin could not succeed over BLE however patiently
+ * the owner answered. This is the same trap serial_cdc.c documents at
+ * length for tud_task(), in different clothing.
+ *
+ * So the split is:
+ *   host task  — reassembles writes, copies whole commands onto g_cmd_q,
+ *                tracks connection and subscription state. Never sleeps.
+ *   ble_cmd_task — dispatches (holding cmd_lock, then vault_lock — see
+ *                cmd_lock.h), then sends the response. Free to sleep, and
+ *                does: for the owner's answer, and for TX buffer space.
+ * Nothing that can block belongs above that line. */
 #include "ble_gatt.h"
 
 #include <string.h>
 
 #include "ble_frame.h"
+#include "cmd_lock.h"
 #include "dispatcher.h"
 #include "esp_log.h"
+#include "esp_timer.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/queue.h"
+#include "freertos/task.h"
+#include "host/ble_att.h"
 #include "host/ble_hs.h"
 #include "host/ble_uuid.h"
 #include "nimble/nimble_port.h"
@@ -62,59 +87,147 @@ static const ble_uuid128_t g_chr_tx_uuid =
 
 static const char *TAG = "ble_gatt";
 
-static uint16_t g_conn_handle = BLE_HS_CONN_HANDLE_NONE;
+/* Written by the NimBLE host task (the GAP event handler), read by
+ * ble_cmd_task. Both are naturally-aligned scalars, so a torn read is not
+ * possible on this architecture; volatile is what stops the compiler from
+ * hoisting them out of the polling loops in send_response(). */
+static volatile uint16_t g_conn_handle = BLE_HS_CONN_HANDLE_NONE;
+static volatile bool g_tx_notify_enabled = false;
 static uint16_t g_tx_val_handle;
-static bool g_tx_notify_enabled = false;
 
 /* Reassembly of the [2-byte LE length][payload] framing lives in
  * src/proto/ble_frame.c, not here, so it can be driven a byte at a time by
  * test/native/test_ble_frame.c. It used to be inline in rx_chr_access()
  * below, where four of its edge cases were wrong and none of them were
- * reachable from a test — see that test file. */
+ * reachable from a test — see that test file. Touched only by the host
+ * task. */
 static ble_frame_t g_rx;
 
+/* Complete commands, handed from the host task to ble_cmd_task. Depth 2
+ * rather than 1 so a client that pipelines two commands does not have the
+ * second refused outright, and no deeper because each slot is a whole
+ * message: this queue is ~8KB of static RAM as it stands. */
+#define CMD_QUEUE_DEPTH 2
+typedef struct {
+    size_t len;
+    char data[BLE_FRAME_BUF_SIZE];
+} ble_cmd_t;
+static QueueHandle_t g_cmd_q;
+
+/* Touched only by ble_cmd_task. */
 #define TX_BUF_SIZE 4096
 static uint8_t g_tx_buf[TX_BUF_SIZE]; /* [0..1]=LE length header, [2..]=JSON payload */
 static size_t g_tx_len = 0;
 static size_t g_tx_sent = 0;
 
-static void send_next_tx_chunk(void) {
-    if (g_conn_handle == BLE_HS_CONN_HANDLE_NONE || g_tx_sent >= g_tx_len) {
+/* How long to wait for the client to enable notifications before giving up
+ * on a response. A client normally subscribes before sending anything, but
+ * nothing in the protocol requires it, and the response to a command sent
+ * first has nowhere to go until it does. */
+#define TX_SUBSCRIBE_WAIT_MS 3000
+/* How long to keep retrying a notification that the host stack will not
+ * accept (its mbuf pool momentarily exhausted). Bounded for the same reason
+ * serial_cdc.c's TX_GIVE_UP_US is: an unbounded retry turns a transient
+ * stall into a permanently wedged task, and every response behind it. */
+#define TX_GIVE_UP_MS 8000
+
+/* Sends the whole framed response, in ATT-sized pieces.
+ *
+ * Runs only on ble_cmd_task, never on the NimBLE host task — it sleeps, and
+ * the host task must never sleep. That is also what makes the retry below
+ * possible at all: the mbufs it is waiting on are freed by the host task, so
+ * retrying from inside a host callback could only ever spin against itself. */
+static void send_response(void) {
+    int64_t deadline_us = esp_timer_get_time() + (int64_t)TX_SUBSCRIBE_WAIT_MS * 1000;
+    while (!g_tx_notify_enabled && g_conn_handle != BLE_HS_CONN_HANDLE_NONE &&
+           esp_timer_get_time() < deadline_us) {
+        vTaskDelay(pdMS_TO_TICKS(20));
+    }
+    if (!g_tx_notify_enabled || g_conn_handle == BLE_HS_CONN_HANDLE_NONE) {
+        ESP_LOGW(TAG, "no subscriber for a %u-byte response; dropping it", (unsigned)g_tx_len);
         return;
     }
-    size_t remaining = g_tx_len - g_tx_sent;
-    size_t chunk_len = remaining < 180 ? remaining : 180; /* conservative, pre-MTU-negotiation size */
-    struct os_mbuf *om = ble_hs_mbuf_from_flat(g_tx_buf + g_tx_sent, chunk_len);
-    if (!om) {
-        return;
-    }
-    int rc = ble_gatts_notify_custom(g_conn_handle, g_tx_val_handle, om);
-    if (rc == 0) {
-        g_tx_sent += chunk_len;
-        if (g_tx_sent < g_tx_len) {
-            send_next_tx_chunk();
+
+    /* One notification must fit in one ATT packet. ble_att_mtu() reports
+     * what was actually negotiated for this connection; the 23-byte default
+     * applies until it is. Three bytes go to the ATT opcode and handle. */
+    uint16_t mtu = ble_att_mtu(g_conn_handle);
+    size_t max_chunk = (mtu > 3 ? mtu : 23) - 3;
+
+    int64_t give_up_at_us = esp_timer_get_time() + (int64_t)TX_GIVE_UP_MS * 1000;
+    while (g_tx_sent < g_tx_len) {
+        if (g_conn_handle == BLE_HS_CONN_HANDLE_NONE) {
+            ESP_LOGW(TAG, "link dropped with %u bytes of a response unsent",
+                     (unsigned)(g_tx_len - g_tx_sent));
+            return;
         }
-    } else {
-        ESP_LOGW(TAG, "notify failed: %d", rc);
+        size_t remaining = g_tx_len - g_tx_sent;
+        size_t chunk_len = remaining < max_chunk ? remaining : max_chunk;
+
+        struct os_mbuf *om = ble_hs_mbuf_from_flat(g_tx_buf + g_tx_sent, chunk_len);
+        int rc = om ? ble_gatts_notify_custom(g_conn_handle, g_tx_val_handle, om)
+                    : BLE_HS_ENOMEM; /* ble_gatts_notify_custom frees om either way */
+        if (rc == 0) {
+            g_tx_sent += chunk_len;
+            continue;
+        }
+        if (esp_timer_get_time() > give_up_at_us) {
+            ESP_LOGW(TAG, "notify stuck (rc=%d), giving up after %u/%u bytes", rc,
+                     (unsigned)g_tx_sent, (unsigned)g_tx_len);
+            return;
+        }
+        vTaskDelay(pdMS_TO_TICKS(5)); /* let the host task free some mbufs */
     }
 }
 
+/* The task that exists so the NimBLE host task does not have to wait for
+ * anything. See this file's header comment; in short, export_secret and
+ * ota_begin both stop and ask the device's owner a question, and running
+ * that wait on the host task meant no ATT or GAP event was serviced for up
+ * to 30 seconds — long enough that link supervision dropped the connection
+ * before the owner could answer, so those two commands could never succeed
+ * over BLE at all. */
+static void ble_cmd_task(void *arg) {
+    (void)arg;
+    /* static: a whole ble_cmd_t is larger than this task's stack. Safe
+     * because exactly one item is in hand at a time. */
+    static ble_cmd_t item;
+    for (;;) {
+        if (xQueueReceive(g_cmd_q, &item, portMAX_DELAY) != pdTRUE) {
+            continue;
+        }
+
+        /* cmd_lock before vault_lock, always — see cmd_lock.h. The confirm
+         * callbacks in main.c release vault_lock around the human wait and
+         * reacquire it after; cmd_lock is deliberately held throughout. */
+        cmd_lock_acquire();
+        vault_lock_acquire();
+        dispatcher_handle(item.data, (char *)g_tx_buf + 2, TX_BUF_SIZE - 2);
+        vault_lock_release();
+        cmd_lock_release();
+
+        size_t resp_len = strlen((const char *)g_tx_buf + 2);
+        g_tx_buf[0] = (uint8_t)(resp_len & 0xFF);
+        g_tx_buf[1] = (uint8_t)((resp_len >> 8) & 0xFF);
+        g_tx_len = resp_len + 2;
+        g_tx_sent = 0;
+        send_response();
+    }
+}
+
+/* Runs on the NimBLE host task, so it only copies — see ble_cmd_task(). */
 static void on_message(const char *msg, size_t len, void *ctx) {
-    (void)len;
     (void)ctx;
-
-    vault_lock_acquire();
-    dispatcher_handle(msg, (char *)g_tx_buf + 2, TX_BUF_SIZE - 2);
-    vault_lock_release();
-
-    size_t resp_len = strlen((const char *)g_tx_buf + 2);
-    g_tx_buf[0] = (uint8_t)(resp_len & 0xFF);
-    g_tx_buf[1] = (uint8_t)((resp_len >> 8) & 0xFF);
-    g_tx_len = resp_len + 2;
-    g_tx_sent = 0;
-
-    if (g_tx_notify_enabled) {
-        send_next_tx_chunk();
+    if (len >= sizeof(((ble_cmd_t *)0)->data)) {
+        return; /* unreachable: ble_frame caps a payload below this */
+    }
+    /* static: see ble_cmd_task()'s note. The host task does not re-enter
+     * itself, so one shared staging buffer is safe here. */
+    static ble_cmd_t item;
+    item.len = len;
+    memcpy(item.data, msg, len + 1); /* + NUL */
+    if (xQueueSend(g_cmd_q, &item, 0) != pdTRUE) {
+        ESP_LOGW(TAG, "command queue full, dropping a %u-byte command", (unsigned)len);
     }
 }
 
@@ -182,8 +295,8 @@ static const struct ble_gatt_svc_def g_svcs[] = {
 /* Handles connect/disconnect/subscribe events. In particular, notifications
  * only start flowing once a BLE_GAP_EVENT_SUBSCRIBE for the TX
  * characteristic arrives (the browser side enabling notifications) — until
- * then g_tx_notify_enabled stays false and rx_chr_access() above buffers
- * (but doesn't send) any response. */
+ * then g_tx_notify_enabled stays false and ble_cmd_task waits (briefly) for
+ * it before sending a response. */
 static int gap_event_handler(struct ble_gap_event *event, void *arg);
 
 static void start_advertising(void) {
@@ -227,7 +340,10 @@ static int gap_event_handler(struct ble_gap_event *event, void *arg) {
             if (event->subscribe.attr_handle == g_tx_val_handle) {
                 g_tx_notify_enabled = event->subscribe.cur_notify;
                 g_conn_handle = event->subscribe.conn_handle;
-                send_next_tx_chunk(); /* flush any response buffered before this subscribe */
+                /* Deliberately does not send: a response waiting on this
+                 * subscribe is ble_cmd_task's to deliver, and it is already
+                 * watching this flag (see send_response()). Sending from
+                 * here would race it over the same TX buffer. */
             }
             return 0;
         case BLE_GAP_EVENT_ADV_COMPLETE:
@@ -264,6 +380,16 @@ void ble_gatt_start(void) {
      * which doesn't exist in this ESP-IDF version (nor, it turns out,
      * anywhere in this framework at all) and failed to compile. */
     ble_frame_init(&g_rx);
+
+    g_cmd_q = xQueueCreate(CMD_QUEUE_DEPTH, sizeof(ble_cmd_t));
+    if (!g_cmd_q) {
+        ESP_LOGE(TAG, "could not allocate the command queue");
+        return;
+    }
+    /* 6KB: dispatcher_handle() materialises a note_meta_t (~408 bytes) plus
+     * a JSON writer on this stack while streaming list_notes, and the OTA
+     * path adds a ~1KB chunk decode buffer on top. */
+    xTaskCreate(ble_cmd_task, "ble_cmd", 6144, NULL, 5, NULL);
 
     esp_err_t err = nimble_port_init();
     if (err != ESP_OK) {

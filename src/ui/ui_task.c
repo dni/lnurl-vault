@@ -164,11 +164,13 @@ static void ui_task_fn(void *arg) {
     for (;;) {
         /* A pending remote confirm request always takes priority over
          * local browsing, and owns buttons/display exclusively until it
-         * resolves. This wait itself never holds vault_lock for
-         * export_secret (main.c's confirm_export_on_device() releases it
-         * first — see vault_lock.h's header comment); ota_begin's confirm
-         * still does, a known, separately-tracked gap (see
-         * ota_approve_on_device()'s comment in main.c). */
+         * resolves. Reaching this point at all depends on no transport
+         * holding vault_lock while it waits: this task takes vault_lock
+         * itself (find_confirmed(), confirmed_position(), unveil()), so a
+         * caller that held it across the wait would block this task before
+         * it ever got here, and wait forever for a queue nobody can drain.
+         * Both confirm paths in main.c release it first — see
+         * vault_lock.h and cmd_lock.h. */
         remote_confirm_request_t req;
         if (xQueueReceive(g_request_q, &req, 0) == pdTRUE) {
             confirm_result_t result = service_remote_confirm(req.timeout_ms);
