@@ -23,10 +23,12 @@ static size_t g_fake_flash_len;
 static bool g_write_begin_called, g_write_finish_called, g_write_abort_called;
 static bool g_fail_next_begin, g_fail_next_chunk, g_fail_next_finish;
 static confirm_result_t g_approve_response;
+static bool g_approve_called;
 
 static confirm_result_t fake_approve(uint32_t size_bytes, uint32_t timeout_ms) {
     (void)size_bytes;
     (void)timeout_ms;
+    g_approve_called = true;
     return g_approve_response;
 }
 static bool fake_write_begin(uint32_t total_size) {
@@ -65,6 +67,7 @@ static void reset_fakes(void) {
     g_write_begin_called = g_write_finish_called = g_write_abort_called = false;
     g_fail_next_begin = g_fail_next_chunk = g_fail_next_finish = false;
     g_approve_response = CONFIRM_YES;
+    g_approve_called = false;
 }
 
 static bool rng_stub(uint8_t *out, size_t len) {
@@ -220,4 +223,50 @@ void test_ota_dispatch_run(void) {
     reset_fakes();
     dispatcher_handle(cmd_buf, out, sizeof(out));
     UL_CHECK(json_get_bool(out, "ok", &ok) && ok, "a new ota_begin after a prior abort works normally");
+
+    /* --- a device with no release key trusts nothing ---------------------
+     * Both verify sites are guarded `!g_deps.ota_pubkey || !verify(...)`.
+     * The || short-circuits, so with a NULL pubkey ota_verify_signature is
+     * never reached and the outcome rests entirely on that first operand —
+     * an untested branch deciding whether an unprovisioned build accepts
+     * arbitrary firmware. Everything else here is genuine: real keypair,
+     * real signature, real image. Only the device's trust anchor is
+     * missing, which is exactly the state a build with the all-zero
+     * placeholder key (or a port that forgets to wire ota_pubkey) ships
+     * in. Fail-open here would mean any image at all is installable. */
+    dispatcher_deps_t unprovisioned = deps;
+    unprovisioned.ota_pubkey = NULL;
+    dispatcher_init(&unprovisioned);
+
+    reset_fakes();
+    dispatcher_handle(cmd_buf, out, sizeof(out)); /* the same signed, valid ota_begin as above */
+    UL_CHECK(json_get_bool(out, "ok", &ok) && !ok,
+             "a device with no release key refuses an image even when its signature is genuine");
+    UL_CHECK(json_get_str(out, "error", err, sizeof(err)) && strcmp(err, "bad_signature") == 0,
+             "a missing release key reports bad_signature, the same refusal as a bad one");
+    UL_CHECK(!g_approve_called,
+             "the owner is never asked to approve an update the device cannot verify");
+    UL_CHECK(!g_write_begin_called,
+             "no flash partition is opened for an update the device cannot verify");
+
+    /* The finish-time re-verify carries the same guard, and it is the one
+     * that actually gates set_boot_partition. Reaching it needs a session
+     * opened while the key was present, so this swaps the key out mid
+     * transfer — contrived as an attack, but it is the only way to prove
+     * the second guard is load-bearing rather than shadowed by the first. */
+    dispatcher_init(&deps);
+    reset_fakes();
+    dispatcher_handle(cmd_buf, out, sizeof(out));
+    send_ota_chunk(image, 0, 1024, out, sizeof(out));
+    send_ota_chunk(image, 1024, 1024, out, sizeof(out));
+    send_ota_chunk(image, 2048, sizeof(image) - 2048, out, sizeof(out));
+    dispatcher_init(&unprovisioned);
+    dispatcher_handle("{\"cmd\":\"ota_finish\"}", out, sizeof(out));
+    UL_CHECK(json_get_bool(out, "ok", &ok) && !ok,
+             "losing the release key mid-transfer fails the finish-time re-verify too");
+    UL_CHECK(!g_write_finish_called,
+             "set_boot_partition is never reached without a key to verify against");
+    UL_CHECK(g_write_abort_called, "that refusal aborts the session rather than leaving it dangling");
+
+    dispatcher_init(&deps); /* leave the shared dispatcher state provisioned */
 }
