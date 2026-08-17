@@ -203,6 +203,26 @@ minting a new note.
 → {"ok":true,"id":"c9d0e1f2"}
 ```
 
+**Idempotent on `k1`.** A note is its secret, so the vault cannot hold the
+same one twice — two entries backed by one secret would report double the
+value actually held, and spending either would leave the other looking
+spendable after the mint has already paid it out. Importing a secret the
+device already holds returns `ok` with the **existing** note's id and
+creates nothing.
+
+That makes a retry safe, which matters because this command has no
+idempotency key: if the response is lost after the note was committed (a
+disconnect between the write and the reply), the client cannot otherwise
+tell whether it landed. Retrying returns what the first call would have.
+
+So treat `id` as *the note for this secret*, not *the note I just created*.
+Read its `state` if that matters — re-importing an already-`SPENT` secret
+returns that note, still `SPENT`.
+
+A re-import never modifies the held note. `amount_msat`, `host` and `label`
+from a second import are ignored, so this cannot be used to restate what the
+device shows for a note it already has.
+
 ### `mark_spent`
 
 Transitions `CONFIRMED` → `SPENT`, once the browser confirms a melt settled,
