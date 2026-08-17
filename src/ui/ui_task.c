@@ -12,8 +12,10 @@
 #include "ui_task.h"
 
 #include <stddef.h>
+#include <stdio.h>
 
 #include "approval.h"
+#include "note_display.h"
 #include "buttons.h"
 #include "button_fsm.h"
 #include "display.h"
@@ -30,9 +32,17 @@
 
 static const char *TAG = "ui_task";
 
+/* The strings the approval screen shows, formatted by the requester and
+ * copied into the queue rather than passed by pointer: the note_meta_t behind
+ * them belongs to the calling transport's stack, and this request outlives
+ * that call by up to the whole confirm window. */
 typedef struct {
     uint32_t timeout_ms;
     QueueHandle_t response_q;
+    bool has_detail;
+    char amount[NOTE_AMOUNT_BUF];
+    char label[24];
+    char id[VAULT_ID_BUF + 8];
 } remote_confirm_request_t;
 
 static QueueHandle_t g_request_q;
@@ -90,6 +100,38 @@ static int confirmed_position(int idx) {
     }
     vault_lock_release();
     return pos;
+}
+
+/* Shows the selected note while browsing, so unveiling the wrong one takes a
+ * deliberate misreading rather than a miscount. This replaced a blinked-out
+ * position count, which told you where you were in the list but not which
+ * note or for how much -- and the chord that follows discloses a bearer
+ * secret on screen. Issue #9.
+ *
+ * `position` is the 1-based place among CONFIRMED notes, shown next to the id
+ * so the count the old flash conveyed is not lost. */
+static void show_browse_note(int browse_index, int position) {
+    if (browse_index < 0) {
+        display_set_state(DISPLAY_STATE_BROWSE);
+        return;
+    }
+    note_meta_t meta;
+    bool got = false;
+    vault_lock_acquire();
+    got = vault_get_meta_at((size_t)browse_index, &meta);
+    vault_lock_release();
+    if (!got) {
+        display_set_state(DISPLAY_STATE_BROWSE);
+        return;
+    }
+
+    char amount[NOTE_AMOUNT_BUF];
+    char label[24];
+    char id[VAULT_ID_BUF + 16];
+    note_format_amount(meta.amount_msat, amount, sizeof(amount));
+    note_format_label(meta.label, label, sizeof(label));
+    snprintf(id, sizeof(id), "%s  %d", meta.id, position);
+    display_note_detail(DISPLAY_STATE_BROWSE, amount, label, id);
 }
 
 static void wipe(char *buf, size_t len) {
@@ -169,8 +211,16 @@ static void wdt_feed(void) {
  * tick at a time, because that is where the bounce and edge-case bugs live
  * and they are near-impossible to find on hardware. This function is only
  * the loop that feeds it levels and paints the result. */
-static confirm_result_t service_remote_confirm(uint32_t timeout_ms) {
-    display_set_state(DISPLAY_STATE_CONFIRM_PENDING);
+static confirm_result_t service_remote_confirm(const remote_confirm_request_t *req) {
+    const uint32_t timeout_ms = req->timeout_ms;
+    if (req->has_detail) {
+        display_note_detail(DISPLAY_STATE_CONFIRM_PENDING, req->amount, req->label,
+                            req->id);
+    } else {
+        /* No detail to show (an OTA image, or a wipe) -- the flat state colour
+         * is all there is, same as before. */
+        display_set_state(DISPLAY_STATE_CONFIRM_PENDING);
+    }
     display_progress(0);
 
     approval_t ap;
@@ -257,7 +307,7 @@ static void ui_task_fn(void *arg) {
          * vault_lock.h and cmd_lock.h. */
         remote_confirm_request_t req;
         if (xQueueReceive(g_request_q, &req, 0) == pdTRUE) {
-            confirm_result_t result = service_remote_confirm(req.timeout_ms);
+            confirm_result_t result = service_remote_confirm(&req);
             xQueueSend(req.response_q, &result, portMAX_DELAY);
             mode = UI_IDLE;
             browse_index = -1;
@@ -274,8 +324,7 @@ static void ui_task_fn(void *arg) {
                     if (browse_index >= 0) {
                         mode = UI_BROWSE;
                         browse_last_activity_us = esp_timer_get_time();
-                        display_set_state(DISPLAY_STATE_BROWSE);
-                        display_flash_count(confirmed_position(browse_index));
+                        show_browse_note(browse_index, confirmed_position(browse_index));
                     }
                 }
                 break;
@@ -287,17 +336,17 @@ static void ui_task_fn(void *arg) {
                     } else {
                         display_set_state(DISPLAY_STATE_DECLINED);
                         vTaskDelay(pdMS_TO_TICKS(500));
-                        display_set_state(DISPLAY_STATE_BROWSE);
+                        show_browse_note(browse_index, confirmed_position(browse_index));
                     }
                     browse_last_activity_us = esp_timer_get_time();
                 } else if (ev == BTN_EVENT_1_TAP) {
                     browse_index = find_confirmed(browse_index, 1);
                     browse_last_activity_us = esp_timer_get_time();
-                    display_flash_count(confirmed_position(browse_index));
+                    show_browse_note(browse_index, confirmed_position(browse_index));
                 } else if (ev == BTN_EVENT_2_TAP) {
                     browse_index = find_confirmed(browse_index, -1);
                     browse_last_activity_us = esp_timer_get_time();
-                    display_flash_count(confirmed_position(browse_index));
+                    show_browse_note(browse_index, confirmed_position(browse_index));
                 } else if ((esp_timer_get_time() - browse_last_activity_us) >
                            (int64_t)BROWSE_IDLE_TIMEOUT_MS * 1000) {
                     mode = UI_IDLE;
@@ -309,7 +358,7 @@ static void ui_task_fn(void *arg) {
                 if (ev == BTN_EVENT_1_TAP || ev == BTN_EVENT_2_TAP || ev == BTN_EVENT_BOTH_CHORD) {
                     mode = UI_BROWSE;
                     browse_last_activity_us = esp_timer_get_time();
-                    display_set_state(DISPLAY_STATE_BROWSE);
+                    show_browse_note(browse_index, confirmed_position(browse_index));
                 }
                 break;
         }
@@ -324,9 +373,15 @@ void ui_task_start(void) {
     xTaskCreate(ui_task_fn, "ui_task", 4096, NULL, 5, NULL);
 }
 
-static confirm_result_t request_confirm(uint32_t timeout_ms) {
+static confirm_result_t request_confirm_detailed(uint32_t timeout_ms, const note_meta_t *note) {
     QueueHandle_t resp_q = xQueueCreate(1, sizeof(confirm_result_t));
     remote_confirm_request_t req = {.timeout_ms = timeout_ms, .response_q = resp_q};
+    if (note) {
+        req.has_detail = true;
+        note_format_amount(note->amount_msat, req.amount, sizeof(req.amount));
+        note_format_label(note->label, req.label, sizeof(req.label));
+        snprintf(req.id, sizeof(req.id), "id %s", note->id);
+    }
     xQueueSend(g_request_q, &req, portMAX_DELAY);
     confirm_result_t result = CONFIRM_TIMEOUT;
     xQueueReceive(resp_q, &result, portMAX_DELAY);
@@ -335,12 +390,13 @@ static confirm_result_t request_confirm(uint32_t timeout_ms) {
 }
 
 confirm_result_t ui_task_request_remote_confirm(const note_meta_t *note, uint32_t timeout_ms) {
-    (void)note; /* not shown on-screen yet — see display.c's header comment */
-    return request_confirm(timeout_ms);
+    /* The note IS shown now -- issue #9. Approving a disclosure without being
+     * told which note or for how much made the physical gate a formality. */
+    return request_confirm_detailed(timeout_ms, note);
 }
 
 confirm_result_t ui_task_request_ota_confirm(uint32_t timeout_ms) {
-    return request_confirm(timeout_ms);
+    return request_confirm_detailed(timeout_ms, NULL);
 }
 
 confirm_result_t ui_task_request_wipe_confirm(uint32_t timeout_ms) {
