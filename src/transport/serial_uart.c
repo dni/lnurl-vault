@@ -20,6 +20,7 @@
 
 #include <string.h>
 
+#include "cmd_lock.h"
 #include "dispatcher.h"
 #include "driver/uart.h"
 #include "esp_log.h"
@@ -42,9 +43,16 @@ static line_proto_t g_lp;
 
 static void on_line(const char *line, void *ctx) {
     (void)ctx;
+    /* cmd_lock before vault_lock, always -- see cmd_lock.h. Without this the
+     * OTA session state in dispatcher.c has nothing serializing it against
+     * the BLE transport on this board, and main.c's ota_approve_on_device()
+     * now releases vault_lock during the approval wait, so vault_lock is no
+     * longer standing in for it either. */
+    cmd_lock_acquire();
     vault_lock_acquire();
     dispatcher_handle(line, g_resp, sizeof(g_resp));
     vault_lock_release();
+    cmd_lock_release();
 
     size_t n = strlen(g_resp);
     uart_write_bytes(UART_PORT, g_resp, n);
