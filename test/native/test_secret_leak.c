@@ -45,6 +45,17 @@ static bool rng_stub(uint8_t *out, size_t len) {
     return true;
 }
 
+/* Records every breadcrumb the dispatcher emits, so they can be checked for
+ * the same thing the responses are. */
+#define TRACE_MAX 32
+static char g_traced[TRACE_MAX][64];
+static int g_trace_count;
+static void trace_recorder(const char *cmd) {
+    if (cmd && g_trace_count < TRACE_MAX) {
+        snprintf(g_traced[g_trace_count++], sizeof(g_traced[0]), "%s", cmd);
+    }
+}
+
 static confirm_result_t always_yes(const note_meta_t *note) {
     (void)note;
     return CONFIRM_YES;
@@ -72,8 +83,10 @@ void test_secret_leak_run(void) {
              "and its raw form is the same 32 bytes, so both probes look for the real secret");
 
     vault_init(NULL, NULL);
-    dispatcher_deps_t deps = {.rng = rng_stub, .confirm_export = always_yes};
+    dispatcher_deps_t deps = {
+        .rng = rng_stub, .confirm_export = always_yes, .trace_cmd = trace_recorder};
     dispatcher_init(&deps);
+    g_trace_count = 0;
 
     char out[2048];
     char cmd[512];
@@ -148,6 +161,45 @@ void test_secret_leak_run(void) {
     snprintf(cmd, sizeof(cmd), "{\"cmd\":\"import_secret\",\"k1\":\"%s\"}", SECRET_HEX);
     dispatcher_handle(cmd, out, sizeof(out));
     expect_no_secret("a malformed import that quotes the secret back", out);
+
+    /* The crash breadcrumb is a second way out of the device, and a quieter
+     * one: crash_crumb.h says "WHAT MUST NEVER GO IN HERE: anything derived
+     * from a secret", it survives a reboot in RTC memory, and get_info hands
+     * it back over the wire as last_cmd_in_flight.
+     *
+     * dispatcher.c passes the parsed cmd field, never `line` -- which for
+     * import_secret is the one string in the protocol containing a raw
+     * secret. Nothing tested that. Changing it to trace `line` for better
+     * diagnostics is exactly the well-meant edit that would survive review,
+     * so pin it: every breadcrumb from this run, including the ones from
+     * commands carrying the secret, is checked for both forms of it.
+     *
+     * The length bound is the same claim from the other side: a breadcrumb
+     * that could hold 64 hex characters could hold a secret. */
+    UL_CHECK(g_trace_count > 0, "breadcrumbs were recorded at all");
+    for (int i = 0; i < g_trace_count; i++) {
+        /* Sized for a full-length breadcrumb plus the longest suffix below:
+         * GNU gcc's -Werror=format-truncation catches this and clang does not,
+         * which is the standing trap in this suite. */
+        char what[224];
+        snprintf(what, sizeof(what), "breadcrumb \"%s\"", g_traced[i]);
+        expect_no_secret(what, g_traced[i]);
+        /* crash_crumb's own buffer is 24 bytes, so a whole 64-character hex
+         * secret could never fit there anyway -- the realistic leak is a
+         * PREFIX. Sixteen characters is eight bytes of the secret, which is
+         * a disclosure whether or not the rest followed. */
+        char prefix[17];
+        memcpy(prefix, SECRET_HEX, 16);
+        prefix[16] = '\0';
+        snprintf(what, sizeof(what), "breadcrumb \"%s\" holds no prefix of the secret either",
+                 g_traced[i]);
+        UL_CHECK(strstr(g_traced[i], prefix) == NULL, what);
+        snprintf(what, sizeof(what), "breadcrumb \"%s\" is a bare command name, not arguments",
+                 g_traced[i]);
+        UL_CHECK(strchr(g_traced[i], '{') == NULL && strchr(g_traced[i], '"') == NULL &&
+                     strlen(g_traced[i]) < 32,
+                 what);
+    }
 
     /* The one command that IS allowed to disclose it -- proof the probe
      * above is capable of finding the secret when it really is present, so a
