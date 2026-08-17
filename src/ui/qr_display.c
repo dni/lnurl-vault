@@ -73,20 +73,20 @@
 #include "display.h"
 #include "esp_heap_caps.h"
 #include "esp_lcd_panel_ops.h"
+#include <string.h>
+
+#include "qr_capacity.h"
 #include "qrcode.h"
 
 #define QUIET_ZONE_MODULES 4
-#define MIN_QR_VERSION 4
-#define MAX_QR_VERSION 20 /* version 20 byte-mode/ECC-L capacity is far above any URL this device builds */
 
 #define QR_WHITE 0xFFFF
 #define QR_BLACK 0x0000
 
-/* Generously sized for MAX_QR_VERSION rather than relying on the exact
- * calling convention of the library's own buffer-size helper (function vs.
- * macro has varied across similar libraries) — see this file's header
- * comment. */
-static uint8_t g_qr_buf[1200];
+/* Sized for QR_MAX_VERSION; checked against the library at run time before
+ * use, because getting this wrong overflows a buffer holding a bearer secret
+ * rather than merely drawing badly. */
+static uint8_t g_qr_buf[1400];
 
 bool qr_display_show(const char *text) {
     esp_lcd_panel_handle_t panel = display_panel_handle();
@@ -95,14 +95,15 @@ bool qr_display_show(const char *text) {
     }
 
     QRCode qrcode;
-    bool encoded = false;
-    for (uint8_t v = MIN_QR_VERSION; v <= MAX_QR_VERSION; v++) {
-        if (qrcode_initText(&qrcode, g_qr_buf, v, ECC_LOW, text) == 0) {
-            encoded = true;
-            break;
-        }
+    const size_t len = strlen(text);
+    const uint8_t version = qr_version_for_length(len);
+    if (version == 0) {
+        return false; /* longer than any version we are prepared to render */
     }
-    if (!encoded) {
+    if (qrcode_getBufferSize(version) > sizeof(g_qr_buf)) {
+        return false; /* refuse rather than overflow */
+    }
+    if (qrcode_initText(&qrcode, g_qr_buf, version, ECC_LOW, text) != 0) {
         return false;
     }
 
@@ -116,34 +117,57 @@ bool qr_display_show(const char *text) {
      * panel. */
     const int modules = qrcode.size + 2 * QUIET_ZONE_MODULES;
     const int shorter = screen_w < screen_h ? screen_w : screen_h;
-    const int scale = shorter / modules;
-    if (scale < 1) {
+    const int ideal_scale = shorter / modules;
+    if (ideal_scale < 1) {
         return false; /* screen too small for this version at 1px per module */
     }
 
-    const int qr_px = modules * scale;
-    const int x0 = (screen_w - qr_px) / 2;
-    const int y0 = (screen_h - qr_px) / 2;
+    /* One buffer for the whole square, sent as a single transfer. Drawing
+     * module-by-module would be tens of thousands of queued transactions, and
+     * reusing one scratch row for rows that differ would race the DMA that
+     * esp_lcd_panel_draw_bitmap() queues against it.
+     *
+     * The previous code's buffer is released BEFORE this one is claimed, not
+     * after. Holding both at once needed ~65KB of DMA-capable RAM, which
+     * fails on a classic ESP32 with NimBLE up -- observed on hardware as the
+     * third and later codes in the self-test ladder refusing to render while
+     * the first two worked. Freeing first halves the peak to a single buffer.
+     *
+     * Safe to free here rather than on transfer-completion because the only
+     * thing that triggers another render is a person pressing a button, which
+     * is many orders of magnitude slower than the blit. */
+    static uint16_t *held = NULL;
+    if (held) {
+        heap_caps_free(held);
+        held = NULL;
+    }
 
-    /* Render the whole square into one buffer and send it as a single
-     * transfer. Drawing module-by-module would be tens of thousands of
-     * queued transactions, and reusing one scratch row for rows that differ
-     * would race the DMA that esp_lcd_panel_draw_bitmap() queues against it.
-     * At the largest size this fits (170px square) the buffer is ~58KB. */
-    uint16_t *buf = heap_caps_malloc((size_t)qr_px * (size_t)qr_px * sizeof(uint16_t),
-                                      MALLOC_CAP_DMA);
+    /* Degrade rather than show nothing: if the ideal scale will not fit in
+     * DMA-capable memory, step it down. A slightly smaller code that renders
+     * beats a blank screen on a device whose whole job here is to show one. */
+    uint16_t *buf = NULL;
+    int scale = ideal_scale;
+    int qr_px = 0;
+    for (; scale >= 1; scale--) {
+        qr_px = modules * scale;
+        buf = heap_caps_malloc((size_t)qr_px * (size_t)qr_px * sizeof(uint16_t), MALLOC_CAP_DMA);
+        if (buf) {
+            break;
+        }
+    }
     if (!buf) {
         return false;
     }
+
+    const int x0 = (screen_w - qr_px) / 2;
+    const int y0 = (screen_h - qr_px) / 2;
 
     for (int py = 0; py < qr_px; py++) {
         /* Quiet zone is part of the square, so module coordinates are offset
          * by it. Previously module (0,0) was drawn at the square's own
          * corner, which pushed the entire margin onto the right and bottom
          * and left as little as 3px above the code where the spec wants four
-         * modules. Scanners vary in how much they tolerate; the failure mode
-         * is a code that simply will not read, with nothing on screen to say
-         * why. */
+         * modules. */
         const int my = py / scale - QUIET_ZONE_MODULES;
         for (int px = 0; px < qr_px; px++) {
             const int mx = px / scale - QUIET_ZONE_MODULES;
@@ -159,14 +183,6 @@ bool qr_display_show(const char *text) {
     display_fill_rect(0, 0, screen_w, screen_h, QR_WHITE);
     esp_lcd_panel_draw_bitmap(panel, x0, y0, x0 + qr_px, y0 + qr_px, buf);
 
-    /* The blit is queued, not completed, so the buffer cannot be freed here
-     * without risking the DMA reading freed memory. Hold it until the next
-     * call, by which time the transfer is long done -- the QR stays on screen
-     * until the owner dismisses it, which is a human-scale delay. */
-    static uint16_t *prev = NULL;
-    if (prev) {
-        heap_caps_free(prev);
-    }
-    prev = buf;
+    held = buf;
     return true;
 }
