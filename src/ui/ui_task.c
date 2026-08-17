@@ -15,6 +15,8 @@
 #include "buttons.h"
 #include "button_fsm.h"
 #include "display.h"
+#include "esp_log.h"
+#include "esp_task_wdt.h"
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
@@ -23,6 +25,8 @@
 #include "qr_display.h"
 #include "vault.h"
 #include "vault_lock.h"
+
+static const char *TAG = "ui_task";
 
 typedef struct {
     uint32_t timeout_ms;
@@ -130,6 +134,30 @@ static bool unveil(int browse_index) {
     return shown;
 }
 
+/* Why the watchdog watches THIS task and not the transports.
+ *
+ * ui_task is the one task that must always be able to make progress: it is
+ * on the far side of every confirmation wait, and the deadlock in issue #4
+ * showed up precisely as ui_task blocked on a lock it could not get, with a
+ * transport waiting on a queue only ui_task could drain. Nothing detected
+ * it; the vault simply stopped answering, with secrets still in RAM.
+ *
+ * The transport tasks are deliberately NOT subscribed. Their normal resting
+ * state is blocked on a queue with no timeout, which is health, not a wedge
+ * -- and they may legitimately be stuck for a long time on purpose: a
+ * 30-second approval wait, plus up to another 30 waiting on cmd_lock behind
+ * the other transport's approval. That is 60s of correct behaviour, which
+ * is the timeout itself. A watchdog that panics a device holding secrets
+ * because someone took their time reading the screen would be worse than
+ * the fault it is looking for.
+ *
+ * So: 60s against a 30s approval, on the task whose loop is 30ms and which
+ * has no legitimate reason to ever pause -- borrowed from heartwood-esp32's
+ * ratio, applied to the task that ratio actually holds for. */
+static void wdt_feed(void) {
+    esp_task_wdt_reset();
+}
+
 static confirm_result_t service_remote_confirm(uint32_t timeout_ms) {
     display_set_state(DISPLAY_STATE_CONFIRM_PENDING);
     int64_t deadline_us = esp_timer_get_time() + (int64_t)timeout_ms * 1000;
@@ -145,6 +173,7 @@ static confirm_result_t service_remote_confirm(uint32_t timeout_ms) {
             result = CONFIRM_NO;
             break;
         }
+        wdt_feed(); /* a 30s wait must not look like a wedge */
         vTaskDelay(pdMS_TO_TICKS(20));
     }
 
@@ -155,6 +184,14 @@ static confirm_result_t service_remote_confirm(uint32_t timeout_ms) {
 
 static void ui_task_fn(void *arg) {
     (void)arg;
+    /* Not fatal if it fails -- an unwatched vault still works, and refusing
+     * to browse notes because a watchdog would not subscribe would be a
+     * worse trade than going unwatched. */
+    esp_err_t wdt_err = esp_task_wdt_add(NULL);
+    if (wdt_err != ESP_OK) {
+        ESP_LOGW(TAG, "task watchdog not watching ui_task: %s", esp_err_to_name(wdt_err));
+    }
+
     ui_mode_t mode = UI_IDLE;
     int browse_index = -1;
     int64_t browse_last_activity_us = 0;
@@ -230,6 +267,7 @@ static void ui_task_fn(void *arg) {
                 break;
         }
 
+        wdt_feed();
         vTaskDelay(pdMS_TO_TICKS(30));
     }
 }

@@ -115,6 +115,28 @@ typedef bool (*wipe_storage_fn)(void);
  * it presents as an empty working vault while holding every note on flash,
  * unread -- and the owner concludes their notes are gone. */
 typedef const char *(*storage_state_fn)(void);
+/* Optional: called with the command NAME as each command starts and ends,
+ * so the firmware can leave a breadcrumb naming what was in flight if the
+ * device goes down mid-command (see src/crash_crumb.h). NULL => not traced,
+ * which is what native tests use.
+ *
+ * The name only, never the line it came from: import_secret carries a raw
+ * secret in its arguments, and the breadcrumb survives a reset. Anything
+ * wired here inherits that constraint. */
+typedef void (*trace_cmd_fn)(const char *cmd);
+
+/* Optional: describes the previous boot, surfaced by get_info as
+ * last_reset_reason / boot_count / last_cmd_in_flight. NULL => the fields
+ * are omitted. last_cmd may be NULL even when this is set, meaning the
+ * device went down cleanly or not at all. */
+typedef struct {
+    const char *reset_reason;
+    const char *last_cmd; /* NULL if nothing was in flight */
+    uint32_t boot_count;
+    bool unexpected;
+} boot_report_t;
+
+typedef bool (*boot_report_fn)(boot_report_t *out);
 
 typedef struct {
     vault_rng_fn rng;
@@ -141,6 +163,8 @@ typedef struct {
     wipe_approve_fn wipe_approve;
     wipe_storage_fn wipe_storage;
     storage_state_fn storage_state;
+    trace_cmd_fn trace_cmd;
+    boot_report_fn boot_report;
 } dispatcher_deps_t;
 
 void dispatcher_init(const dispatcher_deps_t *deps);
