@@ -9,6 +9,11 @@ void button_fsm_init(button_fsm_t *fsm) {
     fsm->b1_down_since_us = 0;
     fsm->b2_down_since_us = 0;
     fsm->chord_fired = false;
+    fsm->consumed = false;
+}
+
+void button_fsm_consume_press(button_fsm_t *fsm) {
+    fsm->consumed = true;
 }
 
 button_event_t button_fsm_poll(button_fsm_t *fsm, bool b1_pressed, bool b2_pressed,
@@ -25,7 +30,8 @@ button_event_t button_fsm_poll(button_fsm_t *fsm, bool b1_pressed, bool b2_press
     button_event_t event = BTN_EVENT_NONE;
 
     if (b1_pressed && b2_pressed) {
-        if (!fsm->chord_fired && (now_us - fsm->b1_down_since_us) >= BUTTON_FSM_CHORD_HOLD_US &&
+        if (!fsm->chord_fired && !fsm->consumed &&
+            (now_us - fsm->b1_down_since_us) >= BUTTON_FSM_CHORD_HOLD_US &&
             (now_us - fsm->b2_down_since_us) >= BUTTON_FSM_CHORD_HOLD_US) {
             fsm->chord_fired = true;
             event = BTN_EVENT_BOTH_CHORD;
@@ -40,14 +46,15 @@ button_event_t button_fsm_poll(button_fsm_t *fsm, bool b1_pressed, bool b2_press
          * complexity for a two-button device. */
         if (!b1_pressed && fsm->b1_down) {
             bool long_enough = (now_us - fsm->b1_down_since_us) >= BUTTON_FSM_DEBOUNCE_US;
-            if (long_enough && !fsm->chord_fired) {
+            if (long_enough && !fsm->chord_fired && !fsm->consumed) {
                 event = BTN_EVENT_1_TAP;
             }
             fsm->b1_down = false;
         }
         if (!b2_pressed && fsm->b2_down) {
             bool long_enough = (now_us - fsm->b2_down_since_us) >= BUTTON_FSM_DEBOUNCE_US;
-            if (long_enough && !fsm->chord_fired && event == BTN_EVENT_NONE) {
+            if (long_enough && !fsm->chord_fired && !fsm->consumed &&
+                event == BTN_EVENT_NONE) {
                 event = BTN_EVENT_2_TAP;
             }
             fsm->b2_down = false;
@@ -56,6 +63,7 @@ button_event_t button_fsm_poll(button_fsm_t *fsm, bool b1_pressed, bool b2_press
 
     if (!b1_pressed && !b2_pressed) {
         fsm->chord_fired = false;
+        fsm->consumed = false;
     }
 
     return event;

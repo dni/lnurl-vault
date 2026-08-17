@@ -55,6 +55,9 @@ static uint16_t color_for_state(display_state_t state) {
             return 0x07E0; /* green */
         case DISPLAY_STATE_DECLINED:
             return 0xF800; /* red */
+        case DISPLAY_STATE_EXPIRED:
+            return 0x8410; /* mid grey: visibly not the amber of a live
+                            * prompt, and visibly not the red of a refusal */
         default:
             return 0x0000;
     }
@@ -119,6 +122,37 @@ static void fill_screen(uint16_t color) {
 void display_set_state(display_state_t state) {
     g_current_state = state;
     fill_screen(color_for_state(state));
+}
+
+void display_progress(uint16_t permille) {
+    if (!display_ready()) {
+        return;
+    }
+    if (permille > 1000) {
+        permille = 1000;
+    }
+
+    /* A band across the middle, inset from the edges so it reads as a bar
+     * rather than as the screen changing colour. Geometry is derived from the
+     * panel at runtime -- see display_width()'s comment on why nothing here
+     * hardcodes a size. */
+    int margin = g_width / 8;
+    int track_w = g_width - 2 * margin;
+    int bar_h = g_height / 6;
+    int y = (g_height - bar_h) / 2;
+    if (track_w <= 2 || bar_h <= 2) {
+        return; /* a panel too small to draw a meaningful bar on */
+    }
+
+    int filled = (int)(((int32_t)track_w * permille) / 1000);
+
+    /* Track, then fill. Repainting the whole track each call is what makes
+     * this safe to call at any rate and in any order, including going
+     * backwards if a hold restarts. */
+    display_fill_rect(margin, y, track_w, bar_h, 0x0000);
+    if (filled > 0) {
+        display_fill_rect(margin, y, filled, bar_h, 0xFFFF);
+    }
 }
 
 void display_flash_count(int count) {

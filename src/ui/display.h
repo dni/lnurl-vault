@@ -12,6 +12,10 @@ typedef enum {
     DISPLAY_STATE_CONFIRM_PENDING,
     DISPLAY_STATE_APPROVED,
     DISPLAY_STATE_DECLINED,
+    /* A prompt nobody answered. Its own state, not DECLINED, so a stale
+     * request can never be left looking live and can never be mistaken for
+     * the owner having said no. */
+    DISPLAY_STATE_EXPIRED,
 } display_state_t;
 
 /* Brings up whatever panel src/board/ describes and clears it to the idle
@@ -37,6 +41,17 @@ void display_set_state(display_state_t state);
  * silently drawing something slightly wrong on a device that shows bearer
  * secrets is worse than drawing nothing. */
 void display_fill_rect(int x, int y, int w, int h, uint16_t color);
+
+/* Draws the approval hold as a filling bar, 0..1000 parts per thousand (see
+ * approval.h). Idempotent and cheap enough to call every poll tick: it
+ * repaints only the bar, not the screen behind it, so the amber
+ * CONFIRM_PENDING background set by display_set_state stays put.
+ *
+ * The bar is the feedback the old single-tap gesture had none of. A hold with
+ * nothing on screen is indistinguishable from a device that is not listening,
+ * and the owner's response to that is to press harder and more often -- at
+ * the exact screen where that is least wanted. */
+void display_progress(uint16_t permille);
 
 /* Flashes the screen white `count` times (150ms on/150ms off each), then
  * restores whatever state display_set_state last showed. A font-free way to

@@ -1,6 +1,8 @@
 #ifndef LNURLVAULT_BUTTONS_H
 #define LNURLVAULT_BUTTONS_H
 
+#include <stdbool.h>
+
 #include "button_fsm.h" /* button_event_t */
 
 void buttons_init(void);
@@ -13,5 +15,22 @@ void buttons_init(void);
  * and servicing remote export_secret confirm requests, so the two never
  * read the buttons concurrently. */
 button_event_t buttons_poll(void);
+
+/* Raw, undebounced levels, for the approval gesture.
+ *
+ * The approval screen measures a two-second hold itself (see approval.h)
+ * rather than consuming the tap events above, for the plain reason that a
+ * hold is not a tap: button_fsm reports a press only once it is over, and by
+ * then there is nothing left to show a progress bar for. approval.c does its
+ * own debouncing, including the part button_fsm does not do -- treating a
+ * contact skip part-way through a hold as bounce rather than as a release. */
+bool buttons_raw_1(void);
+bool buttons_raw_2(void);
+
+/* Declares whatever is held right now to have already been acted on, so its
+ * release produces no event -- see button_fsm_consume_press(). The approval
+ * screen calls this once it has an answer, because the button that gave that
+ * answer is still physically down. */
+void buttons_consume_press(void);
 
 #endif

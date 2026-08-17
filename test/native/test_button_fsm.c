@@ -75,7 +75,57 @@ static void test_staggered_chord_entry(void) {
               "a fresh tap works normally after a prior chord and full release");
 }
 
+/* The approval screen watches raw button levels itself (a hold is not a tap),
+ * so the release of the button that approved a disclosure would otherwise
+ * arrive here as a fresh tap -- and on this device a tap starts browsing
+ * secrets. An approval must not also scroll to one. */
+static void test_consumed_press_emits_nothing_on_release(void) {
+    button_fsm_t fsm;
+    button_fsm_init(&fsm);
+    int64_t t = 1000000;
+
+    button_fsm_poll(&fsm, true, false, t);
+    t += 2000000; /* held a long time, as an approval hold would be */
+    button_fsm_poll(&fsm, true, false, t);
+
+    button_fsm_consume_press(&fsm);
+
+    t += 50000;
+    button_event_t ev = button_fsm_poll(&fsm, false, false, t); /* released */
+    UL_CHECK(ev == BTN_EVENT_NONE, "a consumed press emits nothing when released");
+
+    /* And the next, genuinely new press works normally. */
+    t += 50000;
+    button_fsm_poll(&fsm, true, false, t);
+    t += 50000;
+    ev = button_fsm_poll(&fsm, false, false, t);
+    UL_CHECK(ev == BTN_EVENT_1_TAP, "the next press is not suppressed");
+}
+
+/* Same for the other button, and for the chord: nothing held at the moment of
+ * consumption may produce an event. */
+static void test_consumed_press_suppresses_button_2_and_the_chord(void) {
+    button_fsm_t fsm;
+    button_fsm_init(&fsm);
+    int64_t t = 1000000;
+
+    button_fsm_poll(&fsm, false, true, t);
+    button_fsm_consume_press(&fsm);
+    t += 100000;
+    UL_CHECK(button_fsm_poll(&fsm, false, false, t) == BTN_EVENT_NONE,
+             "a consumed button 2 press emits nothing");
+
+    button_fsm_init(&fsm);
+    button_fsm_poll(&fsm, true, true, t);
+    button_fsm_consume_press(&fsm);
+    t += 500000; /* well past the chord hold */
+    UL_CHECK(button_fsm_poll(&fsm, true, true, t) == BTN_EVENT_NONE,
+             "a consumed press cannot become a chord either");
+}
+
 void test_button_fsm_run(void) {
+    test_consumed_press_emits_nothing_on_release();
+    test_consumed_press_suppresses_button_2_and_the_chord();
     test_simple_tap();
     test_bounce_filtered();
     test_chord();
