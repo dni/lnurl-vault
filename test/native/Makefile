@@ -23,6 +23,7 @@ SRC = ../../src/vault/sha256.c \
       ../../src/proto/dispatcher.c \
       ../../src/proto/button_fsm.c \
       ../../src/proto/note_url.c \
+      ../../src/proto/ble_frame.c \
       ../../src/ota/monocypher.c \
       ../../src/ota/monocypher-ed25519.c \
       ../../src/ota/ota_sign.c \
@@ -33,6 +34,7 @@ SRC = ../../src/vault/sha256.c \
       test_dispatcher.c \
       test_button_fsm.c \
       test_note_url.c \
+      test_ble_frame.c \
       test_regressions.c \
       test_base64.c \
       test_ota_sign.c \
