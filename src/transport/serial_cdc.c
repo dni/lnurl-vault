@@ -70,6 +70,7 @@
 
 #include <string.h>
 
+#include "cmd_lock.h"
 #include "dispatcher.h"
 #include "esp_log.h"
 #include "esp_timer.h"
@@ -169,9 +170,17 @@ static void serial_rx_task(void *arg) {
         if (xQueueReceive(g_rx_queue, &item, portMAX_DELAY) != pdTRUE) {
             continue;
         }
+        /* cmd_lock before vault_lock, always — see cmd_lock.h. main.c's
+         * confirm callbacks release vault_lock around the up-to-30s wait
+         * for the owner to press a button, so ui_task can still run; this
+         * task's other half of that arrangement is holding cmd_lock across
+         * the whole command, which is what keeps the dispatcher's own OTA
+         * session state safe from the other transport meanwhile. */
+        cmd_lock_acquire();
         vault_lock_acquire();
         dispatcher_handle(item.data, g_resp_buf, sizeof(g_resp_buf) - 1);
         vault_lock_release();
+        cmd_lock_release();
         size_t resp_len = strlen(g_resp_buf);
         g_resp_buf[resp_len++] = '\n';
 

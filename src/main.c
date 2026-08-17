@@ -13,6 +13,7 @@
 #include "ble_gatt.h"
 #include "board.h"
 #include "buttons.h"
+#include "cmd_lock.h"
 #include "device_reboot.h"
 #include "dispatcher.h"
 #include "display.h"
@@ -104,29 +105,35 @@ static confirm_result_t confirm_export_on_device(const note_meta_t *note) {
  * dispatcher.h's ota_approve_fn comment. size_bytes isn't shown on-screen
  * yet either, same limitation as confirm_export_on_device above.
  *
- * Deliberately NOT given the same vault_lock_release()/acquire() treatment
- * as confirm_export_on_device above, even though it has the exact same
- * up-to-30s blocking-while-locked problem: dispatcher.c's OTA session state
- * (g_ota in dispatcher.c) is plain static data with no re-validation or
- * locking of its own — unlike vault.c's notes, which vault_export_secret()
- * re-checks after the lock is reacquired. Today, vault_lock is the ONLY
- * thing serializing dispatcher_handle() calls across transports at all, so
- * releasing it here would let a second transport's ota_begin/ota_chunk
- * race this one's g_ota mutation with nothing to catch it — a new, less
- * understood bug in an already real-hardware-unverified path (see
- * README.md's "OTA firmware updates" section), trading a known, bounded
- * problem for an unknown one. Fixing this for real needs g_ota to get its
- * own lock (or dispatcher.c to stop being lock-free internally) — a bigger
- * change than this session made, left as a follow-up. */
+ * This used to hold vault_lock for the whole approval wait, and said so:
+ * the reason it could not simply release it was that vault_lock was then
+ * the ONLY thing serializing dispatcher_handle() across transports, so
+ * releasing it would have let a second transport's ota_begin/ota_chunk race
+ * this one's g_ota mutation, which has no re-validation of its own the way
+ * vault.c's notes do. Holding it, though, is the deadlock in issue #4: the
+ * task on the other side of this wait is ui_task, and ui_task takes
+ * vault_lock for its own note browsing — so it can be blocked on the very
+ * lock this call is holding, never reach the queue it is being waited on,
+ * and wedge both tasks until the vault is power-cycled.
+ *
+ * cmd_lock (see cmd_lock.h) resolves it by giving those two jobs separate
+ * locks. The transports now hold cmd_lock across the whole command,
+ * including this wait, so g_ota keeps exactly the protection it had; and
+ * vault_lock, which ui_task actually contends for, is released around the
+ * wait here just as confirm_export_on_device does above. */
 static confirm_result_t ota_approve_on_device(uint32_t size_bytes, uint32_t timeout_ms) {
     (void)size_bytes;
-    return ui_task_request_ota_confirm(timeout_ms);
+    vault_lock_release();
+    confirm_result_t result = ui_task_request_ota_confirm(timeout_ms);
+    vault_lock_acquire();
+    return result;
 }
 
 void app_main(void) {
     buttons_init();
     display_init();
     vault_lock_init();
+    cmd_lock_init();
 
     esp_err_t err = vault_nvs_boot();
     if (err != ESP_OK) {
