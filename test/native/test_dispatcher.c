@@ -142,6 +142,26 @@ void test_dispatcher_run(void) {
     dispatcher_handle("{\"cmd\":\"import_secret\",\"host\":\"h\",\"amount_msat\":1}", out, sizeof(out));
     UL_CHECK(json_get_bool(out, "ok", &ok) && !ok, "import_secret requires k1");
 
+    /* new_secret_pair was the other command with no dispatcher-level test.
+     * The split builds both notes before committing either, so a failure on
+     * the second adds nothing -- that part is sound. What is worth pinning
+     * here is the response shape: two distinct notes, and the same
+     * no-secrets-on-the-wire guarantee new_secret gets. */
+    dispatcher_handle("{\"cmd\":\"new_secret_pair\",\"label\":\"split\"}", out, sizeof(out));
+    UL_CHECK(json_get_bool(out, "ok", &ok) && ok, "new_secret_pair returns ok:true");
+    char p_id[VAULT_ID_BUF], p_id2[VAULT_ID_BUF];
+    char p_h[VAULT_HASH_HEX_BUF], p_h2[VAULT_HASH_HEX_BUF];
+    UL_CHECK(json_get_str(out, "id", p_id, sizeof(p_id)) &&
+                 json_get_str(out, "id2", p_id2, sizeof(p_id2)) &&
+                 strcmp(p_id, p_id2) != 0,
+             "new_secret_pair returns two distinct ids");
+    UL_CHECK(json_get_str(out, "h", p_h, sizeof(p_h)) &&
+                 json_get_str(out, "h2", p_h2, sizeof(p_h2)) && strlen(p_h) == 64 &&
+                 strlen(p_h2) == 64 && strcmp(p_h, p_h2) != 0,
+             "new_secret_pair returns two distinct 32-byte hashes");
+    UL_CHECK(!json_has(out, "secret") && !json_has(out, "k1"),
+             "new_secret_pair discloses hashes only, never either raw secret");
+
     dispatcher_handle("{\"cmd\":\"totally_unknown\"}", out, sizeof(out));
     UL_CHECK(json_get_bool(out, "ok", &ok) && !ok, "an unknown command is rejected");
     UL_CHECK(json_get_str(out, "error", err, sizeof(err)) && strcmp(err, "bad_request") == 0,
