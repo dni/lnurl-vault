@@ -270,6 +270,13 @@ on-device confirmation `export_secret` uses. Possible replies:
 | `wipe_failed` | the erase, or the verification after it, failed. **Nothing has been reported as gone** -- the device keeps whatever survived and does not reboot |
 | `unsupported` | this build has no storage to wipe, or no way to confirm on-device. A wipe that cannot be confirmed is refused rather than granted |
 
+`unsupported` is not specific to `wipe`. Every physically-gated command —
+`export_secret`, `rename`, `delete`, `discard`, `mark_spent` — answers it on a
+build with no on-device confirmation wired, rather than proceeding ungated. A
+gate that disappears because a dependency is absent is not a gate, and the
+command that would lose the most from that is the one that discloses a
+plaintext secret.
+
 `wipe_failed` is the reply to take seriously. Erasing is not the hard part;
 being able to prove it worked is. The device re-initialises and re-reads after
 erasing, and reports failure rather than success if anything is still
