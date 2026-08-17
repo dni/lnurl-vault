@@ -78,8 +78,6 @@
 #include "qr_capacity.h"
 #include "qrcode.h"
 
-#define QUIET_ZONE_MODULES 4
-
 #define QR_WHITE 0xFFFF
 #define QR_BLACK 0x0000
 
@@ -115,9 +113,8 @@ bool qr_display_show(const char *text) {
      * produced a square wider than a landscape screen, so the centring
      * arithmetic below went negative and the code was drawn partly off the
      * panel. */
-    const int modules = qrcode.size + 2 * QUIET_ZONE_MODULES;
-    const int shorter = screen_w < screen_h ? screen_w : screen_h;
-    const int ideal_scale = shorter / modules;
+    const int modules = qr_square_modules(qrcode.size);
+    const int ideal_scale = qr_scale_for(qrcode.size, screen_w, screen_h);
     if (ideal_scale < 1) {
         return false; /* screen too small for this version at 1px per module */
     }
@@ -159,8 +156,8 @@ bool qr_display_show(const char *text) {
         return false;
     }
 
-    const int x0 = (screen_w - qr_px) / 2;
-    const int y0 = (screen_h - qr_px) / 2;
+    int x0 = 0, y0 = 0;
+    qr_origin(qrcode.size, scale, screen_w, screen_h, &x0, &y0);
 
     for (int py = 0; py < qr_px; py++) {
         /* Quiet zone is part of the square, so module coordinates are offset
@@ -168,9 +165,9 @@ bool qr_display_show(const char *text) {
          * corner, which pushed the entire margin onto the right and bottom
          * and left as little as 3px above the code where the spec wants four
          * modules. */
-        const int my = py / scale - QUIET_ZONE_MODULES;
+        const int my = qr_module_at(py, scale);
         for (int px = 0; px < qr_px; px++) {
-            const int mx = px / scale - QUIET_ZONE_MODULES;
+            const int mx = qr_module_at(px, scale);
             bool dark = mx >= 0 && my >= 0 && mx < qrcode.size && my < qrcode.size &&
                         qrcode_getModule(&qrcode, (uint8_t)mx, (uint8_t)my);
             buf[py * qr_px + px] = dark ? QR_BLACK : QR_WHITE;
