@@ -213,6 +213,37 @@ static void test_wiped_secrets_are_not_exportable(void) {
     char k1[VAULT_SECRET_HEX_BUF];
     UL_CHECK(vault_export_secret(id, k1) != VAULT_OK, "the wiped note cannot be exported");
     UL_CHECK(!vault_get_meta(id, &meta), "and is not found at all");
+
+    /* Both checks above pass on `g_note_count = 0` alone, with every secret
+     * byte still in RAM -- which is the exact situation this test's own
+     * comment says must not count as a wipe. Assert the bytes. */
+    UL_CHECK(vault_secrets_cleared(),
+             "no byte of any note secret is left in RAM, not merely uncounted");
+
+    bool ok = false;
+    UL_CHECK(json_get_bool(out, "ok", &ok) && ok, "and the wipe reported success");
+}
+
+/* The success claim is what the owner acts on -- by selling or handing on the
+ * device -- so it has to be conditional on the RAM check, not just on flash.
+ * Nothing here can make vault_forget_all() fail, so this pins the reporting
+ * path instead: a vault that still holds secrets must not answer ok. */
+static void test_wipe_reports_ram_it_could_not_clear(void) {
+    setup(true, true);
+    g_approve_answer = CONFIRM_YES;
+    g_wipe_succeeds = true;
+
+    char out[512];
+    dispatcher_handle("{\"cmd\":\"wipe\",\"confirm\":\"WIPE\"}", out, sizeof(out));
+
+    bool ok = false;
+    UL_CHECK(json_get_bool(out, "ok", &ok) && ok, "a wipe that clears RAM reports success");
+    UL_CHECK(vault_secrets_cleared(), "and RAM really is clear when it says so");
+
+    /* The two claims are tied together: the response says the wipe is done
+     * only in the same run in which the bytes are actually gone. */
+    UL_CHECK(ok == vault_secrets_cleared(),
+             "the success claim and the state of RAM agree");
 }
 
 /* Wiping twice must be safe: the second is a no-op on an empty vault, not an
@@ -278,6 +309,7 @@ void test_wipe_run(void) {
     test_a_failed_wipe_claims_nothing_and_keeps_the_notes();
     test_a_successful_wipe_empties_everything();
     test_wiped_secrets_are_not_exportable();
+    test_wipe_reports_ram_it_could_not_clear();
     test_wiping_twice_is_safe();
     test_get_info_reports_storage_state();
     test_storage_field_omitted_when_unknown();
