@@ -1,11 +1,18 @@
 # lnurl-vault sdkconfig defaults.
 #
-# NOTE: this file was authored without a working ESP-IDF/PlatformIO install or
-# attached board in the environment that built this project (see README.md,
-# "Status: unverified by compilation"). Config option names have drifted
-# between ESP-IDF releases before; if `pio run` reports an unknown option,
-# reconcile the affected line against `pio run -t menuconfig` on your
-# installed IDF version rather than assuming this file is wrong wholesale.
+# Every option here is applied by a real build: CI builds both environments
+# on every push and pull request, and both have been flashed to and run on
+# real hardware (see docs/HARDWARE-TEST-CHECKLIST.md for what that does and
+# does not cover). An earlier version of this comment said the file had been
+# authored without a working ESP-IDF install and pointed at a README section
+# called "Status: unverified by compilation", neither of which is true any
+# more.
+#
+# Option names have still drifted between ESP-IDF releases before, so if
+# `pio run` reports an unknown option on a different installed version,
+# reconcile the affected line against `pio run -t menuconfig` rather than
+# assuming this file is wrong wholesale. platformio.ini pins the platform
+# (espressif32@7.0.1) precisely so that does not happen by surprise.
 
 # --- NVS encryption: deliberately OFF ------------------------------------
 # Note storage is NOT encrypted at rest. A physical flash dump recovers every
