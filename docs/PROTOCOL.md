@@ -88,19 +88,48 @@ The field is absent on a build with no persistent storage.
 
 ### `list_notes`
 
-Metadata only — a note's secret is never included in any command's response
-except `export_secret`.
-
 ```json
 {"cmd":"list_notes"}
-→ {"ok":true,"notes":[
-    {"id":"a1b2c3d4","state":"confirmed","amount_msat":21000,"label":"",
-     "host":"mint.example","parent_ids":[],"created_at":1234,"updated_at":1234}
-  ]}
+→ {"ok":true,"total":3,"offset":0,"notes":[ ... ]}
 ```
 
 `state` is one of `pending`, `confirmed`, `spent`. `sig` is present only if
 the note carries an offline-verification signature ([LUD-25](https://github.com/lnurl/luds/pull/301)).
+
+`total` is how many notes the device holds. `offset` is where this page
+started. **A client must not treat the length of `notes` as the number of
+notes that exist** — that is what `total` is for.
+
+`next_offset` is present only when there are more notes past this page:
+
+```json
+{"cmd":"list_notes","offset":14,"limit":10}
+→ {"ok":true,"total":40,"offset":14,"notes":[ ... ],"next_offset":24}
+```
+
+Page by feeding `next_offset` back as `offset` until it stops appearing.
+
+Both arguments are optional. Omitting them returns **as many notes as fit in
+one response**, plus a `next_offset` if that is not all of them. This is the
+only response in the protocol whose size depends on stored data, and it is a
+single fixed buffer, so how many fit depends on the notes: measured against a
+128-note vault, 27 per page when notes carry no `sig`, 14 when they all carry
+a full-length one.
+
+An explicit `limit` is honoured or refused, never silently reduced:
+
+| Request | Reply |
+|---|---|
+| no `limit` | as many as fit, with `next_offset` if more remain |
+| `limit` that fits | exactly that many |
+| `limit` too large to fit | `response_too_large` — ask for fewer |
+| `limit: 0` | no notes, but `total` still reported |
+| `offset` equal to `total` | a valid empty page, no `next_offset` |
+| `offset` past `total` | `bad_request` |
+
+A refused `limit` is deliberately not shrunk for you. A client that asked for
+fifty and silently received fourteen would build a wrong picture of the vault,
+which is the same class of failure as the truncation this replaced.
 
 ### `new_secret`
 

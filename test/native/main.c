@@ -16,6 +16,7 @@ void test_ble_frame_run(void);
 void test_approval_run(void);
 void test_regressions_run(void);
 void test_wipe_run(void);
+void test_list_paging_run(void);
 void test_qr_capacity_run(void);
 void test_base64_run(void);
 void test_ota_sign_run(void);
@@ -33,6 +34,7 @@ int main(void) {
     test_approval_run();
     test_regressions_run();
     test_wipe_run();
+    test_list_paging_run();
     test_qr_capacity_run();
     test_base64_run();
     test_ota_sign_run();
