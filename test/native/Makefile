@@ -6,6 +6,21 @@
 # firmware pulls via src/idf_component.yml's espressif/cjson managed
 # component). Install it first: `pacman -S cjson` (Arch) or
 # `apt-get install libcjson-dev` (Debian/Ubuntu, incl. CI).
+# CI runs this with GNU gcc on Linux. On macOS `gcc` is Apple clang, which
+# does NOT diagnose everything gcc does under -Werror -- and that difference
+# has broken main twice:
+#
+#   - -lcjson placed before the objects that reference it. GNU ld resolves
+#     left to right and fails; Apple's linker is order-independent and does
+#     not care. (Fixed by splitting CJSON_CFLAGS from CJSON_LIBS below.)
+#   - -Werror=format-truncation on an snprintf whose output could not fit.
+#     gcc diagnoses it; clang has no such warning at all.
+#
+# So a green run on macOS is NOT evidence of a green run on CI. Install a real
+# gcc (`brew install gcc`) and check with it before claiming a branch is
+# green:
+#
+#     CC=gcc-16 make test
 CC ?= gcc
 # Split deliberately: GNU ld resolves symbols left to right, so a library
 # named before the objects that reference it contributes nothing and the link

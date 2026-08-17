@@ -403,5 +403,7 @@ confirm_result_t ui_task_request_ota_confirm(uint32_t timeout_ms) {
 }
 
 confirm_result_t ui_task_request_wipe_confirm(uint32_t timeout_ms) {
-    return request_confirm(timeout_ms);
+    /* No note to name: a wipe is about all of them. The flat state colour is
+     * all this screen has, same as the OTA prompt. */
+    return request_confirm_detailed(timeout_ms, NULL);
 }

@@ -18,7 +18,7 @@
 static void expect_amount(uint64_t msat, const char *want) {
     char buf[NOTE_AMOUNT_BUF];
     note_format_amount(msat, buf, sizeof(buf));
-    char msg[128];
+    char msg[160];
     snprintf(msg, sizeof(msg), "%llu msat renders as \"%s\" (got \"%s\")",
              (unsigned long long)msat, want, buf);
     UL_CHECK(strcmp(buf, want) == 0, msg);
@@ -107,7 +107,10 @@ static void test_amount_splits_into_digits_and_unit(void) {
     UL_CHECK(strcmp(num, "0") == 0 && strcmp(unit, "sats") == 0, "zero");
 
     /* The split must never disagree with the single-string form. */
-    char whole[NOTE_AMOUNT_BUF], joined[NOTE_AMOUNT_BUF];
+    char whole[NOTE_AMOUNT_BUF];
+    /* Room for the longest number, a space, the longest unit and a NUL --
+     * sized so GCC's -Wformat-truncation is satisfied that it cannot cut. */
+    char joined[NOTE_AMOUNT_BUF + 16];
     const uint64_t cases[] = {0, 1, 999, 1000, 2000, 21000, 2100000, 100000000, UINT64_MAX};
     bool agree = true;
     for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); i++) {
