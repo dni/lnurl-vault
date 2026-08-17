@@ -11,6 +11,7 @@
 #include <stdlib.h>
 
 #include "ble_gatt.h"
+#include "board.h"
 #include "buttons.h"
 #include "dispatcher.h"
 #include "display.h"
@@ -87,6 +88,7 @@ void app_main(void) {
     dispatcher_deps_t deps = {
         .rng = rng_fill,
         .confirm_export = confirm_export_on_device,
+        .board = BOARD_NAME,
     };
     dispatcher_init(&deps);
 

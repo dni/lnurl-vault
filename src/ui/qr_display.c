@@ -71,12 +71,16 @@
 #include "qr_display.h"
 
 #include "display.h"
+#include "esp_heap_caps.h"
 #include "esp_lcd_panel_ops.h"
 #include "qrcode.h"
 
 #define QUIET_ZONE_MODULES 4
 #define MIN_QR_VERSION 4
 #define MAX_QR_VERSION 20 /* version 20 byte-mode/ECC-L capacity is far above any URL this device builds */
+
+#define QR_WHITE 0xFFFF
+#define QR_BLACK 0x0000
 
 /* Generously sized for MAX_QR_VERSION rather than relying on the exact
  * calling convention of the library's own buffer-size helper (function vs.
@@ -86,7 +90,7 @@ static uint8_t g_qr_buf[1200];
 
 bool qr_display_show(const char *text) {
     esp_lcd_panel_handle_t panel = display_panel_handle();
-    if (!panel || !text || !text[0]) {
+    if (!display_ready() || !panel || !text || !text[0]) {
         return false;
     }
 
@@ -102,41 +106,67 @@ bool qr_display_show(const char *text) {
         return false;
     }
 
-    int modules = qrcode.size + 2 * QUIET_ZONE_MODULES;
-    int scale = LCD_HEIGHT / modules;
+    const int screen_w = display_width();
+    const int screen_h = display_height();
+
+    /* The drawn square is the code plus its quiet zone on all four sides. It
+     * has to fit the SHORTER screen axis: sizing from the height alone
+     * produced a square wider than a landscape screen, so the centring
+     * arithmetic below went negative and the code was drawn partly off the
+     * panel. */
+    const int modules = qrcode.size + 2 * QUIET_ZONE_MODULES;
+    const int shorter = screen_w < screen_h ? screen_w : screen_h;
+    const int scale = shorter / modules;
     if (scale < 1) {
-        scale = 1;
-    }
-    int qr_px = modules * scale;
-    int x0 = (LCD_WIDTH - qr_px) / 2;
-    int y0 = (LCD_HEIGHT - qr_px) / 2;
-
-    static uint16_t white_row[LCD_WIDTH];
-    for (int i = 0; i < LCD_WIDTH; i++) {
-        white_row[i] = 0xFFFF;
-    }
-    for (int y = 0; y < LCD_HEIGHT; y++) {
-        esp_lcd_panel_draw_bitmap(panel, 0, y, LCD_WIDTH, y + 1, white_row);
+        return false; /* screen too small for this version at 1px per module */
     }
 
-    static uint16_t black_row[LCD_WIDTH];
-    for (int i = 0; i < LCD_WIDTH; i++) {
-        black_row[i] = 0x0000;
+    const int qr_px = modules * scale;
+    const int x0 = (screen_w - qr_px) / 2;
+    const int y0 = (screen_h - qr_px) / 2;
+
+    /* Render the whole square into one buffer and send it as a single
+     * transfer. Drawing module-by-module would be tens of thousands of
+     * queued transactions, and reusing one scratch row for rows that differ
+     * would race the DMA that esp_lcd_panel_draw_bitmap() queues against it.
+     * At the largest size this fits (170px square) the buffer is ~58KB. */
+    uint16_t *buf = heap_caps_malloc((size_t)qr_px * (size_t)qr_px * sizeof(uint16_t),
+                                      MALLOC_CAP_DMA);
+    if (!buf) {
+        return false;
     }
-    for (int my = 0; my < qrcode.size; my++) {
-        for (int mx = 0; mx < qrcode.size; mx++) {
-            if (!qrcode_getModule(&qrcode, mx, my)) {
-                continue; /* white module: background already drawn */
-            }
-            int px = x0 + mx * scale;
-            for (int dy = 0; dy < scale; dy++) {
-                int py = y0 + my * scale + dy;
-                if (py < 0 || py >= LCD_HEIGHT) {
-                    continue;
-                }
-                esp_lcd_panel_draw_bitmap(panel, px, py, px + scale, py + 1, black_row);
-            }
+
+    for (int py = 0; py < qr_px; py++) {
+        /* Quiet zone is part of the square, so module coordinates are offset
+         * by it. Previously module (0,0) was drawn at the square's own
+         * corner, which pushed the entire margin onto the right and bottom
+         * and left as little as 3px above the code where the spec wants four
+         * modules. Scanners vary in how much they tolerate; the failure mode
+         * is a code that simply will not read, with nothing on screen to say
+         * why. */
+        const int my = py / scale - QUIET_ZONE_MODULES;
+        for (int px = 0; px < qr_px; px++) {
+            const int mx = px / scale - QUIET_ZONE_MODULES;
+            bool dark = mx >= 0 && my >= 0 && mx < qrcode.size && my < qrcode.size &&
+                        qrcode_getModule(&qrcode, (uint8_t)mx, (uint8_t)my);
+            buf[py * qr_px + px] = dark ? QR_BLACK : QR_WHITE;
         }
     }
+
+    /* Clear to white first so no earlier state colour shows around the code:
+     * a QR sitting on a coloured margin still scans, but it looks like a
+     * glitch on a device whose whole job here is to be trusted at a glance. */
+    display_fill_rect(0, 0, screen_w, screen_h, QR_WHITE);
+    esp_lcd_panel_draw_bitmap(panel, x0, y0, x0 + qr_px, y0 + qr_px, buf);
+
+    /* The blit is queued, not completed, so the buffer cannot be freed here
+     * without risking the DMA reading freed memory. Hold it until the next
+     * call, by which time the transfer is long done -- the QR stays on screen
+     * until the owner dismisses it, which is a human-scale delay. */
+    static uint16_t *prev = NULL;
+    if (prev) {
+        heap_caps_free(prev);
+    }
+    prev = buf;
     return true;
 }

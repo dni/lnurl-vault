@@ -28,6 +28,11 @@ typedef confirm_result_t (*export_confirm_fn)(const note_meta_t *note);
 typedef struct {
     vault_rng_fn rng;
     export_confirm_fn confirm_export;
+    /* Board identifier reported by get_info, so a client -- and a bug report
+     * -- can say which hardware and which pin map are in play. Injected
+     * rather than looked up, because this module stays free of any
+     * board/ESP-IDF dependency. NULL omits the field. */
+    const char *board;
 } dispatcher_deps_t;
 
 void dispatcher_init(const dispatcher_deps_t *deps);
