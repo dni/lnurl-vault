@@ -102,6 +102,13 @@ jobs:
           trap 'rm -f "$seed_file"' EXIT
           python3 -c "import sys; open(sys.argv[1], 'wb').write(bytes.fromhex(sys.argv[2]))" \
             "$seed_file" "$OTA_SIGNING_SEED"
+          # Before signing anything: does this seed actually correspond to the
+          # public key the firmware being released has compiled into it?
+          # Nothing connected those two, so a rotated key or a mistyped secret
+          # produced a release that built, signed and published cleanly and
+          # then failed on somebody's device with bad_signature -- after the
+          # release was public. Fails the release instead.
+          python3 tools/check_release_key.py --seed "$seed_file"
           python3 tools/ota_push.py sign --seed "$seed_file" --image dist/firmware.bin --out dist/firmware.bin.sig
           cat dist/firmware.bin.sig
         env:
