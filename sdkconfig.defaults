@@ -49,11 +49,11 @@ CONFIG_ESP_WIFI_ENABLED=n
 CONFIG_BT_ENABLED=y
 CONFIG_BT_NIMBLE_ENABLED=y
 
-# --- USB (native USB-CDC for WebSerial) ------------------------------------
-CONFIG_TINYUSB_CDC_ENABLED=y
-CONFIG_USB_CDC_ENABLED=y
-
 # --- Flash size -------------------------------------------------------------
-# LilyGo T-Display S3 ships with 16MB flash on the common variant; adjust if
-# yours differs (`pio run -t menuconfig` -> Serial flasher config).
+# Both supported boards ship 16MB on the common variants; adjust if yours
+# differs (`pio run -t menuconfig` -> Serial flasher config).
 CONFIG_ESPTOOLPY_FLASHSIZE_16MB=y
+
+# Host transport and console routing are per-chip and live in
+# sdkconfig.defaults.esp32 / sdkconfig.defaults.esp32s3, which ESP-IDF layers
+# on top of this file automatically by target name.

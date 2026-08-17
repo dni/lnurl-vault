@@ -64,6 +64,8 @@
  * "never block tud_task()" rule, and a plausible match for that report,
  * but is NOT yet confirmed on hardware to be the actual cause — treat it
  * as the strongest still-untested lead, not a confirmed fix. */
+#ifdef LNURLVAULT_BOARD_T_DISPLAY_S3
+
 #include "serial_cdc.h"
 
 #include <string.h>
@@ -257,3 +259,5 @@ void serial_cdc_start(void) {
         ESP_LOGE(TAG, "tusb_cdc_acm_init failed: %s", esp_err_to_name(err));
     }
 }
+
+#endif /* LNURLVAULT_BOARD_T_DISPLAY_S3 */
