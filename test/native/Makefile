@@ -17,14 +17,19 @@ SRC = ../../src/vault/sha256.c \
       test_dispatcher.c \
       test_button_fsm.c \
       test_note_url.c \
+      test_regressions.c \
       main.c
 BIN = vault_tests
+
+# Headers are prerequisites too: without them, editing a .h leaves a stale
+# binary in place and the next `make test` silently reports the old result.
+HDR = $(wildcard ../../src/vault/*.h ../../src/proto/*.h *.h)
 
 .PHONY: test clean
 test: $(BIN)
 	./$(BIN)
 
-$(BIN): $(SRC)
+$(BIN): $(SRC) $(HDR)
 	$(CC) $(CFLAGS) -o $(BIN) $(SRC)
 
 clean:
