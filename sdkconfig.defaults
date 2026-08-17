@@ -57,3 +57,19 @@ CONFIG_ESPTOOLPY_FLASHSIZE_16MB=y
 # Host transport and console routing are per-chip and live in
 # sdkconfig.defaults.esp32 / sdkconfig.defaults.esp32s3, which ESP-IDF layers
 # on top of this file automatically by target name.
+
+# --- Task watchdog --------------------------------------------------------
+# 60s against the 30s approval window, so a human taking their time reading
+# the screen never trips it. Only ui_task subscribes -- see the reasoning in
+# src/ui/ui_task.c, in short: it is the task on the far side of every
+# confirmation wait and the one whose wedging IS the deadlock, while the
+# transport tasks rest blocked on a queue by design and may legitimately be
+# stuck for a minute on purpose.
+#
+# Panic rather than just log: a vault that has stopped answering is holding
+# secrets in RAM, and a reset that leaves a breadcrumb (src/crash_crumb.c
+# records the reset reason across the restart) is more useful than a device
+# that sits there wedged and silent.
+CONFIG_ESP_TASK_WDT_INIT=y
+CONFIG_ESP_TASK_WDT_TIMEOUT_S=60
+CONFIG_ESP_TASK_WDT_PANIC=y

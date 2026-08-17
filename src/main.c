@@ -14,6 +14,7 @@
 #include "board.h"
 #include "buttons.h"
 #include "cmd_lock.h"
+#include "crash_crumb.h"
 #include "device_reboot.h"
 #include "dispatcher.h"
 #include "display.h"
@@ -42,6 +43,28 @@ static uint32_t now_seconds(void) {
 
 static uint64_t free_heap_bytes(void) {
     return (uint64_t)esp_get_free_heap_size();
+}
+
+/* dispatcher.c calls this with the command name as each command starts, and
+ * with NULL when it returns — see dispatcher.h's trace_cmd_fn, and note the
+ * constraint there: the name only, never the arguments. */
+static void trace_cmd(const char *cmd) {
+    if (cmd) {
+        crash_crumb_set_cmd(cmd);
+    } else {
+        crash_crumb_clear_cmd();
+    }
+}
+
+/* Surfaced by get_info. On a board with no console (the classic T-Display
+ * builds CONFIG_ESP_CONSOLE_NONE, because UART0 carries the protocol), this
+ * is the only way to find out why a device in someone's pocket rebooted. */
+static bool boot_report(boot_report_t *out) {
+    out->reset_reason = crash_crumb_reset_reason();
+    out->last_cmd = crash_crumb_last_cmd();
+    out->boot_count = crash_crumb_boot_count();
+    out->unexpected = crash_crumb_last_boot_was_unexpected();
+    return true;
 }
 
 /* Cheap sanity check, not a statistical test suite: catches a
@@ -141,6 +164,10 @@ static confirm_result_t wipe_approve_on_device(uint32_t timeout_ms) {
 }
 
 void app_main(void) {
+    /* First: reads what the previous boot left in RTC memory before anything
+     * this boot can overwrite or crash into it. */
+    crash_crumb_boot();
+
     buttons_init();
     display_init();
     vault_lock_init();
@@ -174,6 +201,8 @@ void app_main(void) {
         .wipe_approve = wipe_approve_on_device,
         .wipe_storage = vault_nvs_wipe,
         .storage_state = vault_nvs_state_name,
+        .trace_cmd = trace_cmd,
+        .boot_report = boot_report,
     };
     dispatcher_init(&deps);
 

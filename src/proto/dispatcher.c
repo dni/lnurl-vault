@@ -121,6 +121,18 @@ static void handle_get_info(char *out, size_t outcap) {
     if (g_deps.storage_state) {
         jw_str(&w, "storage", g_deps.storage_state());
     }
+    /* Why the previous boot ended, so a device that resets in the field can
+     * be diagnosed over the wire — on a board whose console is deliberately
+     * disabled, this is the only channel there is. See src/crash_crumb.h. */
+    boot_report_t boot;
+    if (g_deps.boot_report && g_deps.boot_report(&boot)) {
+        jw_str(&w, "last_reset_reason", boot.reset_reason);
+        jw_uint64(&w, "boot_count", boot.boot_count);
+        jw_bool(&w, "last_boot_unexpected", boot.unexpected);
+        if (boot.last_cmd) {
+            jw_str(&w, "last_cmd_in_flight", boot.last_cmd);
+        }
+    }
     jw_end_obj(&w);
 }
 
@@ -639,6 +651,12 @@ void dispatcher_handle(const char *line, char *out, size_t outcap) {
         return;
     }
 
+    /* The name only — never `line`, which for import_secret contains a raw
+     * secret and for everything else is longer than a breadcrumb should be. */
+    if (g_deps.trace_cmd) {
+        g_deps.trace_cmd(cmd);
+    }
+
     if (strcmp(cmd, "get_info") == 0) {
         handle_get_info(out, outcap);
     } else if (strcmp(cmd, "list_notes") == 0) {
@@ -673,5 +691,11 @@ void dispatcher_handle(const char *line, char *out, size_t outcap) {
         handle_ota_finish(out, outcap);
     } else {
         write_error(out, outcap, "bad_request", "unknown cmd");
+    }
+
+    /* Reached only if the command returned. A breadcrumb still set at the
+     * next boot therefore names a command that did not. */
+    if (g_deps.trace_cmd) {
+        g_deps.trace_cmd(NULL);
     }
 }
