@@ -16,6 +16,14 @@ static vault_time_fn g_now = NULL;
 static char g_unloaded_ids[VAULT_MAX_NOTES][VAULT_ID_BUF];
 static size_t g_unloaded_count = 0;
 
+/* False when this boot could not read the persisted index at all, which is a
+ * different situation from reading it and finding it empty: we know notes may
+ * exist but not which ones. g_unloaded_ids covers the per-note version of
+ * this, but it is built FROM the index, so it is empty in exactly this case
+ * and protects nothing. True when there is no storage at all -- in-RAM mode
+ * has no index to contradict. */
+static bool g_index_known = true;
+
 static void copy_trunc(char *dst, const char *src, size_t dstcap) {
     if (dstcap == 0) {
         return;
@@ -38,6 +46,15 @@ static int find_index(const char *id) {
 
 static void persist_index(void) {
     if (!g_storage || !g_storage->save_index) {
+        return;
+    }
+    /* The index on flash is the only thing that says which notes exist. If
+     * this boot could not read it, everything below builds a replacement out
+     * of what is in RAM -- which is nothing -- and writing that overwrites
+     * the real list with a shorter one. The blobs survive, but nothing
+     * references them again. Same reasoning as the carry-through below, one
+     * level up: a failed read is not proof the notes are gone. */
+    if (!g_index_known) {
         return;
     }
     char ids[VAULT_MAX_NOTES][VAULT_ID_BUF];
@@ -118,14 +135,20 @@ void vault_init(const vault_storage_t *storage, vault_time_fn now_fn) {
     g_now = now_fn;
     g_note_count = 0;
     g_unloaded_count = 0;
+    g_index_known = true;
 
     if (!storage || !storage->load_index) {
-        return;
+        return; /* in-RAM mode: no persisted index to be wrong about */
     }
 
     char ids[VAULT_MAX_NOTES][VAULT_ID_BUF];
     size_t count = 0;
     if (!storage->load_index(ids, VAULT_MAX_NOTES, &count, storage->ctx)) {
+        /* Not the same as an empty vault. Notes may well be on flash; we
+         * just cannot say which. Every write is refused from here until a
+         * boot that can read the index, so this state cannot be mistaken for
+         * "no notes" and then made true by overwriting the index. */
+        g_index_known = false;
         return;
     }
     for (size_t i = 0; i < count && g_note_count < VAULT_MAX_NOTES; i++) {
@@ -163,6 +186,13 @@ static vault_err_t new_note(vault_rng_fn rng, const char parent_ids[][VAULT_ID_B
                              note_t *out) {
     if (!rng || parent_count > VAULT_MAX_PARENTS) {
         return VAULT_ERR_BAD_REQUEST;
+    }
+    /* persist_index() will refuse to write while the index is unknown, so a
+     * note created now would never be referenced again after a reboot.
+     * Refusing is the honest answer: better the host is told storage_full
+     * than handed an id for a note that quietly will not survive. */
+    if (!g_index_known) {
+        return VAULT_ERR_STORAGE_FULL;
     }
     if (g_note_count >= VAULT_MAX_NOTES) {
         return VAULT_ERR_STORAGE_FULL;
@@ -300,6 +330,9 @@ vault_err_t vault_import_secret(vault_rng_fn rng, const char *k1_hex, const char
     uint8_t secret[VAULT_SECRET_LEN];
     if (!hex_decode(k1_hex, VAULT_SECRET_LEN * 2, secret, sizeof(secret))) {
         return VAULT_ERR_BAD_REQUEST;
+    }
+    if (!g_index_known) { /* see new_note(); import is the other creation path */
+        return VAULT_ERR_STORAGE_FULL;
     }
     if (g_note_count >= VAULT_MAX_NOTES) {
         return VAULT_ERR_STORAGE_FULL;
