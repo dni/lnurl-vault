@@ -84,6 +84,50 @@ static void test_short_buffers_are_safe(void) {
     UL_CHECK(true, "a NULL buffer is ignored rather than dereferenced");
 }
 
+/* The digits and the unit are drawn at different sizes, so the drawing code
+ * needs them apart. A person on real hardware could not read the first
+ * version, where the whole string shared one scale and " sats" ate five
+ * characters of a line that has to fit in 240 pixels. */
+static void test_amount_splits_into_digits_and_unit(void) {
+    char num[NOTE_AMOUNT_BUF], unit[8];
+
+    note_format_amount_parts(21000, num, sizeof(num), unit, sizeof(unit));
+    UL_CHECK(strcmp(num, "21") == 0 && strcmp(unit, "sats") == 0, "21000 msat -> \"21\" + \"sats\"");
+
+    note_format_amount_parts(1000, num, sizeof(num), unit, sizeof(unit));
+    UL_CHECK(strcmp(num, "1") == 0 && strcmp(unit, "sat") == 0, "singular unit survives the split");
+
+    note_format_amount_parts(100000000, num, sizeof(num), unit, sizeof(unit));
+    UL_CHECK(strcmp(num, "100 000") == 0 && strcmp(unit, "sats") == 0, "grouping survives the split");
+
+    note_format_amount_parts(1500, num, sizeof(num), unit, sizeof(unit));
+    UL_CHECK(strcmp(num, "1 500") == 0 && strcmp(unit, "msat") == 0, "sub-sat keeps its msat unit");
+
+    note_format_amount_parts(0, num, sizeof(num), unit, sizeof(unit));
+    UL_CHECK(strcmp(num, "0") == 0 && strcmp(unit, "sats") == 0, "zero");
+
+    /* The split must never disagree with the single-string form. */
+    char whole[NOTE_AMOUNT_BUF], joined[NOTE_AMOUNT_BUF];
+    const uint64_t cases[] = {0, 1, 999, 1000, 2000, 21000, 2100000, 100000000, UINT64_MAX};
+    bool agree = true;
+    for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); i++) {
+        note_format_amount(cases[i], whole, sizeof(whole));
+        note_format_amount_parts(cases[i], num, sizeof(num), unit, sizeof(unit));
+        snprintf(joined, sizeof(joined), "%s %s", num, unit);
+        if (strcmp(whole, joined) != 0) {
+            agree = false;
+        }
+    }
+    UL_CHECK(agree, "the split rejoined always equals the single-string form");
+
+    /* Tiny buffers must not overrun. */
+    char tn[2], tu[2];
+    note_format_amount_parts(100000000, tn, sizeof(tn), tu, sizeof(tu));
+    UL_CHECK(tn[1] == '\0' && tu[1] == '\0', "short buffers stay terminated");
+    note_format_amount_parts(1000, NULL, 0, NULL, 0);
+    UL_CHECK(true, "NULL buffers are ignored rather than dereferenced");
+}
+
 /* ---- labels ------------------------------------------------------------ */
 
 static void expect_label(const char *in, const char *want) {
@@ -235,6 +279,7 @@ void test_note_display_run(void) {
     test_magnitudes_are_visibly_different();
     test_largest_amount_fits();
     test_short_buffers_are_safe();
+    test_amount_splits_into_digits_and_unit();
     test_ordinary_labels();
     test_missing_label_is_visible();
     test_unprintable_bytes_become_visible();

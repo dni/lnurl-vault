@@ -32,6 +32,16 @@
  */
 void note_format_amount(uint64_t msat, char *out, size_t cap);
 
+/* The same amount, split into its digits and its unit.
+ *
+ * The digits are the field a mistake costs money on, so the drawing code wants
+ * to give them every pixel the panel allows -- and " sats" is five characters
+ * of a line that has to fit in 240. Splitting lets the number be drawn large
+ * and the unit small beside it, which is the difference between a readable
+ * amount and a complete one. */
+void note_format_amount_parts(uint64_t msat, char *num, size_t numcap, char *unit,
+                               size_t unitcap);
+
 /* Copies `label` into `out` with anything unprintable replaced by '?', capped
  * at cap-1 characters plus a NUL.
  *

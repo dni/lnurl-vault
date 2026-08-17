@@ -34,6 +34,38 @@ static size_t grouped(uint64_t value, char *out, size_t cap) {
     return written;
 }
 
+void note_format_amount_parts(uint64_t msat, char *num, size_t numcap, char *unit,
+                               size_t unitcap) {
+    if (num && numcap > 0) {
+        num[0] = '\0';
+    }
+    if (unit && unitcap > 0) {
+        unit[0] = '\0';
+    }
+
+    const char *u;
+    uint64_t value;
+    if (msat % 1000 != 0) {
+        value = msat;
+        u = "msat";
+    } else {
+        value = msat / 1000;
+        u = (value == 1) ? "sat" : "sats";
+    }
+
+    if (num && numcap > 0) {
+        grouped(value, num, numcap);
+    }
+    if (unit && unitcap > 0) {
+        size_t n = strlen(u);
+        if (n + 1 > unitcap) {
+            n = unitcap - 1;
+        }
+        memcpy(unit, u, n);
+        unit[n] = '\0';
+    }
+}
+
 void note_format_amount(uint64_t msat, char *out, size_t cap) {
     if (!out || cap == 0) {
         return;

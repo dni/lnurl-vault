@@ -176,8 +176,33 @@ void display_text(int x, int y, const char *text, int scale, uint16_t fg, uint16
     }
 }
 
-void display_note_detail(display_state_t state, const char *amount, const char *label,
-                          const char *id) {
+/* The largest scale at which `text` fits `avail_w`, never below
+ * FONT5X7_MIN_READABLE_SCALE even if that means it will not fit.
+ *
+ * Shortening beats shrinking: a line nobody can read conveys nothing whether
+ * or not it is complete, and display_text() clips at the panel edge anyway.
+ * That order was decided by a person looking at the screen and saying the text
+ * was too small, not by arithmetic. */
+static int fit_scale(const char *text, int avail_w, int max_scale) {
+    if (!text || !text[0]) {
+        return FONT5X7_MIN_READABLE_SCALE;
+    }
+    const int len = (int)strlen(text);
+    if (max_scale > DISPLAY_MAX_TEXT_SCALE) {
+        max_scale = DISPLAY_MAX_TEXT_SCALE;
+    }
+    for (int scale = max_scale; scale > FONT5X7_MIN_READABLE_SCALE; scale--) {
+        /* The last glyph needs its cell, not its advance. */
+        const int w = (len - 1) * FONT5X7_ADVANCE * scale + FONT5X7_WIDTH * scale;
+        if (w <= avail_w) {
+            return scale;
+        }
+    }
+    return FONT5X7_MIN_READABLE_SCALE;
+}
+
+void display_note_detail(display_state_t state, const char *amount_num,
+                          const char *amount_unit, const char *label, const char *id) {
     if (!display_ready()) {
         return;
     }
@@ -186,32 +211,65 @@ void display_note_detail(display_state_t state, const char *amount, const char *
     const uint16_t ink = 0x0000;
     fill_screen(bg);
 
-    /* Scales from the panel rather than hardcoded, so a second board does not
-     * silently inherit this one's geometry -- and never below
-     * FONT5X7_MIN_READABLE_SCALE, which is the size heartwood-esp32 arrived at
-     * only after rejecting two smaller ones on real hardware. */
-    int big = g_height / 34;
-    if (big < FONT5X7_MIN_READABLE_SCALE + 1) {
-        big = FONT5X7_MIN_READABLE_SCALE + 1;
-    }
-    if (big > DISPLAY_MAX_TEXT_SCALE) {
-        big = DISPLAY_MAX_TEXT_SCALE;
-    }
-    const int small = FONT5X7_MIN_READABLE_SCALE;
-
+    /* Every line is drawn at the largest scale that fits the panel, rather
+     * than at a scale picked from the panel height. The first version did the
+     * latter and produced 21-pixel digits with a 14-pixel label, which a
+     * person on real hardware could not read. Fitting to the width instead
+     * means a short amount gets big automatically, which is the common case.
+     *
+     * The lower band is left clear for display_progress(). */
     const int margin = 6;
+    const int avail = g_width - 2 * margin;
+    /* Keep out of the progress bar's band -- see display_progress(). */
+    const int usable_h = g_height - (g_height / 8) - (g_height / 12) - margin;
+
     int y = margin;
 
-    if (amount) {
-        display_text(margin, y, amount, big, ink, bg);
-        y += FONT5X7_HEIGHT * big + 6;
+    /* The digits get the FULL width, at the largest scale that fits. An
+     * earlier version reserved room for the unit on the same line, which cost
+     * 90 of 228 pixels and held a seven-digit amount down to the same 21-pixel
+     * height a person had already told us was too small to read. The unit goes
+     * on the next line with the label instead: it is a word, and the digits are
+     * the thing a mistake costs money on. */
+    if (amount_num && amount_num[0]) {
+        const int scale = fit_scale(amount_num, avail, DISPLAY_MAX_TEXT_SCALE);
+        display_text(margin, y, amount_num, scale, ink, bg);
+        y += FONT5X7_HEIGHT * scale + 5;
     }
-    if (label) {
-        display_text(margin, y, label, small, ink, bg);
-        y += FONT5X7_HEIGHT * small + 3;
+
+    /* Unit and label share a line: "sats  rent". */
+    char second[40];
+    second[0] = '\0';
+    if (amount_unit && amount_unit[0]) {
+        size_t n = strlen(amount_unit);
+        if (n > sizeof(second) - 3) {
+            n = sizeof(second) - 3;
+        }
+        memcpy(second, amount_unit, n);
+        second[n] = '\0';
     }
-    if (id) {
-        display_text(margin, y, id, small, ink, bg);
+    if (label && label[0]) {
+        size_t used = strlen(second);
+        if (used > 0 && used + 2 < sizeof(second)) {
+            second[used++] = ' ';
+            second[used++] = ' ';
+            second[used] = '\0';
+        }
+        size_t room = sizeof(second) - used - 1;
+        size_t n = strlen(label);
+        if (n > room) {
+            n = room;
+        }
+        memcpy(second + used, label, n);
+        second[used + n] = '\0';
+    }
+    if (second[0] && y + FONT5X7_HEIGHT * FONT5X7_MIN_READABLE_SCALE <= usable_h) {
+        const int scale = fit_scale(second, avail, FONT5X7_MIN_READABLE_SCALE + 1);
+        display_text(margin, y, second, scale, ink, bg);
+        y += FONT5X7_HEIGHT * scale + 4;
+    }
+    if (id && id[0] && y + FONT5X7_HEIGHT * FONT5X7_MIN_READABLE_SCALE <= usable_h) {
+        display_text(margin, y, id, FONT5X7_MIN_READABLE_SCALE, ink, bg);
     }
 }
 

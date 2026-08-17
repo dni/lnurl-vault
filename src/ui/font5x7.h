@@ -27,13 +27,18 @@
 
 /* The smallest scale worth drawing at on the panels this project uses.
  *
- * Borrowed judgement, not a measurement of mine: heartwood-esp32 rejected two
- * font sizes as unreadable on real hardware before settling on a minimum, and
- * recorded it (docs/memory/feedback_oled_font.md). A 5x7 cell at scale 1 is
- * seven pixels tall on a 240x135 panel held at arm's length, which is the
- * mistake they already made. Scale 2 is the floor here, and the amount --
- * the one field a mistake actually costs money -- is drawn larger still. */
-#define FONT5X7_MIN_READABLE_SCALE 2
+ * MEASURED, not guessed, and it has already moved once. This started at 2 --
+ * a 14-pixel-tall cell on a 240x135 panel -- reasoning from heartwood-esp32
+ * having rejected two sizes as unreadable before settling on a minimum
+ * (docs/memory/feedback_oled_font.md). Put in front of a person on real
+ * hardware, the verdict was immediate: "the text on the screen is too small
+ * for me to read".
+ *
+ * So it is 3, and nothing is drawn below it. Text that will not fit at 3 is
+ * shortened rather than shrunk, because a line nobody can read conveys
+ * nothing whether or not it is complete. The amount gets whatever larger
+ * scale the panel width allows -- see display_note_detail(). */
+#define FONT5X7_MIN_READABLE_SCALE 3
 
 /* Five column bytes for `c`: bit 0 is the top row, bit 6 the bottom.
  *

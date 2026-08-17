@@ -41,6 +41,7 @@ typedef struct {
     QueueHandle_t response_q;
     bool has_detail;
     char amount[NOTE_AMOUNT_BUF];
+    char unit[8];
     char label[24];
     char id[VAULT_ID_BUF + 8];
 } remote_confirm_request_t;
@@ -126,12 +127,13 @@ static void show_browse_note(int browse_index, int position) {
     }
 
     char amount[NOTE_AMOUNT_BUF];
+    char unit[8];
     char label[24];
     char id[VAULT_ID_BUF + 16];
-    note_format_amount(meta.amount_msat, amount, sizeof(amount));
+    note_format_amount_parts(meta.amount_msat, amount, sizeof(amount), unit, sizeof(unit));
     note_format_label(meta.label, label, sizeof(label));
     snprintf(id, sizeof(id), "%s  %d", meta.id, position);
-    display_note_detail(DISPLAY_STATE_BROWSE, amount, label, id);
+    display_note_detail(DISPLAY_STATE_BROWSE, amount, unit, label, id);
 }
 
 static void wipe(char *buf, size_t len) {
@@ -214,7 +216,7 @@ static void wdt_feed(void) {
 static confirm_result_t service_remote_confirm(const remote_confirm_request_t *req) {
     const uint32_t timeout_ms = req->timeout_ms;
     if (req->has_detail) {
-        display_note_detail(DISPLAY_STATE_CONFIRM_PENDING, req->amount, req->label,
+        display_note_detail(DISPLAY_STATE_CONFIRM_PENDING, req->amount, req->unit, req->label,
                             req->id);
     } else {
         /* No detail to show (an OTA image, or a wipe) -- the flat state colour
@@ -378,7 +380,8 @@ static confirm_result_t request_confirm_detailed(uint32_t timeout_ms, const note
     remote_confirm_request_t req = {.timeout_ms = timeout_ms, .response_q = resp_q};
     if (note) {
         req.has_detail = true;
-        note_format_amount(note->amount_msat, req.amount, sizeof(req.amount));
+        note_format_amount_parts(note->amount_msat, req.amount, sizeof(req.amount), req.unit,
+                                  sizeof(req.unit));
         note_format_label(note->label, req.label, sizeof(req.label));
         snprintf(req.id, sizeof(req.id), "id %s", note->id);
     }
