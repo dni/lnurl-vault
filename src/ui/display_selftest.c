@@ -28,7 +28,35 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "qr_display.h"
+#include "qr_capacity.h"
 #include "qrcode.h"
+
+#ifdef LNURLVAULT_BOARD_T_DISPLAY
+#include "driver/uart.h"
+#include <stdarg.h>
+#include <stdio.h>
+
+/* Writes a diagnostic line down the same UART the protocol uses.
+ *
+ * This board sets CONFIG_ESP_CONSOLE_NONE (UART0 carries the command
+ * protocol, so console logging would corrupt it), which leaves the QR path
+ * with no telemetry at all -- and three separate wrong hypotheses were talked
+ * through before anyone thought to just ask the device. Safe here only
+ * because the self-test runs while nothing else is transmitting. */
+static void diag(const char *fmt, ...) {
+    char buf[160];
+    va_list ap;
+    va_start(ap, fmt);
+    int n = vsnprintf(buf, sizeof(buf), fmt, ap);
+    va_end(ap);
+    if (n > 0) {
+        uart_write_bytes(UART_NUM_0, buf, (size_t)(n < (int)sizeof(buf) ? n : (int)sizeof(buf) - 1));
+        uart_write_bytes(UART_NUM_0, "\n", 1);
+    }
+}
+#else
+#define diag(...) ((void)0)
+#endif
 
 static const char *TAG = "selftest";
 
@@ -139,40 +167,23 @@ void qr_selftest_run(void) {
     };
     const unsigned n = (unsigned)(sizeof(ladder) / sizeof(ladder[0]));
 
+    diag("SELFTEST screen=%dx%d", display_width(), display_height());
     for (unsigned i = 0; i < n; i++) {
-        ESP_LOGI(TAG, "QR %u/%u -- %u chars -- press a button for the next", i + 1, n,
-                 (unsigned)strlen(ladder[i]));
-        {
-            QRCode probe;
-            static uint8_t probe_buf[1200];
-            bool ok = false;
-            for (uint8_t v = 1; v <= 20; v++) {
-                if (qrcode_initText(&probe, probe_buf, v, ECC_LOW, ladder[i]) == 0) {
-                    ok = true;
-                    break;
-                }
-            }
-            if (ok) {
-                ESP_LOGI(TAG, "GRID BEGIN %u size=%u", i + 1, probe.size);
-                for (uint8_t y = 0; y < probe.size; y++) {
-                    char row[64];
-                    uint8_t x = 0;
-                    for (; x < probe.size && x < sizeof(row) - 1; x++) {
-                        row[x] = qrcode_getModule(&probe, x, y) ? '#' : '.';
-                    }
-                    row[x] = '\0';
-                    ESP_LOGI(TAG, "G %s", row);
-                }
-                ESP_LOGI(TAG, "GRID END %u", i + 1);
-            } else {
-                ESP_LOGE(TAG, "GRID %u: encode failed", i + 1);
-            }
-        }
-        if (!qr_display_show(ladder[i])) {
-            ESP_LOGE(TAG, "  qr_display_show failed");
+        const size_t len = strlen(ladder[i]);
+        const uint8_t ver = qr_version_for_length(len);
+        const int modules = ver ? (4 * ver + 17) + 8 : 0;
+        const int shorter = display_width() < display_height() ? display_width() : display_height();
+        const int scale = modules ? shorter / modules : 0;
+        diag("QR %u/%u len=%u ver=%u modules=%d scale=%d px=%d buf=%d", i + 1, n, (unsigned)len,
+             ver, modules, scale, modules * scale, modules * scale * modules * scale * 2);
+
+        bool shown = qr_display_show(ladder[i]);
+        diag("QR %u/%u shown=%s", i + 1, n, shown ? "YES" : "NO");
+        if (!shown) {
             display_fill_rect(0, 0, display_width(), display_height(), C_RED);
         }
         wait_for_press(120000);
+        diag("QR %u/%u advanced", i + 1, n);
     }
     ESP_LOGI(TAG, "QR ladder done");
 }
