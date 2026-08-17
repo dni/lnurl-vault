@@ -1,0 +1,5 @@
+# ESP32-S3 overrides, layered on sdkconfig.defaults by target name.
+# Board: LilyGo T-Display S3 (see src/board/board_t_display_s3.c).
+
+# Native USB-CDC for WebSerial, via the chip's USB-OTG peripheral.
+CONFIG_TINYUSB_CDC_ENABLED=y

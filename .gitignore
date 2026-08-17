@@ -6,9 +6,16 @@ sdkconfig
 sdkconfig.old
 # PlatformIO generates a per-environment sdkconfig.<env> (confirmed via an
 # actual build: sdkconfig.t-display-s3) — ignore that pattern, but not our
-# own hand-authored sdkconfig.defaults.
+# own hand-authored defaults.
+#
+# The second negation is not redundant: `sdkconfig.*` matches
+# sdkconfig.defaults.esp32 and sdkconfig.defaults.esp32s3 as well, and
+# `!sdkconfig.defaults` un-ignores only the exact name. Without it those two
+# files stay untracked, which is invisible to anyone who has them locally and
+# breaks every clean checkout — see the commit that added this line.
 sdkconfig.*
 !sdkconfig.defaults
+!sdkconfig.defaults.*
 build/
 test/native/vault_tests
 *.o
