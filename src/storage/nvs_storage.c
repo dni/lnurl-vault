@@ -168,6 +168,20 @@ static bool nvs_load_index(char ids[][VAULT_ID_BUF], size_t max, size_t *count, 
         ESP_LOGE(TAG, "load_index failed: %s", esp_err_to_name(err));
         return false;
     }
+    /* The index is a flat array of fixed-width ids, so a length that is not a
+     * whole number of them means the blob is not what it claims to be.
+     * Dividing would silently round down and drop the trailing id -- and
+     * since a dropped id never reaches vault_init, it lands in neither
+     * g_notes nor the unloaded list, so the next persist_index() would write
+     * it out of existence. Report the index as unreadable instead: that
+     * blocks writes until a boot that can make sense of it, which is the
+     * outcome that keeps the note. */
+    if (actual % VAULT_ID_BUF != 0) {
+        ESP_LOGE(TAG, "load_index: blob is %u bytes, not a multiple of %u; treating the index as "
+                      "unreadable rather than dropping the trailing id",
+                 (unsigned)actual, (unsigned)VAULT_ID_BUF);
+        return false;
+    }
     *count = actual / VAULT_ID_BUF;
     return true;
 }
