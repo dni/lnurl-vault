@@ -10,6 +10,10 @@ the date, the board and the firmware version `get_info` reported, because
 record says **NOT YET BENCH-RUN** in those words, so nothing quietly counts as
 verified by having been written down.
 
+**Open faults**, so they are not buried in a numbered section: the ESP32-S3's
+confirm gate answers itself, making `export_secret` impossible on that board —
+section 7a.
+
 **Run the machine-driven parts first:**
 
 ```
@@ -52,10 +56,16 @@ Pass: both builds succeed, and `{"cmd":"get_info"}` answers after flashing.
 > firmware `0.0.2-25-g0b3477c`. Both environments build; `t-display` flashed
 > and answered. 319/319 native assertions green. ESP-IDF 6.0.1 via
 > PlatformIO 6.1.19, `espressif32@7.0.1`.
-> S3 target: **builds only.** Not bench-run in this pass — its port was held
-> by another process on the test machine, so the i80 display path and native
-> USB-CDC were not exercised. Treat the S3 as unverified for anything below
-> that says "classic" in the record.
+> **S3 bench record — 2026-08-17, later the same day.** LilyGo T-Display S3.
+> Its port had been held by another process; once freed, the board was flashed
+> and exercised for the first time. It boots, brings up its panel, and presents
+> its native USB-CDC port, on which the command protocol works. `bench.py`
+> against it: 10 passed, 4 failed, 7 skipped. Two of those failures are the
+> button fault in section 7a below; one is `fw_version`, expected on the branch
+> tested; the rest passed.
+>
+> Everything else below still says "classic" where only the classic board was
+> used. The S3 is no longer wholly unverified, but it is not equally verified.
 
 ## 2. Host transport — serial
 
@@ -119,11 +129,48 @@ both transports, with the BLE link still up.
 > **Bench record — 2026-08-17.** Classic T-Display, `0.0.2-25-g0b3477c`.
 > Serial: timed out at 31.0s, device responsive after. BLE: timed out at
 > 31.0s with the link intact across the whole window. Via `bench.py --ble`.
+> Re-confirmed later the same day against every open change merged together:
+> 25 passed, 0 failed, 5 skipped.
 > This is the specific thing issue #4 predicted would fail — it predicted
 > link supervision would tear the connection down during the wait. It does
 > not, on this controller; measured on unfixed firmware too.
 
-## 7. The approval gesture — NOT YET BENCH-RUN
+## 7a. The confirm gate answers itself on the S3 — OPEN FAULT
+
+**On the ESP32-S3, `export_secret` cannot succeed.** With nothing touched:
+
+```
+export_secret -> {"ok":false,"error":"user_declined"}  after 0.92s
+wipe          -> {"ok":false,"error":"user_declined"}  after 0.91s
+```
+
+0.92s is the cancel debounce plus the result card, so the cancel button reads
+as pressed on that board and every confirmation is refused before the owner can
+act. Nothing in this repo drives GPIO14, and `board_buttons_init()` enables the
+internal pull-up, so it is a wrong pin or a board revision that moved it.
+
+**Diagnosing it needs the board in download mode** — hold BOOT, tap RESET,
+release BOOT. Its ROM port disappears once the firmware's TinyUSB claims USB
+and does not return on a software reset (checked), so this cannot be automated.
+
+> **Bench record — 2026-08-17.** T-Display S3. Reproduced on demand. The
+> classic board does not share it: the same prompt there times out at 31s.
+
+## 7b. A glitch on the cancel line
+
+> **Bench record — 2026-08-17.** Classic T-Display. A confirm over serial
+> followed by a confirm over BLE returned `user_declined` in about a second
+> with nobody near the device — reproducible in that order, while the same
+> prompt on a fresh boot timed out correctly at 31s, and the approval loop's
+> own record showed both buttons reading released at the end. Consistent with
+> what `board_t_display.c` warns about for GPIO35: input-only on the classic
+> ESP32, no internal pull resistor, dependent on the board's external one, and
+> high-impedance next to a transmitting radio.
+>
+> The cancel debounce was raised from 30ms to 250ms. Re-run afterwards on the
+> same board: **25 passed, 0 failed, 5 skipped** including the BLE path.
+
+## 8. The approval gesture — NOT YET BENCH-RUN
 
 Needs a finger on the board. Send `export_secret`, then:
 
@@ -139,7 +186,7 @@ Needs a finger on the board. Send `export_secret`, then:
 `test/native/test_approval.c` a tick at a time, including contact bounce
 mid-hold, but no press has been made on hardware.
 
-## 8. Display and orientation
+## 9. Display and orientation
 
 Pass: the image is the right way up, not mirrored, with no offset band at any
 edge.
@@ -153,7 +200,7 @@ edge.
 > `swap_xy` transposes the axes — is recorded in
 > `src/board/board_t_display.c`.
 
-## 9. On-device browsing and QR
+## 10. On-device browsing and QR
 
 Tap to cycle CONFIRMED notes, chord to unveil one as a QR, and scan it with a
 phone.
@@ -173,7 +220,7 @@ the QR density ladder (`-DLNURLVAULT_QR_SELFTEST`) is what separates them.
 > can be serviced at all. Leaving that flag set was enough to make
 > `export_secret` fail on hardware.
 
-## 10. Buttons
+## 11. Buttons
 
 Pass: no spurious events at rest, and both buttons register.
 
@@ -181,7 +228,7 @@ Pass: no spurious events at rest, and both buttons register.
 > zero spurious events across 31s at rest. GPIO35 is input-only with no
 > internal pull, and the board's external pull-up was confirmed present.
 
-## 11. Persistence across power cycles
+## 12. Persistence across power cycles
 
 Mint and confirm notes, power-cycle the board, and confirm they are still
 there with the right states.
@@ -190,7 +237,7 @@ there with the right states.
 > reboots (software resets and EN-pin resets) with counts and states intact.
 > A full unplug/replug cycle was not specifically isolated in this pass.
 
-## 12. Storage exhaustion, and wipe
+## 13. Storage exhaustion, and wipe
 
 The device must **never** erase to recover. On a full partition it reports
 `storage: "full"` and leaves every note on flash.
@@ -216,7 +263,7 @@ The device must **never** erase to recover. On a full partition it reports
 > `response_too_large` at around 30 notes *was* reproduced, which is issue #7
 > and the nearest thing to it.
 
-## 13. Crash reporting and the watchdog
+## 14. Crash reporting and the watchdog
 
 After an unexpected reset, `get_info` must say what happened.
 
@@ -240,7 +287,7 @@ After an unexpected reset, `get_info` must say what happened.
 > `ui_task` needs code that would then have to be removed. The subscribe and
 > feed calls run every boot; the timeout path itself is ESP-IDF's.
 
-## 14. OTA — NOT YET BENCH-RUN
+## 15. OTA — NOT YET BENCH-RUN
 
 Sign an image, push it with `tools/ota_push.py`, approve on the device, and
 confirm it boots the new firmware and reports the new version.
@@ -251,7 +298,7 @@ covered by `test/native/test_ota_dispatch.c` and `test_ota_sign.c` against a
 fake in-memory flash; nothing about the real `esp_ota_*` writes, the partition
 switch, or a rollback has been exercised on hardware.
 
-## 15. Release artefacts — NOT YET BENCH-RUN
+## 16. Release artefacts — NOT YET BENCH-RUN
 
 Cut a tag, then check the published release carries `firmware.bin`,
 `firmware.bin.sig`, `SHA256SUMS` and `manifest.json`; that the checksums
