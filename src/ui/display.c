@@ -15,6 +15,10 @@
  * what is drawn. */
 #include "display.h"
 
+#include <string.h>
+
+#include "font5x7.h"
+
 #include "board.h"
 #include "esp_heap_caps.h"
 #include "esp_lcd_panel_ops.h"
@@ -25,23 +29,44 @@ static esp_lcd_panel_handle_t g_panel = NULL;
 static int g_width = 0;
 static int g_height = 0;
 
-/* Two full-width rows of pixels, ping-ponged between calls.
+/* A ring of full-width row buffers.
  *
  * esp_lcd_panel_draw_bitmap() queues a DMA transfer against the caller's
- * buffer and returns; the bytes are read later. Within one fill that is
- * harmless because every row holds the identical colour, so an in-flight
- * transfer reading a row we have "reused" sees exactly what it expected.
- * Across two fills of *different* colours it is not: the tail of the first
- * fill can still be in flight when the second overwrites the buffer, and
- * those rows land in the new colour. Alternating buffers per call gives the
- * previous fill its own intact copy to drain from.
+ * buffer and returns; the bytes are read later. Overwrite a buffer while its
+ * transfer is still draining and the panel shows whatever you replaced it
+ * with.
  *
- * Allocated rather than static because geometry is now a runtime property of
- * the board, and DMA-capable because that is what the panel bus sends from. */
-static uint16_t *g_rows[2] = {NULL, NULL};
+ * There used to be two of these, ping-ponged, and two was enough only because
+ * the one caller filled every row of a rectangle with the SAME colour -- an
+ * in-flight transfer re-reading a "reused" row saw exactly what it expected.
+ * The moment display_text() started emitting rows whose contents DIFFER, two
+ * stopped being enough, and text at larger scales came out as garbage on real
+ * hardware: bigger glyph, longer transfer, more overlap with the row being
+ * composed behind it.
+ *
+ * The ring closes that without a completion callback, by leaning on a
+ * guarantee the driver already gives. the board files create the panel IO with
+ * trans_queue_depth = 10, so the driver accepts at most that many outstanding
+ * transfers and blocks on the next one until one retires. Keep more buffers
+ * than that depth and, by the time the ring comes back around to a buffer,
+ * the driver has necessarily drained it. ROW_BUFFERS must therefore stay
+ * greater than the largest trans_queue_depth any board configures.
+ *
+ * Allocated rather than static because geometry is a runtime property of the
+ * board, and DMA-capable because that is what the panel bus sends from. */
+#define ROW_BUFFERS 16
+static uint16_t *g_rows[ROW_BUFFERS] = {NULL};
 static int g_row_turn = 0;
 
+static uint16_t *next_row(void) {
+    uint16_t *r = g_rows[g_row_turn];
+    g_row_turn = (g_row_turn + 1) % ROW_BUFFERS;
+    return r;
+}
+
 static display_state_t g_current_state = DISPLAY_STATE_IDLE;
+
+
 
 static uint16_t color_for_state(display_state_t state) {
     switch (state) {
@@ -70,10 +95,14 @@ void display_init(void) {
     g_height = d.height;
 
     if (g_panel) {
-        for (int i = 0; i < 2; i++) {
+        bool all = true;
+        for (int i = 0; i < ROW_BUFFERS; i++) {
             g_rows[i] = heap_caps_malloc((size_t)g_width * sizeof(uint16_t), MALLOC_CAP_DMA);
+            if (!g_rows[i]) {
+                all = false;
+            }
         }
-        if (!g_rows[0] || !g_rows[1]) {
+        if (!all) {
             /* No row buffers means no drawing. Report it as no panel rather
              * than as half-working, so display_ready() tells the truth and
              * the secret-disclosing paths refuse instead of proceeding
@@ -86,7 +115,15 @@ void display_init(void) {
 }
 
 bool display_ready(void) {
-    return g_panel != NULL && g_rows[0] != NULL && g_rows[1] != NULL;
+    if (!g_panel) {
+        return false;
+    }
+    for (int i = 0; i < ROW_BUFFERS; i++) {
+        if (!g_rows[i]) {
+            return false;
+        }
+    }
+    return true;
 }
 
 int display_width(void) {
@@ -104,8 +141,7 @@ void display_fill_rect(int x, int y, int w, int h, uint16_t color) {
     if (x < 0 || y < 0 || x + w > g_width || y + h > g_height) {
         return;
     }
-    uint16_t *row = g_rows[g_row_turn];
-    g_row_turn ^= 1;
+    uint16_t *row = next_row();
 
     for (int i = 0; i < w; i++) {
         row[i] = color;
@@ -124,6 +160,149 @@ void display_set_state(display_state_t state) {
     fill_screen(color_for_state(state));
 }
 
+void display_text(int x, int y, const char *text, int scale, uint16_t fg, uint16_t bg) {
+    if (!display_ready() || !text || !text[0] || x < 0) {
+        return;
+    }
+    if (scale < 1) {
+        scale = 1;
+    }
+    if (scale > DISPLAY_MAX_TEXT_SCALE) {
+        scale = DISPLAY_MAX_TEXT_SCALE;
+    }
+
+    const int ch = FONT5X7_HEIGHT * scale;
+    if (y < 0 || y + ch > g_height) {
+        return;
+    }
+
+    const int cell_w = FONT5X7_ADVANCE * scale; /* glyph plus its trailing gap */
+    const int len = (int)strlen(text);
+    int line_w = len * cell_w;
+    if (x + line_w > g_width) {
+        line_w = g_width - x; /* clip: see the header on why this does not wrap */
+    }
+    if (line_w <= 0) {
+        return;
+    }
+
+    /* One row of the whole line at a time, each into its own buffer from the
+     * ring. Composing a glyph at a time into one shared buffer is what
+     * produced garbage on hardware -- see ROW_BUFFERS. */
+    for (int row = 0; row < ch; row++) {
+        const int gy = row / scale;
+        uint16_t *dst = next_row();
+        for (int px = 0; px < line_w; px++) {
+            const int gx = (px % cell_w) / scale;
+            uint16_t colour = bg;
+            if (gx < FONT5X7_WIDTH) {
+                const uint8_t *glyph = font5x7_glyph(text[px / cell_w]);
+                if ((glyph[gx] >> gy) & 1) {
+                    colour = fg;
+                }
+            }
+            dst[px] = colour;
+        }
+        esp_lcd_panel_draw_bitmap(g_panel, x, y + row, x + line_w, y + row + 1, dst);
+    }
+}
+
+/* The largest scale at which `text` fits `avail_w`, never below
+ * FONT5X7_MIN_READABLE_SCALE even if that means it will not fit.
+ *
+ * Shortening beats shrinking: a line nobody can read conveys nothing whether
+ * or not it is complete, and display_text() clips at the panel edge anyway.
+ * That order was decided by a person looking at the screen, not by
+ * arithmetic. */
+static int fit_scale(const char *text, int avail_w, int max_scale) {
+    if (!text || !text[0]) {
+        return FONT5X7_MIN_READABLE_SCALE;
+    }
+    const int len = (int)strlen(text);
+    if (max_scale > DISPLAY_MAX_TEXT_SCALE) {
+        max_scale = DISPLAY_MAX_TEXT_SCALE;
+    }
+    for (int scale = max_scale; scale > FONT5X7_MIN_READABLE_SCALE; scale--) {
+        const int w = (len - 1) * FONT5X7_ADVANCE * scale + FONT5X7_WIDTH * scale;
+        if (w <= avail_w) {
+            return scale;
+        }
+    }
+    return FONT5X7_MIN_READABLE_SCALE;
+}
+
+void display_note_detail(display_state_t state, const char *amount_num,
+                          const char *amount_unit, const char *label, const char *id) {
+    if (!display_ready()) {
+        return;
+    }
+    g_current_state = state;
+    const uint16_t bg = color_for_state(state);
+    const uint16_t ink = 0x0000;
+    fill_screen(bg);
+
+    /* Every line is drawn at the largest scale that fits the panel, rather
+     * than at a scale picked from the panel height. The first version did the
+     * latter and produced 21-pixel digits with a 14-pixel label, which a
+     * person on real hardware could not read. Fitting to the width instead
+     * means a short amount gets big automatically, which is the common case.
+     *
+     * The lower band is left clear for display_progress(). */
+    const int margin = 6;
+    const int avail = g_width - 2 * margin;
+    /* Keep out of the progress bar's band -- see display_progress(). */
+    const int usable_h = g_height - (g_height / 8) - (g_height / 12) - margin;
+
+    int y = margin;
+
+    /* The digits get the FULL width, at the largest scale that fits. An
+     * earlier version reserved room for the unit on the same line, which cost
+     * 90 of 228 pixels and held a seven-digit amount down to the same 21-pixel
+     * height a person had already told us was too small to read. The unit goes
+     * on the next line with the label instead: it is a word, and the digits are
+     * the thing a mistake costs money on. */
+    if (amount_num && amount_num[0]) {
+        const int scale = fit_scale(amount_num, avail, DISPLAY_MAX_TEXT_SCALE);
+        display_text(margin, y, amount_num, scale, ink, bg);
+        y += FONT5X7_HEIGHT * scale + 5;
+    }
+
+    /* Unit and label share a line: "sats  rent". */
+    char second[40];
+    second[0] = '\0';
+    if (amount_unit && amount_unit[0]) {
+        size_t n = strlen(amount_unit);
+        if (n > sizeof(second) - 3) {
+            n = sizeof(second) - 3;
+        }
+        memcpy(second, amount_unit, n);
+        second[n] = '\0';
+    }
+    if (label && label[0]) {
+        size_t used = strlen(second);
+        if (used > 0 && used + 2 < sizeof(second)) {
+            second[used++] = ' ';
+            second[used++] = ' ';
+            second[used] = '\0';
+        }
+        size_t room = sizeof(second) - used - 1;
+        size_t n = strlen(label);
+        if (n > room) {
+            n = room;
+        }
+        memcpy(second + used, label, n);
+        second[used + n] = '\0';
+    }
+    if (second[0] && y + FONT5X7_HEIGHT * FONT5X7_MIN_READABLE_SCALE <= usable_h) {
+        const int scale = fit_scale(second, avail, FONT5X7_MIN_READABLE_SCALE + 1);
+        display_text(margin, y, second, scale, ink, bg);
+        y += FONT5X7_HEIGHT * scale + 4;
+    }
+    if (id && id[0] && y + FONT5X7_HEIGHT * FONT5X7_MIN_READABLE_SCALE <= usable_h) {
+        display_text(margin, y, id, FONT5X7_MIN_READABLE_SCALE, ink, bg);
+    }
+}
+
 void display_progress(uint16_t permille) {
     if (!display_ready()) {
         return;
@@ -132,14 +311,15 @@ void display_progress(uint16_t permille) {
         permille = 1000;
     }
 
-    /* A band across the middle, inset from the edges so it reads as a bar
-     * rather than as the screen changing colour. Geometry is derived from the
-     * panel at runtime -- see display_width()'s comment on why nothing here
-     * hardcodes a size. */
+    /* A band across the LOWER part of the panel, inset from the edges so it
+     * reads as a bar rather than as the screen changing colour. Low rather
+     * than centred so it cannot paint over the note detail
+     * display_confirm_note() draws above it -- the whole point of the hold is
+     * that the owner can read what they are approving while they hold. */
     int margin = g_width / 8;
     int track_w = g_width - 2 * margin;
-    int bar_h = g_height / 6;
-    int y = (g_height - bar_h) / 2;
+    int bar_h = g_height / 8;
+    int y = g_height - bar_h - (g_height / 12);
     if (track_w <= 2 || bar_h <= 2) {
         return; /* a panel too small to draw a meaningful bar on */
     }
