@@ -4,8 +4,17 @@
  * hardware (test/native/test_button_fsm.c).
  *
  * Which GPIOs, and which polarity, is src/board/'s business -- see board.h.
- * Real button behaviour on real hardware remains unverified; see
- * docs/HARDWARE-TEST-CHECKLIST.md. */
+ *
+ * Real button behaviour is verified on the classic T-Display: the state
+ * machine produced zero spurious events across 31s at rest, and that board's
+ * external pull-up on GPIO35 is present. It is NOT verified on the S3, where
+ * the cancel button currently reads as permanently pressed and makes
+ * export_secret impossible -- an open fault, see
+ * docs/HARDWARE-TEST-CHECKLIST.md section 7a.
+ *
+ * Which is the reason the levels here are read raw and judged in portable
+ * code rather than trusted: a wrong pin, a floating input or a coupled
+ * glitch all look identical from this side of the wire. */
 #include "buttons.h"
 
 #include "board.h"

@@ -11,12 +11,26 @@
  * pin_config.h and factory example, not from memory:
  *   https://github.com/Xinyuan-LilyGO/T-Display-S3
  *
- * Still unverified against physical hardware. What a successful build proves
- * is that these are valid GPIOs and a valid bus configuration, not that they
- * are the right ones for the board on your desk. LilyGo has shipped more than
- * one revision under similar names (there is an AMOLED variant with a
- * different pinout entirely), so diff this against your board's own
- * pin_config.h before trusting it. See docs/HARDWARE-TEST-CHECKLIST.md.
+ * Partly verified against physical hardware, and the warning that used to be
+ * here turned out to be the right one to have written.
+ *
+ * WHAT WORKS on a real board: it boots, the panel comes up over the i80 bus,
+ * the backlight and power rail behave, and native USB-CDC enumerates and
+ * carries the command protocol.
+ *
+ * WHAT DOES NOT: PIN_BUTTON_2 reads as permanently pressed, so every
+ * confirmation is refused within a second and export_secret cannot succeed at
+ * all. Nothing in this repo drives GPIO14 and the internal pull-up is enabled
+ * below, so it is a wrong pin or a board revision that moved the button --
+ * exactly the case this comment already warned about, since LilyGo has
+ * shipped more than one revision under similar names (there is an AMOLED
+ * variant with a different pinout entirely). Diff this against your own
+ * board's pin_config.h before trusting it, and see
+ * docs/HARDWARE-TEST-CHECKLIST.md section 7a.
+ *
+ * Confirming which pin it should be needs the board held in ROM download mode
+ * by hand: its download port disappears once the firmware's TinyUSB claims
+ * USB, and does not come back on a software reset -- checked, not assumed.
  */
 #ifdef LNURLVAULT_BOARD_T_DISPLAY_S3
 
