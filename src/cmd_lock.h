@@ -1,6 +1,19 @@
 #ifndef LNURLVAULT_CMD_LOCK_H
 #define LNURLVAULT_CMD_LOCK_H
 
+/* The invariant above, enforced rather than only written down. ui_task.c
+ * defines LNURLVAULT_TU_IS_UI_TASK before its includes; reaching this header
+ * from there means someone is about to take this lock on the task that every
+ * human wait depends on, which reintroduces the deadlock this file exists to
+ * remove. Same approach as board.h's _Static_assert on panel orientation: an
+ * invariant a build can check should not be left to a comment. */
+#ifdef LNURLVAULT_TU_IS_UI_TASK
+#error "ui_task must never acquire cmd_lock -- see the invariant in this header. \
+Holding it across a human wait deadlocks the task that services the buttons, \
+and only a power cycle recovers. If ui_task genuinely needs to serialize \
+against the transports, the answer is a different mechanism, not this lock."
+#endif
+
 /* Serializes whole dispatcher_handle() calls across transports.
  *
  * There are two things that need serializing here, and they were previously
