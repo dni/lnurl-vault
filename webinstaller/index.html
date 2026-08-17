@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>LNURLvault — web installer</title>
-<meta name="description" content="Flash lnurl-vault firmware onto a LilyGo T-Display S3 directly from your browser.">
+<meta name="description" content="Flash lnurl-vault firmware onto a LilyGo T-Display S3 or classic T-Display directly from your browser.">
 <link rel="icon" type="image/svg+xml" href="favicon.svg">
 <!--
   esp-web-tools (Apache-2.0): https://esphome.github.io/esp-web-tools/
@@ -128,8 +128,9 @@
   <p class="subtitle">
     Flash
     <a href="https://github.com/dni/lnurl-vault">lnurl-vault</a>
-    firmware onto a LilyGo T-Display S3 straight from this page — no
-    PlatformIO or ESP-IDF install needed.
+    firmware onto a LilyGo T-Display S3 or the classic T-Display straight from
+    this page — no PlatformIO or ESP-IDF install needed. The right image is
+    chosen from the chip the browser finds.
   </p>
 
   <div class="card">
@@ -146,8 +147,13 @@
     <h2>Before you start</h2>
     <ul>
       <li>Works in Chrome or Edge on desktop — Web Serial isn't available in Firefox or Safari.</li>
-      <li>Connect the board's USB-C port directly to your computer (not through a hub that lacks data lines).</li>
-      <li>A first install will offer to erase the flash first; later installs update in place and keep any notes already stored on the device.</li>
+      <li>Connect the board's USB port directly to your computer, not through a hub that lacks data lines.</li>
+      <li><strong>Installing from this page erases every note on the device.</strong>
+        The image is a single blob flashed from offset 0, and the padding
+        between its parts covers the storage area — so a re-install is not an
+        update in place, whatever the erase prompt says. Export anything you
+        want to keep first. To update a device that already holds notes, use a
+        signed OTA image instead, which never touches storage.</li>
       <li>If the browser can't find the device, hold the board's BOOT button while plugging it in (or while clicking Install), then try again.</li>
     </ul>
   </div>
