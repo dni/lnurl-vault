@@ -10,6 +10,12 @@ static size_t g_note_count = 0;
 static const vault_storage_t *g_storage = NULL;
 static vault_time_fn g_now = NULL;
 
+/* Ids the persisted index referenced at boot whose blobs would not load.
+ * They are held here, out of g_notes, so persist_index() can carry them
+ * through instead of dropping them -- see its comment. */
+static char g_unloaded_ids[VAULT_MAX_NOTES][VAULT_ID_BUF];
+static size_t g_unloaded_count = 0;
+
 static void copy_trunc(char *dst, const char *src, size_t dstcap) {
     if (dstcap == 0) {
         return;
@@ -35,10 +41,20 @@ static void persist_index(void) {
         return;
     }
     char ids[VAULT_MAX_NOTES][VAULT_ID_BUF];
-    for (size_t i = 0; i < g_note_count; i++) {
-        memcpy(ids[i], g_notes[i].id, VAULT_ID_BUF);
+    size_t n = 0;
+    for (size_t i = 0; i < g_note_count && n < VAULT_MAX_NOTES; i++) {
+        memcpy(ids[n++], g_notes[i].id, VAULT_ID_BUF);
     }
-    g_storage->save_index(ids, g_note_count, g_storage->ctx);
+    /* Carry through any id whose blob failed to load this boot. A failed read
+     * is not proof the note is gone -- flash can fail transiently, and its
+     * data may be perfectly intact next boot. Writing an index built only
+     * from what happens to be in RAM would drop the reference for good, so a
+     * single bad read would silently destroy a note holding real value. Notes
+     * are only ever removed from the index by remove_at(), i.e. deliberately. */
+    for (size_t i = 0; i < g_unloaded_count && n < VAULT_MAX_NOTES; i++) {
+        memcpy(ids[n++], g_unloaded_ids[i], VAULT_ID_BUF);
+    }
+    g_storage->save_index(ids, n, g_storage->ctx);
 }
 
 static void persist_note(const note_t *n) {
@@ -62,14 +78,22 @@ static void remove_at(size_t idx) {
     persist_index();
 }
 
-static bool gen_unique_id(vault_rng_fn rng, char out[VAULT_ID_BUF]) {
+/* `reserved` is an id that is spoken for but not yet in g_notes, so
+ * find_index() cannot see it. vault_new_secret_pair() generates both halves
+ * of a split before storing either, so without this the second half can be
+ * handed the first half's id -- and since find_index() returns the first
+ * match, one of the two notes would be permanently unaddressable. NULL when
+ * there is no such sibling. */
+static bool gen_unique_id(vault_rng_fn rng, char out[VAULT_ID_BUF], const char *reserved) {
     for (int attempt = 0; attempt < 8; attempt++) {
         uint8_t raw[4];
         if (!rng(raw, sizeof(raw))) {
             return false;
         }
         hex_encode(raw, sizeof(raw), out, VAULT_ID_BUF);
-        if (find_index(out) < 0) {
+        bool clashes_with_reserved =
+            reserved && strncmp(out, reserved, VAULT_ID_BUF) == 0;
+        if (find_index(out) < 0 && !clashes_with_reserved) {
             return true;
         }
     }
@@ -93,6 +117,7 @@ void vault_init(const vault_storage_t *storage, vault_time_fn now_fn) {
     g_storage = storage;
     g_now = now_fn;
     g_note_count = 0;
+    g_unloaded_count = 0;
 
     if (!storage || !storage->load_index) {
         return;
@@ -107,12 +132,17 @@ void vault_init(const vault_storage_t *storage, vault_time_fn now_fn) {
         note_t n;
         if (storage->load_note && storage->load_note(ids[i], &n, storage->ctx)) {
             g_notes[g_note_count++] = n;
+        } else if (g_unloaded_count < VAULT_MAX_NOTES) {
+            /* Remember it rather than forgetting it: persist_index() carries
+             * it through so a transient read failure cannot orphan the note. */
+            memcpy(g_unloaded_ids[g_unloaded_count++], ids[i], VAULT_ID_BUF);
         }
     }
 }
 
 static vault_err_t new_note(vault_rng_fn rng, const char parent_ids[][VAULT_ID_BUF],
-                             size_t parent_count, const char *label, note_t *out) {
+                             size_t parent_count, const char *label, const char *reserved_id,
+                             note_t *out) {
     if (!rng || parent_count > VAULT_MAX_PARENTS) {
         return VAULT_ERR_BAD_REQUEST;
     }
@@ -121,7 +151,7 @@ static vault_err_t new_note(vault_rng_fn rng, const char parent_ids[][VAULT_ID_B
     }
 
     memset(out, 0, sizeof(*out));
-    if (!gen_unique_id(rng, out->id)) {
+    if (!gen_unique_id(rng, out->id, reserved_id)) {
         return VAULT_ERR_STORAGE_FULL;
     }
     if (!rng(out->secret, VAULT_SECRET_LEN)) {
@@ -143,7 +173,7 @@ vault_err_t vault_new_secret(vault_rng_fn rng, const char parent_ids[][VAULT_ID_
                               size_t parent_count, const char *label, char out_id[VAULT_ID_BUF],
                               char out_h_hex[VAULT_HASH_HEX_BUF]) {
     note_t n;
-    vault_err_t err = new_note(rng, parent_ids, parent_count, label, &n);
+    vault_err_t err = new_note(rng, parent_ids, parent_count, label, NULL, &n);
     if (err != VAULT_OK) {
         return err;
     }
@@ -169,11 +199,12 @@ vault_err_t vault_new_secret_pair(vault_rng_fn rng, const char parent_ids[][VAUL
     }
 
     note_t n1, n2;
-    vault_err_t err = new_note(rng, parent_ids, parent_count, label, &n1);
+    vault_err_t err = new_note(rng, parent_ids, parent_count, label, NULL, &n1);
     if (err != VAULT_OK) {
         return err;
     }
-    err = new_note(rng, parent_ids, parent_count, label, &n2);
+    /* n1 is not in g_notes yet, so its id must be reserved explicitly. */
+    err = new_note(rng, parent_ids, parent_count, label, n1.id, &n2);
     if (err != VAULT_OK) {
         return err;
     }
@@ -258,7 +289,7 @@ vault_err_t vault_import_secret(vault_rng_fn rng, const char *k1_hex, const char
 
     note_t n;
     memset(&n, 0, sizeof(n));
-    if (!gen_unique_id(rng, n.id)) {
+    if (!gen_unique_id(rng, n.id, NULL)) {
         return VAULT_ERR_STORAGE_FULL;
     }
     memcpy(n.secret, secret, VAULT_SECRET_LEN);

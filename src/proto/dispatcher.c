@@ -127,6 +127,18 @@ static void handle_list_notes(char *out, size_t outcap) {
     }
     jw_end_arr(&w);
     jw_end_obj(&w);
+
+    /* The only unbounded response we build: every other handler writes a
+     * fixed set of fields that cannot overflow a transport buffer. Without
+     * this check an overflowing listing went out as a silently truncated
+     * string, so the client hit a JSON syntax error with nothing to
+     * distinguish "device is broken" from "you have too many notes".
+     * write_error() re-initialises the writer over the same buffer, so the
+     * partial listing is discarded rather than appended to. */
+    if (!jw_ok(&w)) {
+        write_error(out, outcap, "response_too_large",
+                    "too many notes to return in one response");
+    }
 }
 
 static void handle_new_secret(const char *line, char *out, size_t outcap) {
