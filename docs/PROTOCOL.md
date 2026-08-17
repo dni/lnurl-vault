@@ -49,6 +49,12 @@ Every response has a boolean `ok`. On failure: `{"ok":false,"error":"<code>","me
 `invalid_state`, `user_declined`, `timeout`, `storage_full`, `bad_request`,
 `response_too_large`.
 
+`storage_full` has two causes, and they want opposite responses from the
+owner. Either the vault is genuinely out of room, or storage is degraded and
+the device is refusing to write rather than risk what is already there. Read
+`get_info`'s `storage` field to tell them apart: `full` means spend or delete
+notes; `index_unreadable` means reboot, and specifically do **not** wipe.
+
 `response_too_large` means the reply did not fit the transport's response
 buffer. Today only `list_notes` can produce it (every other command's reply
 is a fixed set of fields). A client should treat it as "ask for less", not as
@@ -79,6 +85,7 @@ same situation:
 | `full` | the NVS partition is out of free pages. Every note is still on flash and none is readable. Not corruption -- ordinary churn reaches this, since a note blob is 448 bytes and every `confirm`, `rename` or `mark_spent` rewrites one |
 | `version_unsupported` | flash was written by a newer NVS format than this firmware understands. A downgrade, not damage; a correct firmware could still read it |
 | `unavailable` | storage could not be brought up at all |
+| `index_unreadable` | NVS came up fine, but the note index itself could not be read this boot. The notes are still on flash; the device just cannot say which ones exist. It refuses to create notes or to rewrite the index until a boot that can read it, so `new_secret` and `import_secret` answer `storage_full`. Recovery is a **reboot** -- never a `wipe`, which would destroy exactly what this state exists to protect |
 
 Anything other than `ok` means `note_count` is **not** a statement about how
 many notes exist -- it is how many the device could load. The firmware never

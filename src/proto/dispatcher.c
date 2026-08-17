@@ -145,8 +145,17 @@ static void handle_get_info(char *out, size_t outcap) {
         jw_uint64(&w, "free_heap_bytes", g_deps.free_heap());
     }
     /* Loud about storage it cannot read, rather than presenting as an empty
-     * working vault -- see dispatcher.h's storage_state_fn. */
-    if (g_deps.storage_state) {
+     * working vault -- see dispatcher.h's storage_state_fn.
+     *
+     * The index check comes first and wins, because storage_state_fn reports
+     * how NVS itself came up, and NVS can come up perfectly while the one
+     * read of the note index fails. In that case the host would otherwise be
+     * told storage "ok" and note_count 0 -- a healthy empty vault -- while
+     * every write is being refused. Recovery is a reboot, and specifically
+     * NOT a wipe, which is why this must not read as storage_full. */
+    if (!vault_index_known()) {
+        jw_str(&w, "storage", "index_unreadable");
+    } else if (g_deps.storage_state) {
         jw_str(&w, "storage", g_deps.storage_state());
     }
     /* Why the previous boot ended, so a device that resets in the field can

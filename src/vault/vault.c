@@ -181,6 +181,10 @@ void vault_init(const vault_storage_t *storage, vault_time_fn now_fn) {
     }
 }
 
+bool vault_index_known(void) {
+    return g_index_known;
+}
+
 static vault_err_t new_note(vault_rng_fn rng, const char parent_ids[][VAULT_ID_BUF],
                              size_t parent_count, const char *label, const char *reserved_id,
                              note_t *out) {

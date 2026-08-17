@@ -1,6 +1,8 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "dispatcher.h"
+#include "json.h"
 #include "unity_lite.h"
 #include "vault.h"
 
@@ -285,6 +287,21 @@ static void test_unreadable_index_is_not_an_empty_vault(void) {
     size_t n_count, p_count;
     vault_get_info(&n_count, &p_count);
     UL_CHECK(n_count == 0, "a boot that cannot read the index sees no notes");
+    UL_CHECK(!vault_index_known(),
+             "and says so, rather than looking like a vault that is simply empty");
+
+    /* The distinction has to reach the host. Zero notes and a refusal to
+     * write are both consistent with a healthy empty vault, so get_info has
+     * to name the real reason -- and must not say storage_full, whose
+     * remedy (delete notes, or wipe) would destroy what is being protected. */
+    dispatcher_deps_t info_deps = {0};
+    dispatcher_init(&info_deps);
+    char info[512];
+    dispatcher_handle("{\"cmd\":\"get_info\"}", info, sizeof(info));
+    char storage_state[32];
+    UL_CHECK(json_get_str(info, "storage", storage_state, sizeof(storage_state)) &&
+                 strcmp(storage_state, "index_unreadable") == 0,
+             "get_info reports index_unreadable, not a healthy-looking empty vault");
 
     char id_c[VAULT_ID_BUF];
     UL_CHECK(vault_new_secret(rng_basic, NULL, 0, "c", id_c, h) != VAULT_OK,
@@ -304,6 +321,7 @@ static void test_unreadable_index_is_not_an_empty_vault(void) {
     /* Flash recovers. Both notes must still be reachable. */
     fake_index_read_fails = false;
     vault_init(&storage, NULL);
+    UL_CHECK(vault_index_known(), "a boot that can read the index says so again");
     note_meta_t meta;
     UL_CHECK(vault_get_meta(id_a, &meta) && meta.amount_msat == 111000,
              "note A survives a boot that could not read the index");
