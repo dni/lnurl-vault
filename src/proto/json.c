@@ -247,7 +247,18 @@ bool json_get_u64(const char *json, const char *key, uint64_t *out) {
         if (*p < '0' || *p > '9') {
             return false;
         }
-        val = val * 10 + (uint64_t)(*p - '0');
+        /* Reject rather than wrap. The field this mostly parses is
+         * amount_msat, so a silent wrap turns an absurd number into a
+         * plausible one and stores it against a real note. */
+        uint64_t digit = (uint64_t)(*p - '0');
+        if (val > UINT64_MAX / 10) {
+            return false;
+        }
+        val *= 10;
+        if (val > UINT64_MAX - digit) {
+            return false;
+        }
+        val += digit;
     }
     *out = val;
     return true;

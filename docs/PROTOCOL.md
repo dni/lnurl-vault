@@ -46,7 +46,15 @@ message, not every chunk.
 
 Every response has a boolean `ok`. On failure: `{"ok":false,"error":"<code>","message":"..."}`
 (`message` is optional, human-readable). Error codes: `not_found`,
-`invalid_state`, `user_declined`, `timeout`, `storage_full`, `bad_request`.
+`invalid_state`, `user_declined`, `timeout`, `storage_full`, `bad_request`,
+`response_too_large`.
+
+`response_too_large` means the reply did not fit the transport's response
+buffer. Today only `list_notes` can produce it (every other command's reply
+is a fixed set of fields). A client should treat it as "ask for less", not as
+a device fault — but note there is currently no way to ask for less, so a
+vault holding more notes than fit cannot be listed at all. Paging is the
+outstanding fix.
 
 ### `get_info`
 

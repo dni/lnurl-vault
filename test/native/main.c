@@ -12,6 +12,7 @@ void test_vault_run(void);
 void test_dispatcher_run(void);
 void test_button_fsm_run(void);
 void test_note_url_run(void);
+void test_regressions_run(void);
 
 int main(void) {
     test_sha256_run();
@@ -21,6 +22,7 @@ int main(void) {
     test_dispatcher_run();
     test_button_fsm_run();
     test_note_url_run();
+    test_regressions_run();
 
     printf("%d/%d assertions passed\n", g_tests_run - g_tests_failed, g_tests_run);
     if (g_tests_failed > 0) {
