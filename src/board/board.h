@@ -47,6 +47,13 @@ typedef struct {
  * paths must refuse, not proceed blind. */
 board_display_t board_display_init(void);
 
+/* Starts whichever host transport this board is wired for, and begins
+ * serving the command protocol on it: native USB-CDC where the chip has a
+ * USB-OTG peripheral, a UART behind an external USB bridge where it does not.
+ * Both present to a browser as an ordinary serial port, so docs/PROTOCOL.md's
+ * newline-delimited JSON is identical either way. */
+void board_serial_start(void);
+
 /* Configures the board's two buttons as inputs. */
 void board_buttons_init(void);
 

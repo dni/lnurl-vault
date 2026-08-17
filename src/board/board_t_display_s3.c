@@ -18,6 +18,8 @@
  * different pinout entirely), so diff this against your board's own
  * pin_config.h before trusting it. See docs/HARDWARE-TEST-CHECKLIST.md.
  */
+#ifdef LNURLVAULT_BOARD_T_DISPLAY_S3
+
 #include "board.h"
 
 #include "driver/gpio.h"
@@ -25,6 +27,7 @@
 #include "esp_lcd_panel_ops.h"
 #include "esp_lcd_panel_vendor.h"
 #include "esp_log.h"
+#include "serial_cdc.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
@@ -218,6 +221,10 @@ board_display_t board_display_init(void) {
     return out;
 }
 
+void board_serial_start(void) {
+    serial_cdc_start(); /* native USB-CDC on the S3's USB-OTG peripheral */
+}
+
 void board_buttons_init(void) {
     gpio_config_t cfg = {
         .pin_bit_mask = (1ULL << PIN_BUTTON_1) | (1ULL << PIN_BUTTON_2),
@@ -237,3 +244,5 @@ bool board_button_1_pressed(void) {
 bool board_button_2_pressed(void) {
     return gpio_get_level(PIN_BUTTON_2) == 0;
 }
+
+#endif /* LNURLVAULT_BOARD_T_DISPLAY_S3 */
