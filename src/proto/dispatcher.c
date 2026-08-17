@@ -322,10 +322,37 @@ static void handle_confirm(const char *line, char *out, size_t outcap) {
     write_ok(out, outcap);
 }
 
+/* Asks the owner to approve a command that changes a note they already hold.
+ *
+ * Returns false having already written the response, so callers read as
+ * `if (!confirm_action(...)) return;`. Fails CLOSED when a note cannot be
+ * read: refusing is recoverable, and destroying something the owner was never
+ * shown is not.
+ *
+ * When no confirm hook is wired the command proceeds -- that is the old
+ * behaviour, and it is what test/native uses. On real firmware main.c always
+ * wires one. */
+static bool confirm_action(const char *action, const char *id, char *out, size_t outcap) {
+    if (!g_deps.confirm_action) {
+        return true;
+    }
+    note_meta_t meta;
+    const bool known = vault_get_meta(id, &meta);
+    confirm_result_t r = g_deps.confirm_action(action, known ? &meta : NULL);
+    if (r == CONFIRM_YES) {
+        return true;
+    }
+    write_error(out, outcap, r == CONFIRM_NO ? "user_declined" : "timeout", NULL);
+    return false;
+}
+
 static void handle_discard(const char *line, char *out, size_t outcap) {
     char id[VAULT_ID_BUF];
     if (!json_get_str(line, "id", id, sizeof(id))) {
         write_error(out, outcap, "bad_request", "discard requires id");
+        return;
+    }
+    if (!confirm_action("discard", id, out, outcap)) {
         return;
     }
     vault_err_t err = vault_discard(id);
@@ -414,6 +441,9 @@ static void handle_mark_spent(const char *line, char *out, size_t outcap) {
         write_error(out, outcap, "bad_request", "mark_spent requires id");
         return;
     }
+    if (!confirm_action("mark_spent", id, out, outcap)) {
+        return;
+    }
     vault_err_t err = vault_mark_spent(id);
     if (err != VAULT_OK) {
         write_vault_error(out, outcap, err);
@@ -428,6 +458,9 @@ static void handle_rename(const char *line, char *out, size_t outcap) {
     if (!json_get_str(line, "id", id, sizeof(id)) ||
         !json_get_str(line, "label", label, sizeof(label))) {
         write_error(out, outcap, "bad_request", "rename requires id, label");
+        return;
+    }
+    if (!confirm_action("rename", id, out, outcap)) {
         return;
     }
     vault_err_t err = vault_rename(id, label);
@@ -720,6 +753,9 @@ static void handle_delete(const char *line, char *out, size_t outcap) {
     char id[VAULT_ID_BUF];
     if (!json_get_str(line, "id", id, sizeof(id))) {
         write_error(out, outcap, "bad_request", "delete requires id");
+        return;
+    }
+    if (!confirm_action("delete", id, out, outcap)) {
         return;
     }
     vault_err_t err = vault_delete(id);

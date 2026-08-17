@@ -138,6 +138,25 @@ typedef struct {
 
 typedef bool (*boot_report_fn)(boot_report_t *out);
 
+/* Optional: the physical gate in front of a command that changes or destroys
+ * a note the owner already has -- mark_spent, delete, discard, rename.
+ *
+ * These were ungated. BLE has no bonding and no passkey, so any central in
+ * radio range is already a client, and the README's reasoning for accepting
+ * that was that a secret cannot be extracted without a physical gesture. True,
+ * and beside the point: an attacker who cannot read a single secret could
+ * still mark every live note spent and then delete them, destroying real value
+ * without ever learning one. Issue #16.
+ *
+ * `action` is the command name, so the screen can say which of them is being
+ * approved -- approving a delete while believing you are approving an export
+ * would be worse than not asking at all. `note` is what it will happen to, and
+ * may be NULL if the note could not be read.
+ *
+ * NULL => these commands run ungated, which is the old behaviour and what the
+ * native tests use. */
+typedef confirm_result_t (*action_confirm_fn)(const char *action, const note_meta_t *note);
+
 typedef struct {
     vault_rng_fn rng;
     export_confirm_fn confirm_export;
@@ -165,6 +184,7 @@ typedef struct {
     storage_state_fn storage_state;
     trace_cmd_fn trace_cmd;
     boot_report_fn boot_report;
+    action_confirm_fn confirm_action;
 } dispatcher_deps_t;
 
 void dispatcher_init(const dispatcher_deps_t *deps);
