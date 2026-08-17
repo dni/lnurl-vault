@@ -4,6 +4,8 @@
 #include <stdbool.h>
 #include <stdint.h>
 
+#include "font5x7.h"
+
 #include "esp_lcd_panel_ops.h" /* esp_lcd_panel_handle_t */
 
 typedef enum {
@@ -49,7 +51,7 @@ void display_fill_rect(int x, int y, int w, int h, uint16_t color);
  *
  * See src/ui/font5x7.h -- printable ASCII only, and anything else draws as
  * '?' rather than as nothing, so two different labels cannot look the same. */
-#define DISPLAY_MAX_TEXT_SCALE 6
+#define DISPLAY_MAX_TEXT_SCALE FONT5X7_MAX_SCALE
 void display_text(int x, int y, const char *text, int scale, uint16_t fg, uint16_t bg);
 
 /* Draws a note's detail full-screen, on `state`'s background: says which

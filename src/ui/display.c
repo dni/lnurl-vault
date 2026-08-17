@@ -207,30 +207,6 @@ void display_text(int x, int y, const char *text, int scale, uint16_t fg, uint16
     }
 }
 
-/* The largest scale at which `text` fits `avail_w`, never below
- * FONT5X7_MIN_READABLE_SCALE even if that means it will not fit.
- *
- * Shortening beats shrinking: a line nobody can read conveys nothing whether
- * or not it is complete, and display_text() clips at the panel edge anyway.
- * That order was decided by a person looking at the screen, not by
- * arithmetic. */
-static int fit_scale(const char *text, int avail_w, int max_scale) {
-    if (!text || !text[0]) {
-        return FONT5X7_MIN_READABLE_SCALE;
-    }
-    const int len = (int)strlen(text);
-    if (max_scale > DISPLAY_MAX_TEXT_SCALE) {
-        max_scale = DISPLAY_MAX_TEXT_SCALE;
-    }
-    for (int scale = max_scale; scale > FONT5X7_MIN_READABLE_SCALE; scale--) {
-        const int w = (len - 1) * FONT5X7_ADVANCE * scale + FONT5X7_WIDTH * scale;
-        if (w <= avail_w) {
-            return scale;
-        }
-    }
-    return FONT5X7_MIN_READABLE_SCALE;
-}
-
 void display_note_detail(display_state_t state, const char *amount_num,
                           const char *amount_unit, const char *label, const char *id) {
     if (!display_ready()) {
@@ -262,7 +238,7 @@ void display_note_detail(display_state_t state, const char *amount_num,
      * on the next line with the label instead: it is a word, and the digits are
      * the thing a mistake costs money on. */
     if (amount_num && amount_num[0]) {
-        const int scale = fit_scale(amount_num, avail, DISPLAY_MAX_TEXT_SCALE);
+        const int scale = font5x7_fit_scale(amount_num, avail, DISPLAY_MAX_TEXT_SCALE);
         display_text(margin, y, amount_num, scale, ink, bg);
         y += FONT5X7_HEIGHT * scale + 5;
     }
@@ -294,7 +270,7 @@ void display_note_detail(display_state_t state, const char *amount_num,
         second[used + n] = '\0';
     }
     if (second[0] && y + FONT5X7_HEIGHT * FONT5X7_MIN_READABLE_SCALE <= usable_h) {
-        const int scale = fit_scale(second, avail, FONT5X7_MIN_READABLE_SCALE + 1);
+        const int scale = font5x7_fit_scale(second, avail, FONT5X7_MIN_READABLE_SCALE + 1);
         display_text(margin, y, second, scale, ink, bg);
         y += FONT5X7_HEIGHT * scale + 4;
     }

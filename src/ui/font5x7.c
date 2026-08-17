@@ -22,6 +22,8 @@
  */
 #include "font5x7.h"
 
+#include <string.h>
+
 /* ASCII 32 (space) through 126 (~). */
 static const uint8_t GLYPHS[FONT5X7_LAST_CHAR - FONT5X7_FIRST_CHAR + 1][FONT5X7_WIDTH] = {
     {0x00, 0x00, 0x00, 0x00, 0x00}, /* 32 space */
@@ -132,4 +134,29 @@ const uint8_t *font5x7_glyph(char c) {
         u = '?';
     }
     return GLYPHS[u - FONT5X7_FIRST_CHAR];
+}
+
+int font5x7_text_width(const char *text, int scale) {
+    if (!text || !text[0] || scale < 1) {
+        return 0;
+    }
+    const int len = (int)strlen(text);
+    /* Every glyph but the last contributes its advance; the last contributes
+     * only its own width, since the trailing blank column is not drawn. */
+    return (len - 1) * FONT5X7_ADVANCE * scale + FONT5X7_WIDTH * scale;
+}
+
+int font5x7_fit_scale(const char *text, int avail_w, int max_scale) {
+    if (max_scale < FONT5X7_MIN_READABLE_SCALE) {
+        max_scale = FONT5X7_MIN_READABLE_SCALE;
+    }
+    if (!text || !text[0]) {
+        return FONT5X7_MIN_READABLE_SCALE;
+    }
+    for (int scale = max_scale; scale > FONT5X7_MIN_READABLE_SCALE; scale--) {
+        if (font5x7_text_width(text, scale) <= avail_w) {
+            return scale;
+        }
+    }
+    return FONT5X7_MIN_READABLE_SCALE;
 }
