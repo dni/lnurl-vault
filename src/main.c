@@ -41,23 +41,6 @@ static uint32_t now_seconds(void) {
     return (uint32_t)(esp_timer_get_time() / 1000000);
 }
 
-/* TEMPORARY GPIO PROBE -- NOT COMMITTED. */
-#include "driver/gpio.h"
-static uint64_t dbg_gpio_levels(void) {
-    static const int pins[] = {0, 14, 16, 21, 47, 48};
-    uint64_t mask = 0;
-    for (size_t i = 0; i < sizeof(pins) / sizeof(pins[0]); i++) {
-        gpio_config_t c = {.pin_bit_mask = 1ULL << pins[i], .mode = GPIO_MODE_INPUT,
-                           .pull_up_en = GPIO_PULLUP_ENABLE, .pull_down_en = GPIO_PULLDOWN_DISABLE,
-                           .intr_type = GPIO_INTR_DISABLE};
-        gpio_config(&c);
-        if (gpio_get_level(pins[i])) {
-            mask |= 1ULL << i;
-        }
-    }
-    return mask;
-}
-
 static uint64_t free_heap_bytes(void) {
     return (uint64_t)esp_get_free_heap_size();
 }
@@ -207,7 +190,7 @@ void app_main(void) {
         .rng = rng_fill,
         .confirm_export = confirm_export_on_device,
         .board = BOARD_NAME,
-        .free_heap = dbg_gpio_levels,
+        .free_heap = free_heap_bytes,
         .reset = device_reboot_delayed,
         .ota_approve = ota_approve_on_device,
         .ota_write_begin = ota_write_begin,

@@ -29,31 +29,44 @@ static esp_lcd_panel_handle_t g_panel = NULL;
 static int g_width = 0;
 static int g_height = 0;
 
-/* Two full-width rows of pixels, ping-ponged between calls.
+/* A ring of full-width row buffers.
  *
  * esp_lcd_panel_draw_bitmap() queues a DMA transfer against the caller's
- * buffer and returns; the bytes are read later. Within one fill that is
- * harmless because every row holds the identical colour, so an in-flight
- * transfer reading a row we have "reused" sees exactly what it expected.
- * Across two fills of *different* colours it is not: the tail of the first
- * fill can still be in flight when the second overwrites the buffer, and
- * those rows land in the new colour. Alternating buffers per call gives the
- * previous fill its own intact copy to drain from.
+ * buffer and returns; the bytes are read later. Overwrite a buffer while its
+ * transfer is still draining and the panel shows whatever you replaced it
+ * with.
  *
- * Allocated rather than static because geometry is now a runtime property of
- * the board, and DMA-capable because that is what the panel bus sends from. */
-static uint16_t *g_rows[2] = {NULL, NULL};
+ * There used to be two of these, ping-ponged, and two was enough only because
+ * the one caller filled every row of a rectangle with the SAME colour -- an
+ * in-flight transfer re-reading a "reused" row saw exactly what it expected.
+ * The moment display_text() started emitting rows whose contents DIFFER, two
+ * stopped being enough, and text at larger scales came out as garbage on real
+ * hardware: bigger glyph, longer transfer, more overlap with the row being
+ * composed behind it.
+ *
+ * The ring closes that without a completion callback, by leaning on a
+ * guarantee the driver already gives. the board files create the panel IO with
+ * trans_queue_depth = 10, so the driver accepts at most that many outstanding
+ * transfers and blocks on the next one until one retires. Keep more buffers
+ * than that depth and, by the time the ring comes back around to a buffer,
+ * the driver has necessarily drained it. ROW_BUFFERS must therefore stay
+ * greater than the largest trans_queue_depth any board configures.
+ *
+ * Allocated rather than static because geometry is a runtime property of the
+ * board, and DMA-capable because that is what the panel bus sends from. */
+#define ROW_BUFFERS 16
+static uint16_t *g_rows[ROW_BUFFERS] = {NULL};
 static int g_row_turn = 0;
+
+static uint16_t *next_row(void) {
+    uint16_t *r = g_rows[g_row_turn];
+    g_row_turn = (g_row_turn + 1) % ROW_BUFFERS;
+    return r;
+}
 
 static display_state_t g_current_state = DISPLAY_STATE_IDLE;
 
-/* One glyph cell at the largest permitted scale, reused for every character.
- * Per-glyph transfers rather than one buffer for a whole line: a full line at
- * scale 4 on the widest panel is over 13KB of DMA-capable RAM held
- * permanently, against 1.1KB here, and a screen drawn once per approval does
- * not need the transfer count. */
-#define GLYPH_CELL_PIXELS (FONT5X7_WIDTH * DISPLAY_MAX_TEXT_SCALE * FONT5X7_HEIGHT * DISPLAY_MAX_TEXT_SCALE)
-static uint16_t *g_glyph = NULL;
+
 
 static uint16_t color_for_state(display_state_t state) {
     switch (state) {
@@ -82,11 +95,14 @@ void display_init(void) {
     g_height = d.height;
 
     if (g_panel) {
-        for (int i = 0; i < 2; i++) {
+        bool all = true;
+        for (int i = 0; i < ROW_BUFFERS; i++) {
             g_rows[i] = heap_caps_malloc((size_t)g_width * sizeof(uint16_t), MALLOC_CAP_DMA);
+            if (!g_rows[i]) {
+                all = false;
+            }
         }
-        g_glyph = heap_caps_malloc(GLYPH_CELL_PIXELS * sizeof(uint16_t), MALLOC_CAP_DMA);
-        if (!g_rows[0] || !g_rows[1] || !g_glyph) {
+        if (!all) {
             /* No row buffers means no drawing. Report it as no panel rather
              * than as half-working, so display_ready() tells the truth and
              * the secret-disclosing paths refuse instead of proceeding
@@ -99,7 +115,15 @@ void display_init(void) {
 }
 
 bool display_ready(void) {
-    return g_panel != NULL && g_rows[0] != NULL && g_rows[1] != NULL && g_glyph != NULL;
+    if (!g_panel) {
+        return false;
+    }
+    for (int i = 0; i < ROW_BUFFERS; i++) {
+        if (!g_rows[i]) {
+            return false;
+        }
+    }
+    return true;
 }
 
 int display_width(void) {
@@ -117,8 +141,7 @@ void display_fill_rect(int x, int y, int w, int h, uint16_t color) {
     if (x < 0 || y < 0 || x + w > g_width || y + h > g_height) {
         return;
     }
-    uint16_t *row = g_rows[g_row_turn];
-    g_row_turn ^= 1;
+    uint16_t *row = next_row();
 
     for (int i = 0; i < w; i++) {
         row[i] = color;
@@ -138,7 +161,7 @@ void display_set_state(display_state_t state) {
 }
 
 void display_text(int x, int y, const char *text, int scale, uint16_t fg, uint16_t bg) {
-    if (!display_ready() || !text) {
+    if (!display_ready() || !text || !text[0] || x < 0) {
         return;
     }
     if (scale < 1) {
@@ -148,31 +171,39 @@ void display_text(int x, int y, const char *text, int scale, uint16_t fg, uint16
         scale = DISPLAY_MAX_TEXT_SCALE;
     }
 
-    const int cw = FONT5X7_WIDTH * scale;
     const int ch = FONT5X7_HEIGHT * scale;
     if (y < 0 || y + ch > g_height) {
-        return; /* off-panel vertically: nothing sensible to clip to */
+        return;
     }
 
-    for (const char *p = text; *p; p++) {
-        if (x + cw > g_width) {
-            return; /* ran out of screen -- see the header on why this clips */
-        }
-        const uint8_t *glyph = font5x7_glyph(*p);
+    const int cell_w = FONT5X7_ADVANCE * scale; /* glyph plus its trailing gap */
+    const int len = (int)strlen(text);
+    int line_w = len * cell_w;
+    if (x + line_w > g_width) {
+        line_w = g_width - x; /* clip: see the header on why this does not wrap */
+    }
+    if (line_w <= 0) {
+        return;
+    }
 
-        for (int gx = 0; gx < FONT5X7_WIDTH; gx++) {
-            for (int sx = 0; sx < scale; sx++) {
-                const int col = gx * scale + sx;
-                for (int gy = 0; gy < FONT5X7_HEIGHT; gy++) {
-                    const uint16_t c = (glyph[gx] >> gy) & 1 ? fg : bg;
-                    for (int sy = 0; sy < scale; sy++) {
-                        g_glyph[(gy * scale + sy) * cw + col] = c;
-                    }
+    /* One row of the whole line at a time, each into its own buffer from the
+     * ring. Composing a glyph at a time into one shared buffer is what
+     * produced garbage on hardware -- see ROW_BUFFERS. */
+    for (int row = 0; row < ch; row++) {
+        const int gy = row / scale;
+        uint16_t *dst = next_row();
+        for (int px = 0; px < line_w; px++) {
+            const int gx = (px % cell_w) / scale;
+            uint16_t colour = bg;
+            if (gx < FONT5X7_WIDTH) {
+                const uint8_t *glyph = font5x7_glyph(text[px / cell_w]);
+                if ((glyph[gx] >> gy) & 1) {
+                    colour = fg;
                 }
             }
+            dst[px] = colour;
         }
-        esp_lcd_panel_draw_bitmap(g_panel, x, y, x + cw, y + ch, g_glyph);
-        x += FONT5X7_ADVANCE * scale;
+        esp_lcd_panel_draw_bitmap(g_panel, x, y + row, x + line_w, y + row + 1, dst);
     }
 }
 
@@ -181,8 +212,8 @@ void display_text(int x, int y, const char *text, int scale, uint16_t fg, uint16
  *
  * Shortening beats shrinking: a line nobody can read conveys nothing whether
  * or not it is complete, and display_text() clips at the panel edge anyway.
- * That order was decided by a person looking at the screen and saying the text
- * was too small, not by arithmetic. */
+ * That order was decided by a person looking at the screen, not by
+ * arithmetic. */
 static int fit_scale(const char *text, int avail_w, int max_scale) {
     if (!text || !text[0]) {
         return FONT5X7_MIN_READABLE_SCALE;
@@ -192,7 +223,6 @@ static int fit_scale(const char *text, int avail_w, int max_scale) {
         max_scale = DISPLAY_MAX_TEXT_SCALE;
     }
     for (int scale = max_scale; scale > FONT5X7_MIN_READABLE_SCALE; scale--) {
-        /* The last glyph needs its cell, not its advance. */
         const int w = (len - 1) * FONT5X7_ADVANCE * scale + FONT5X7_WIDTH * scale;
         if (w <= avail_w) {
             return scale;

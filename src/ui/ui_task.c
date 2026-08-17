@@ -375,6 +375,23 @@ void ui_task_start(void) {
     xTaskCreate(ui_task_fn, "ui_task", 4096, NULL, 5, NULL);
 }
 
+/* Kept as the plain name, delegating, so a caller that only has a timeout
+ * still compiles.
+ *
+ * This is not tidiness. Renaming it outright made two independently-correct
+ * branches break each other on merge: another change added a confirm entry
+ * point calling request_confirm(), git merged both texts without complaint
+ * because they touch different lines, and the result was a call to a function
+ * that no longer existed. Each branch built fine alone; whichever landed
+ * second broke main. Caught by building the two together rather than by
+ * either one's own CI, which is a thing worth doing and not a thing to rely
+ * on. Keeping the old name costs one line and removes the hazard. */
+static confirm_result_t request_confirm_detailed(uint32_t timeout_ms, const note_meta_t *note);
+
+static confirm_result_t request_confirm(uint32_t timeout_ms) {
+    return request_confirm_detailed(timeout_ms, NULL);
+}
+
 static confirm_result_t request_confirm_detailed(uint32_t timeout_ms, const note_meta_t *note) {
     QueueHandle_t resp_q = xQueueCreate(1, sizeof(confirm_result_t));
     remote_confirm_request_t req = {.timeout_ms = timeout_ms, .response_q = resp_q};
@@ -399,11 +416,11 @@ confirm_result_t ui_task_request_remote_confirm(const note_meta_t *note, uint32_
 }
 
 confirm_result_t ui_task_request_ota_confirm(uint32_t timeout_ms) {
-    return request_confirm_detailed(timeout_ms, NULL);
+    return request_confirm(timeout_ms);
 }
 
 confirm_result_t ui_task_request_wipe_confirm(uint32_t timeout_ms) {
     /* No note to name: a wipe is about all of them. The flat state colour is
      * all this screen has, same as the OTA prompt. */
-    return request_confirm_detailed(timeout_ms, NULL);
+    return request_confirm(timeout_ms);
 }
