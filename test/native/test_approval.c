@@ -118,7 +118,7 @@ static void test_button_2_denies(void) {
     approval_begin(&a, now, 30000);
     settle(&a, &now);
 
-    approval_state_t st = run(&a, false, true, &now, 200 * 1000);
+    approval_state_t st = run(&a, false, true, &now, 400 * 1000);
     UL_CHECK(st == APPROVAL_DENIED, "button 2 denies");
 }
 
@@ -143,7 +143,7 @@ static void test_cancel_wins_over_a_simultaneous_hold(void) {
     settle(&a, &now);
 
     run(&a, true, false, &now, APPROVAL_HOLD_US - (20 * 1000)); /* nearly there */
-    approval_state_t st = run(&a, true, true, &now, 100 * 1000); /* now both down */
+    approval_state_t st = run(&a, true, true, &now, 400 * 1000); /* now both down */
 
     UL_CHECK(st == APPROVAL_DENIED, "a cancel arriving with a completing hold still cancels");
 }
@@ -213,7 +213,7 @@ static void test_state_is_terminal(void) {
     approval_begin(&a, now, 30000);
     settle(&a, &now);
 
-    run(&a, false, true, &now, 200 * 1000);
+    run(&a, false, true, &now, 400 * 1000);
     UL_CHECK(a.state == APPROVAL_DENIED, "denied");
 
     /* Holding afterwards must not talk the machine back into approving. */
@@ -288,11 +288,11 @@ static void test_cancel_after_release_still_works(void) {
     int64_t now = 1000000;
     approval_begin(&a, now, 30000);
 
-    run(&a, false, true, &now, 200 * 1000);   /* held from before: ignored */
+    run(&a, false, true, &now, 400 * 1000);   /* held from before: ignored */
     UL_CHECK(a.state == APPROVAL_PENDING, "still pending");
 
     run(&a, false, false, &now, 100 * 1000);  /* released */
-    approval_state_t st = run(&a, false, true, &now, 200 * 1000); /* pressed afresh */
+    approval_state_t st = run(&a, false, true, &now, 400 * 1000); /* pressed afresh */
     UL_CHECK(st == APPROVAL_DENIED, "a fresh cancel press denies");
 }
 
@@ -304,6 +304,47 @@ static void test_both_stuck_lapses(void) {
 
     approval_state_t st = run(&a, true, true, &now, 800 * 1000);
     UL_CHECK(st == APPROVAL_EXPIRED, "two stuck buttons decide nothing");
+}
+
+/* A brief glitch on the cancel line must not refuse a request. Measured on a
+ * classic T-Display: a confirm over serial, then one over BLE, and the second
+ * came back refused in about a second with nobody near the device -- while the
+ * same prompt on a fresh boot timed out correctly at 31s. Not a stuck line;
+ * something makes that input read pressed briefly when the radio is busy,
+ * which is precisely what board_t_display.c warns about for GPIO35 (input-only
+ * on the classic ESP32, no internal pull resistor at all).
+ *
+ * A person does not tap cancel for 60ms. A glitch does. */
+static void test_a_brief_glitch_does_not_cancel(void) {
+    approval_t a;
+    int64_t now = 1000000;
+    approval_begin(&a, now, 30000);
+    settle(&a, &now);
+
+    for (int i = 0; i < 6; i++) {
+        run(&a, false, true, &now, 60 * 1000);   /* a glitch-length blip */
+        run(&a, false, false, &now, 200 * 1000);
+    }
+    UL_CHECK(a.state == APPROVAL_PENDING, "repeated brief blips do not refuse the request");
+
+    /* And a real press still does. */
+    approval_state_t st = run(&a, false, true, &now, 400 * 1000);
+    UL_CHECK(st == APPROVAL_DENIED, "a press of human length still denies");
+}
+
+/* The glitch must not steal an approval either: a blip part-way through a hold
+ * cannot be allowed to refuse what the owner is in the middle of granting. */
+static void test_a_glitch_does_not_interrupt_a_hold(void) {
+    approval_t a;
+    int64_t now = 1000000;
+    approval_begin(&a, now, 30000);
+    settle(&a, &now);
+
+    run(&a, true, false, &now, 800 * 1000);
+    run(&a, true, true, &now, 60 * 1000);      /* blip while still holding */
+    approval_state_t st = run(&a, true, false, &now, APPROVAL_HOLD_US);
+
+    UL_CHECK(st == APPROVAL_GRANTED, "a blip during a hold neither cancels nor restarts it");
 }
 
 void test_approval_run(void) {
@@ -326,4 +367,6 @@ void test_approval_run(void) {
     test_a_still_held_approve_button_cannot_approve_the_next_prompt();
     test_cancel_after_release_still_works();
     test_both_stuck_lapses();
+    test_a_brief_glitch_does_not_cancel();
+    test_a_glitch_does_not_interrupt_a_hold();
 }
