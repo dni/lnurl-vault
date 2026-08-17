@@ -9,7 +9,7 @@ knows nothing about LNURL/mint HTTP calls. It only ever generates secrets,
 discloses their SHA-256 hash, and tracks note state. See "Orchestration"
 below for how a browser client (e.g. a future `lnurl-wallet` integration)
 composes these commands with calls to a mint to implement rotate/split/
-merge/melt, per [LUD-25](../../luds/25.md).
+merge/melt, per [LUD-25](https://github.com/lnurl/luds/pull/301).
 
 ## Transports
 
@@ -100,7 +100,7 @@ except `export_secret`.
 ```
 
 `state` is one of `pending`, `confirmed`, `spent`. `sig` is present only if
-the note carries an offline-verification signature ([LUD-25](../../luds/25.md)).
+the note carries an offline-verification signature ([LUD-25](https://github.com/lnurl/luds/pull/301)).
 
 ### `new_secret`
 
@@ -311,7 +311,7 @@ has a real chance to leave the TX buffer first.
 ## Orchestration
 
 How a browser client composes these commands with mint HTTP calls to
-implement each [LUD-25](../../luds/25.md) operation. The device never talks
+implement each [LUD-25](https://github.com/lnurl/luds/pull/301) operation. The device never talks
 to the mint itself.
 
 **Rotate** (burn one note, mint a fresh one of the same value):
@@ -343,7 +343,7 @@ to the mint itself.
 **Minting** (paying a `payRequest` to create a brand-new note): happens
 entirely off-device — the browser pays the invoice and gets a payment
 preimage `P`. To bring `P` under this device's custody: `import_secret(P,
-...)`, then immediately **rotate** it (per [LUD-25](../../luds/25.md)'s
+...)`, then immediately **rotate** it (per [LUD-25](https://github.com/lnurl/luds/pull/301)'s
 security considerations — a payment preimage was also seen by the mint
 itself as a prior holder).
 
@@ -356,7 +356,7 @@ in which the previous holder could also redeem it.
 Independent of the commands above and not exposed over serial/BLE at all —
 this is a purely physical, local interaction (`src/ui/ui_task.c`) for
 handing a note to someone else in person, the "offline circulation" case
-[LUD-25](../../luds/25.md) itself describes. No browser or paired host is
+[LUD-25](https://github.com/lnurl/luds/pull/301) itself describes. No browser or paired host is
 involved in this flow.
 
 | Gesture | Effect |

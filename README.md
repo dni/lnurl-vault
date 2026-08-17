@@ -1,8 +1,8 @@
 # lnurl-vault
 
-**LNURLvault** — an ESP32-S3 hardware vault for [LNURLcash](../luds/25.md) bearer notes — the
-offline "banknote" scheme [lnurl-wallet](../lnurl-wallet) and
-[lnurl-mint](../lnurl-mint) implement on top of plain LUD-03
+**LNURLvault** — an ESP32-S3 hardware vault for [LNURLcash](https://github.com/lnurl/luds/pull/301) bearer notes — the
+offline "banknote" scheme [lnurl-wallet](https://github.com/dni/lnurl-wallet) and
+[lnurl-mint](https://github.com/dni/lnurl-mint) implement on top of plain LUD-03
 `withdrawRequest`. The device generates note secrets from a hardware RNG,
 discloses only their SHA-256 hash until a mint confirms a rotate/split/merge
 succeeded, stores notes through their `pending → confirmed → spent`
@@ -14,19 +14,22 @@ protocol.
 It also works fully offline, with nothing paired at all: tap either button
 to browse `CONFIRMED` notes, hold both together for ~200ms to unveil the
 selected note's `lnurlw://` URL as an on-screen QR code — the offline
-banknote handoff [LUD-25](../luds/25.md) itself describes. See
+banknote handoff [LUD-25](https://github.com/lnurl/luds/pull/301) itself describes. See
 [`docs/PROTOCOL.md`](docs/PROTOCOL.md)'s "On-device note browsing" section.
 
-Browser-side integration into `lnurl-wallet` (a `device.ts` client, pairing
-UI) is a deliberate follow-up, not part of this repo yet — this is the
-firmware and its protocol, designed to be consumed by that later.
+Browser-side integration lives in
+[lnurl-wallet](https://github.com/dni/lnurl-wallet), not here: `src/device.ts`
+(the client for the protocol below), `deviceQueue.ts`, `deviceOrchestration.ts`,
+`DeviceContext.tsx` and `pages/Vault.tsx`, with `device.test.ts` and
+`deviceOrchestration.test.ts` alongside them. This repo is the firmware and
+its wire protocol; that one consumes it.
 
 ## Status: builds, flashes, and the serial command protocol is confirmed working on real hardware
 
 This firmware **has been built successfully end to end** — bootloader,
 partition table, and `firmware.bin` all produced by a real
 `pio run -e t-display-s3` against ESP-IDF 6.0.1 (GCC 15.2.0,
-`xtensa-esp-elf` toolchain), 30.1% RAM / 25.6% flash used. That build also
+`xtensa-esp-elf` toolchain), 36.3% RAM / 27.2% flash used. That build also
 found and fixed several real, non-obvious bugs along the way, worth
 knowing about even though they're now fixed:
 
@@ -141,11 +144,14 @@ knowing about even though they're now fixed:
   call plain `nvs_flash_init()` (which — per its own doc comment — already
   handles whichever scheme Kconfig selects internally) and pinning
   `CONFIG_NVS_SEC_HMAC_EFUSE_KEY_ID`; the now-unused `nvs_keys` partition
-  was removed from `partitions.csv`. (NVS encryption has since been turned
-  off entirely — the HMAC scheme burns an eFuse on first boot. See the
-  security posture section below, and `sdkconfig.defaults`. The
-  `nvs_storage.c` simplification and the partition removal both still
-  stand.)
+  was removed from `partitions.csv`, and there is no such partition in this
+  repo today. (NVS encryption has since been turned off entirely — the HMAC
+  scheme burns an eFuse on first boot, irreversibly, as a silent side effect
+  of first boot. **Note storage is therefore not encrypted at rest: a
+  physical flash dump recovers every secret.** Physical possession is the
+  protection model. See the security posture section below, and
+  `sdkconfig.defaults`, which spells out the whole call. The `nvs_storage.c`
+  simplification and the partition removal both still stand.)
 - Two mechanisms that would have auto-fetched the QR library instead of
   vendoring it by hand were tried and empirically confirmed *not* to work
   for this framework/library combination — see `platformio.ini`'s comment.
@@ -271,15 +277,21 @@ knowing about even though they're now fixed:
   the [device console](webinstaller/console.html) too. Not yet run against
   real hardware.
 
-**What's still unverified**: this firmware *has* been flashed to a real
-T-Display S3 and the serial command protocol (get_info/list_notes/error
-handling) is confirmed working end to end over USB-CDC. On-screen
-rendering, physical button timing, BLE pairing against a real central, and
-NVS persistence across real power cycles are all still open questions — a
-compiling, serial-responsive program can still be wrong about display
-timing or BLE electrical behavior even with the serial path solid. A
-different installed ESP-IDF/PlatformIO version than the one used here could
-also still turn up something new; each fix above is documented in the
+**What has and has not been run on hardware** is tracked per area, with
+dates and firmware versions, in
+[`docs/HARDWARE-TEST-CHECKLIST.md`](docs/HARDWARE-TEST-CHECKLIST.md) — that
+file, not this paragraph, is the authority, and it marks anything unrun as
+`NOT YET BENCH-RUN` in those words rather than leaving it implied. In
+outline, as of 2026-08-17: the serial and BLE command protocols, the note
+lifecycle, the export confirm gate's timeout path, display orientation, the
+button state machine at rest, QR rendering and scanning, NVS persistence
+across resets, and crash reporting have all been exercised on a classic
+T-Display. The approval gesture itself, granting a wipe, an actual OTA
+transfer, and the ESP32-S3 target's display and native-USB paths have not.
+
+`test/hardware/bench.py` runs every check that does not need a finger on the
+board. A different installed ESP-IDF/PlatformIO version than the pinned one
+could still turn up something new; each fix above is documented in the
 relevant file's own header comment as a starting point if it does.
 
 `src/vault/` and `src/proto/` (the note state machine, SHA-256, hex, base64,
@@ -412,8 +424,10 @@ and links in a real `pio run -e t-display-s3` build. **None of it has run
 against a real device** — no actual OTA transfer over USB has happened.
 The physical-approval gate (`ui_task_request_ota_confirm`, reusing
 `ui_task.c`'s existing request queue) is architecturally identical to
-`export_secret`'s, which itself is unverified on hardware (see "Known
-limitations"). `src/ota/release_key.c`'s `OTA_RELEASE_PUBKEY` now holds a
+`export_secret`'s. That one's timeout path *is* confirmed on hardware — an
+unanswered request returns `{"ok":false,"error":"timeout"}` after ~31s over
+both transports, with the BLE link intact throughout — but nobody has yet
+pressed a button to approve an OTA image. `src/ota/release_key.c`'s `OTA_RELEASE_PUBKEY` now holds a
 real generated key (`python3 tools/ota_push.py keygen`), not the all-zero
 placeholder — `ota_begin` will accept images signed with the matching seed
 instead of failing closed against everything. That seed needs to actually
@@ -620,7 +634,6 @@ step's `find` patterns are the first thing to check.
 - **OTA exists but is untested on hardware and unusable until a release key
   is generated** — see the "OTA firmware updates" section above for what's
   built, what's cross-checked, and what still needs a real device.
-- **No `lnurl-wallet` integration yet** — see the top of this file.
 - BLE pairing/bonding is unauthenticated in this v1 (any nearby device can
   connect and issue commands, though it still can't extract a secret
   without a physical gesture on the vault itself). Consider BLE
