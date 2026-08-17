@@ -53,6 +53,7 @@ SRC = ../../src/vault/sha256.c \
       test_vault.c \
       test_dispatcher.c \
       test_secret_leak.c \
+      test_response_bounds.c \
       test_button_fsm.c \
       test_note_url.c \
       test_ble_frame.c \
