@@ -11,6 +11,14 @@
 
 #define TICK_US 10000 /* 10ms, comfortably finer than ui_task's 30ms poll */
 
+/* Both buttons released for a moment, which is what actually happens between
+ * a prompt appearing and somebody reaching for a button. approval_begin()
+ * treats a button already down as stale until it has been seen released -- see
+ * approval.h -- so a test that presses from the very first tick is modelling a
+ * held-over or stuck button, not a person answering. The cases that mean to
+ * model that say so. */
+static void settle(approval_t *a, int64_t *now);
+
 /* Runs the machine forward for `duration_us` holding the given buttons,
  * returning the state it settled in. */
 static approval_state_t run(approval_t *a, bool approve, bool cancel, int64_t *now,
@@ -24,10 +32,15 @@ static approval_state_t run(approval_t *a, bool approve, bool cancel, int64_t *n
     return st;
 }
 
+static void settle(approval_t *a, int64_t *now) {
+    run(a, false, false, now, 50 * 1000);
+}
+
 static void test_a_tap_is_not_enough(void) {
     approval_t a;
     int64_t now = 1000000;
     approval_begin(&a, now, 30000);
+    settle(&a, &now);
 
     /* The old gesture: a brief press of button 1. */
     run(&a, true, false, &now, 120 * 1000);
@@ -40,6 +53,7 @@ static void test_a_full_hold_approves(void) {
     approval_t a;
     int64_t now = 1000000;
     approval_begin(&a, now, 30000);
+    settle(&a, &now);
 
     approval_state_t st = run(&a, true, false, &now, APPROVAL_HOLD_US + TICK_US);
     UL_CHECK(st == APPROVAL_GRANTED, "holding button 1 for the full period approves");
@@ -49,6 +63,7 @@ static void test_hold_just_short_does_not_approve(void) {
     approval_t a;
     int64_t now = 1000000;
     approval_begin(&a, now, 30000);
+    settle(&a, &now);
 
     approval_state_t st = run(&a, true, false, &now, APPROVAL_HOLD_US - (50 * 1000));
     UL_CHECK(st == APPROVAL_PENDING, "just short of the full hold is not an approval");
@@ -61,6 +76,7 @@ static void test_bounce_mid_hold_does_not_break_the_hold(void) {
     approval_t a;
     int64_t now = 1000000;
     approval_begin(&a, now, 30000);
+    settle(&a, &now);
 
     run(&a, true, false, &now, 900 * 1000); /* most of the way there */
 
@@ -78,6 +94,7 @@ static void test_real_release_abandons_the_hold(void) {
     approval_t a;
     int64_t now = 1000000;
     approval_begin(&a, now, 30000);
+    settle(&a, &now);
 
     run(&a, true, false, &now, 900 * 1000);
     run(&a, false, false, &now, 300 * 1000); /* well past the bounce window */
@@ -99,6 +116,7 @@ static void test_button_2_denies(void) {
     approval_t a;
     int64_t now = 1000000;
     approval_begin(&a, now, 30000);
+    settle(&a, &now);
 
     approval_state_t st = run(&a, false, true, &now, 200 * 1000);
     UL_CHECK(st == APPROVAL_DENIED, "button 2 denies");
@@ -111,6 +129,7 @@ static void test_button_2_never_approves(void) {
     approval_t a;
     int64_t now = 1000000;
     approval_begin(&a, now, 30000);
+    settle(&a, &now);
 
     approval_state_t st = run(&a, false, true, &now, APPROVAL_HOLD_US * 2);
     UL_CHECK(st == APPROVAL_DENIED, "holding button 2 denies, however long it is held");
@@ -121,6 +140,7 @@ static void test_cancel_wins_over_a_simultaneous_hold(void) {
     approval_t a;
     int64_t now = 1000000;
     approval_begin(&a, now, 30000);
+    settle(&a, &now);
 
     run(&a, true, false, &now, APPROVAL_HOLD_US - (20 * 1000)); /* nearly there */
     approval_state_t st = run(&a, true, true, &now, 100 * 1000); /* now both down */
@@ -134,6 +154,7 @@ static void test_cancel_bounce_does_not_deny(void) {
     approval_t a;
     int64_t now = 1000000;
     approval_begin(&a, now, 30000);
+    settle(&a, &now);
 
     for (int i = 0; i < 5; i++) {
         run(&a, false, true, &now, 10 * 1000); /* under the debounce */
@@ -148,6 +169,7 @@ static void test_timeout_is_distinct_from_denial(void) {
     approval_t a;
     int64_t now = 1000000;
     approval_begin(&a, now, 200); /* 200ms */
+    settle(&a, &now);
 
     approval_state_t st = run(&a, false, false, &now, 400 * 1000);
     UL_CHECK(st == APPROVAL_EXPIRED, "nobody answering expires");
@@ -162,6 +184,7 @@ static void test_a_hold_in_progress_at_the_deadline_may_finish(void) {
     int64_t now = 1000000;
     /* Deadline lands 1s into a 2s hold. */
     approval_begin(&a, now, 1000);
+    settle(&a, &now);
 
     approval_state_t st = run(&a, true, false, &now, APPROVAL_HOLD_US + TICK_US);
     UL_CHECK(st == APPROVAL_GRANTED, "a hold underway when the window lapses may complete");
@@ -173,6 +196,7 @@ static void test_the_grace_is_bounded(void) {
     approval_t a;
     int64_t now = 1000000;
     approval_begin(&a, now, 100);
+    settle(&a, &now);
 
     /* Approve is held, but the hold keeps being restarted by real releases,
      * so it never completes. The prompt must still expire. */
@@ -187,6 +211,7 @@ static void test_state_is_terminal(void) {
     approval_t a;
     int64_t now = 1000000;
     approval_begin(&a, now, 30000);
+    settle(&a, &now);
 
     run(&a, false, true, &now, 200 * 1000);
     UL_CHECK(a.state == APPROVAL_DENIED, "denied");
@@ -200,6 +225,7 @@ static void test_progress_fills_and_does_not_stutter_on_bounce(void) {
     approval_t a;
     int64_t now = 1000000;
     approval_begin(&a, now, 30000);
+    settle(&a, &now);
 
     UL_CHECK(approval_progress_permille(&a, now) == 0, "no progress before anything is held");
 
@@ -214,6 +240,70 @@ static void test_progress_fills_and_does_not_stutter_on_bounce(void) {
 
     run(&a, true, false, &now, APPROVAL_HOLD_US);
     UL_CHECK(approval_progress_permille(&a, now) == 1000, "full once granted");
+}
+
+/* ---- a held button is not a decision ---------------------------------- */
+
+/* The one that came from hardware. On an ESP32-S3 the cancel button read as
+ * permanently pressed -- wrong pin, or a board revision that moved it -- and
+ * every prompt was refused in under a second with nobody touching the device.
+ * export_secret could not succeed at all.
+ *
+ * A stuck button must not be able to answer. It cannot be made to approve
+ * anything either, so the prompt simply lapses, which is the safe outcome and
+ * a visible one. */
+static void test_a_stuck_cancel_button_cannot_answer(void) {
+    approval_t a;
+    int64_t now = 1000000;
+    approval_begin(&a, now, 300);
+
+    /* Held down from before the prompt existed and never released. */
+    approval_state_t st = run(&a, false, true, &now, 600 * 1000);
+
+    UL_CHECK(st != APPROVAL_DENIED, "a button stuck down since before the prompt does not deny");
+    UL_CHECK(st == APPROVAL_EXPIRED, "the prompt lapses instead, which is safe and visible");
+}
+
+/* The other side of the same rule, and the one with teeth: an owner still
+ * holding button 1 from approving one request must not silently approve the
+ * next request that arrives. They decided about the first one, not this one. */
+static void test_a_still_held_approve_button_cannot_approve_the_next_prompt(void) {
+    approval_t a;
+    int64_t now = 1000000;
+    approval_begin(&a, now, 30000);
+
+    /* Never released since the previous prompt. */
+    approval_state_t st = run(&a, true, false, &now, APPROVAL_HOLD_US * 3);
+    UL_CHECK(st == APPROVAL_PENDING, "a button held over from the last prompt approves nothing");
+
+    /* Let go, then hold again: that is a fresh decision and must work. */
+    run(&a, false, false, &now, 100 * 1000);
+    st = run(&a, true, false, &now, APPROVAL_HOLD_US + TICK_US);
+    UL_CHECK(st == APPROVAL_GRANTED, "releasing and holding again does approve");
+}
+
+/* Cancel behaves the same way: released first, then pressed, is a decision. */
+static void test_cancel_after_release_still_works(void) {
+    approval_t a;
+    int64_t now = 1000000;
+    approval_begin(&a, now, 30000);
+
+    run(&a, false, true, &now, 200 * 1000);   /* held from before: ignored */
+    UL_CHECK(a.state == APPROVAL_PENDING, "still pending");
+
+    run(&a, false, false, &now, 100 * 1000);  /* released */
+    approval_state_t st = run(&a, false, true, &now, 200 * 1000); /* pressed afresh */
+    UL_CHECK(st == APPROVAL_DENIED, "a fresh cancel press denies");
+}
+
+/* Both stuck at once must still lapse rather than resolve either way. */
+static void test_both_stuck_lapses(void) {
+    approval_t a;
+    int64_t now = 1000000;
+    approval_begin(&a, now, 300);
+
+    approval_state_t st = run(&a, true, true, &now, 800 * 1000);
+    UL_CHECK(st == APPROVAL_EXPIRED, "two stuck buttons decide nothing");
 }
 
 void test_approval_run(void) {
@@ -232,4 +322,8 @@ void test_approval_run(void) {
     test_the_grace_is_bounded();
     test_state_is_terminal();
     test_progress_fills_and_does_not_stutter_on_bounce();
+    test_a_stuck_cancel_button_cannot_answer();
+    test_a_still_held_approve_button_cannot_approve_the_next_prompt();
+    test_cancel_after_release_still_works();
+    test_both_stuck_lapses();
 }

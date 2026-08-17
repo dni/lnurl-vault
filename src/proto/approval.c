@@ -3,6 +3,11 @@
 void approval_begin(approval_t *a, int64_t now_us, uint32_t timeout_ms) {
     a->deadline_us = now_us + (int64_t)timeout_ms * 1000;
     a->state = APPROVAL_PENDING;
+    /* Assume both buttons may be down until seen otherwise. approval_poll()
+     * clears each the first time it reads that button released, and until
+     * then that button cannot answer anything -- see approval.h. */
+    a->approve_stale = true;
+    a->cancel_stale = true;
     a->holding = false;
     a->hold_since_us = 0;
     a->release_seen = false;
@@ -16,6 +21,19 @@ approval_state_t approval_poll(approval_t *a, bool approve_pressed, bool cancel_
     if (a->state != APPROVAL_PENDING) {
         return a->state;
     }
+
+    /* A press only counts once that button has been seen released since the
+     * prompt began. A level is not a decision: the owner may still be holding
+     * the button that answered the LAST prompt, and a button stuck low would
+     * otherwise answer every prompt the device ever shows. */
+    if (!approve_pressed) {
+        a->approve_stale = false;
+    }
+    if (!cancel_pressed) {
+        a->cancel_stale = false;
+    }
+    approve_pressed = approve_pressed && !a->approve_stale;
+    cancel_pressed = cancel_pressed && !a->cancel_stale;
 
     /* Cancel first, deliberately: if a cancel and a completing hold land on
      * the same tick, the ambiguity resolves toward not disclosing. */

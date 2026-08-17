@@ -192,9 +192,6 @@ static confirm_result_t service_remote_confirm(uint32_t timeout_ms) {
             drawn = p;
         }
 
-        if (state == APPROVAL_PENDING) {
-            vTaskDelay(pdMS_TO_TICKS(20));
-        }
         wdt_feed(); /* a 30s hold is patience, not a wedge */
         if (state == APPROVAL_PENDING) {
             vTaskDelay(pdMS_TO_TICKS(20));

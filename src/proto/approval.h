@@ -35,6 +35,16 @@
  *  - A timeout is its own outcome, distinct from a denial, so the screen can
  *    say the prompt went stale rather than leaving something that looks live
  *    but is not.
+ *  - A button ALREADY HELD when the prompt appears answers nothing. Both
+ *    buttons must be seen released before a press counts. Without that, a
+ *    level is mistaken for a decision, and there are two ways that bites:
+ *    an owner still holding button 1 from approving one request silently
+ *    approves the next one that arrives, having decided nothing about it;
+ *    and a cancel button stuck low -- a wrong pin, a shorted pad, a board
+ *    revision that moved it -- turns every prompt the device will ever show
+ *    into an instant refusal. The second is not hypothetical: on an
+ *    ESP32-S3 it made export_secret impossible, returning user_declined in
+ *    0.9s with nobody touching the device.
  *
  * Adapted from forgesworn/heartwood-esp32's approval.rs, which found each of
  * these on real hardware. */
@@ -60,6 +70,12 @@ typedef enum {
 typedef struct {
     int64_t deadline_us;
     approval_state_t state;
+
+    /* Set while a button was already down when the prompt began. Cleared
+     * only once that button has been seen released, after which a press is
+     * a fresh one and counts. */
+    bool approve_stale;
+    bool cancel_stale;
 
     bool holding;
     int64_t hold_since_us;
