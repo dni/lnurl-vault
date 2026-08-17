@@ -111,14 +111,14 @@ board_display_t board_display_init(void) {
     esp_lcd_panel_reset(panel);
     esp_lcd_panel_init(panel);
     esp_lcd_panel_invert_color(panel, true); /* this panel ships inverted */
-    esp_lcd_panel_swap_xy(panel, true);
+
     /* Both axes mirrored, established empirically on the board rather than
      * reasoned from the datasheet -- the self-test's red corner was walked
      * from bottom-left to top-left one boolean at a time:
      *
      *   mirror(false, true)  -> red bottom-LEFT
      *   mirror(false, false) -> red bottom-RIGHT
-     *   mirror(true,  true)  -> red top-left, correct
+     *   mirror(true,  true)  -> red top-left
      *
      * Note what the middle line shows: toggling mirror_Y moved the image
      * HORIZONTALLY. esp_lcd applies mirroring in panel coordinates, before
@@ -126,9 +126,35 @@ board_display_t board_display_init(void) {
      * transposed relative to the surface we draw into. Worth knowing before
      * "fixing" this by inspection.
      *
+     * THAT WALK PICKED THE WRONG SETTING, and could not have picked the right
+     * one. It tracked a single red square, and a corner marker cannot tell a
+     * rotation from a reflection: mirror(true, true) and mirror(true, false)
+     * both put red in the top-left, and only one of them is not mirrored.
+     * swap_xy is itself a transpose -- a reflection -- so the total transform
+     * has to be checked with something asymmetric, not with a corner.
+     *
+     * Nothing drawn since could reveal it. A flat colour has no handedness. A
+     * QR code has none either, as far as a phone is concerned: decoders
+     * correct orientation themselves, so a mirrored code still scans. On-screen
+     * TEXT was the first content with a handedness, and it came out reversed
+     * the moment it appeared.
+     *
+     * Re-established with a letter F -- asymmetric under every rotation and
+     * every reflection, so exactly one of the four flips can look right -- drawn
+     * four times, each tagged with a COUNT of squares rather than a label or a
+     * position, since which way round the screen is was the open question.
+     * Reported from the bench: the whole layout sat on the wrong side, and the
+     * copy that read correctly was the one pre-flipped horizontally. That is a
+     * horizontal mirror, which under swap_xy is mirror_Y.
+     *
+     * The gaps do not move with it: on this glass the 240-pixel axis sits at
+     * offset 40 in a 320-wide controller window, and 320 - 240 - 40 is also 40,
+     * so flipping that axis lands on the same offset.
+     *
      * These values are for THIS panel. The S3 board uses a different
-     * combination despite the same controller family. */
-    esp_lcd_panel_mirror(panel, true, true);
+     * combination despite the same controller family, and has NOT been checked
+     * this way -- see docs/HARDWARE-TEST-CHECKLIST.md. */
+    BOARD_APPLY_ORIENTATION(panel, true, true, false);
     esp_lcd_panel_set_gap(panel, PANEL_GAP_X, PANEL_GAP_Y);
     esp_lcd_panel_disp_on_off(panel, true);
 

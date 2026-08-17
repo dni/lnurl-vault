@@ -206,8 +206,13 @@ board_display_t board_display_init(void) {
      * at all, so they are worth checking individually on the bench rather than
      * as a set. */
     esp_lcd_panel_invert_color(panel, true); /* IPS panel: inverted is correct */
-    esp_lcd_panel_swap_xy(panel, true);
-    esp_lcd_panel_mirror(panel, false, true);
+    /* swap_xy plus one mirror: two reflections, so a rotation rather than a
+     * mirroring -- see BOARD_APPLY_ORIENTATION in board.h, and the classic
+     * board, which had three and was mirrored for weeks without anyone
+     * noticing. This board's combination was already even, so it does NOT
+     * carry that fault. Which rotation is right here is still unverified on
+     * glass; see docs/HARDWARE-TEST-CHECKLIST.md. */
+    BOARD_APPLY_ORIENTATION(panel, true, false, true);
     esp_lcd_panel_set_gap(panel, PANEL_GAP_X, PANEL_GAP_Y);
 
     esp_lcd_panel_disp_on_off(panel, true);

@@ -3,7 +3,8 @@
 
 #include <stdbool.h>
 
-#include "esp_lcd_types.h" /* esp_lcd_panel_handle_t */
+#include "esp_lcd_panel_ops.h" /* esp_lcd_panel_swap_xy / _mirror */
+#include "esp_lcd_types.h"    /* esp_lcd_panel_handle_t */
 
 /* Board hardware-abstraction seam.
  *
@@ -28,6 +29,42 @@
 /* Reported by get_info, so a client -- and a bug report -- can say which pin
  * map and which panel are actually in play. */
 extern const char *const BOARD_NAME;
+
+/* Applies a panel's orientation, and refuses at compile time to configure one
+ * that is REFLECTED rather than merely rotated.
+ *
+ * Both esp_lcd_panel_swap_xy() and each esp_lcd_panel_mirror() flag are
+ * reflections -- swap_xy is a transpose, which is a reflection about the
+ * diagonal. Composing them, the image comes out un-mirrored only when an EVEN
+ * number of reflections is applied in total. Odd, and everything drawn is
+ * handed the wrong way round.
+ *
+ * That is not a theoretical concern. The classic T-Display shipped with
+ * swap_xy plus BOTH mirror flags -- three reflections, odd -- and every pixel
+ * it drew was mirrored from the day the board was added. It survived because
+ * the orientation was established by walking a red square to a corner, and a
+ * corner marker cannot tell a rotation from a reflection: two different
+ * settings put the marker in the same corner and only one of them is right.
+ * Nothing drawn afterwards could reveal it either. A flat colour has no
+ * handedness, and neither does a QR code as far as a phone is concerned --
+ * decoders correct orientation themselves, so the mirrored codes still
+ * scanned. It took putting readable text on the screen, and a person saying
+ * it looked wrong.
+ *
+ * The parity rule catches all of that without a display, a camera or a
+ * person. It says nothing about WHICH rotation is right -- that still needs an
+ * asymmetric figure on real glass, see docs/HARDWARE-TEST-CHECKLIST.md -- only
+ * that the result is a rotation at all, which is the half that was silently
+ * wrong for weeks. */
+#define BOARD_APPLY_ORIENTATION(panel, swap_xy, mirror_x, mirror_y)                              \
+    do {                                                                                          \
+        _Static_assert((((swap_xy) ? 1 : 0) + ((mirror_x) ? 1 : 0) + ((mirror_y) ? 1 : 0)) % 2 == 0, \
+                       "panel orientation is a reflection, not a rotation: swap_xy and each "     \
+                       "mirror flag are reflections, so an odd number of them mirrors everything " \
+                       "drawn. Flip one flag and re-check which rotation is right on real glass."); \
+        esp_lcd_panel_swap_xy((panel), (swap_xy));                                                \
+        esp_lcd_panel_mirror((panel), (mirror_x), (mirror_y));                                    \
+    } while (0)
 
 typedef struct {
     esp_lcd_panel_handle_t panel; /* NULL if bring-up failed */
