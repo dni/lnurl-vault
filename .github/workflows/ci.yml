@@ -86,11 +86,6 @@ jobs:
 
   sanitizers:
     name: Native tests under ASan/UBSan
-      - name: Build firmware
-        run: pio run -e t-display-s3
-
-  ota-push-tests:
-    name: OTA host-tool tests (ota_push.py)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -105,6 +100,13 @@ jobs:
         run: |
           cd test/native
           make test-sanitize
+
+  ota-push-tests:
+    name: OTA host-tool tests (ota_push.py)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
