@@ -49,4 +49,26 @@ void test_ota_sign_run(void) {
     memset(zero_key, 0, sizeof(zero_key));
     UL_CHECK(!ota_verify_signature(zero_key, digest, signature),
              "an all-zero placeholder public key fails closed, not open");
+
+    /* A NULL argument means "this device has nothing to verify with", which
+     * must refuse rather than read address zero. Without this, a caller that
+     * skips its own ota_pubkey check dereferences NULL inside monocypher
+     * while loading the key — a remote panic on an unsigned image instead of
+     * a rejection. dispatcher.c guards both of its call sites; this is the
+     * backstop for the next call site somebody adds. */
+    UL_CHECK(!ota_verify_signature(NULL, digest, signature),
+             "a NULL public key is refused, not dereferenced");
+    UL_CHECK(!ota_verify_signature(public_key, NULL, signature),
+             "a NULL digest is refused, not dereferenced");
+    UL_CHECK(!ota_verify_signature(public_key, digest, NULL),
+             "a NULL signature is refused, not dereferenced");
+
+    /* Domain separation is load-bearing, not decoration: a signature the
+     * real release key made over the bare digest — the obvious way to get
+     * this wrong, and the shape another tool signing "the sha256" would
+     * produce — must not verify as a firmware release. */
+    uint8_t bare_sig[OTA_SIGNATURE_LEN];
+    crypto_ed25519_sign(bare_sig, secret_key, digest, OTA_DIGEST_LEN);
+    UL_CHECK(!ota_verify_signature(public_key, digest, bare_sig),
+             "a genuine signature over the undomained digest is not a valid release signature");
 }
