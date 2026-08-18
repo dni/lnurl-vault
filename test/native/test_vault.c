@@ -168,8 +168,18 @@ static int fake_note_find(const char *id) {
     return -1;
 }
 
+/* When set, the matching save/delete reports failure -- a full NVS partition
+ * or a transient flash write error. The stored data is left as it was, exactly
+ * as a failed nvs_set_blob/commit leaves the prior value intact. */
+static bool fake_save_note_fails = false;
+static bool fake_save_index_fails = false;
+static bool fake_delete_note_fails = false;
+
 static bool fake_save_note(const note_t *note, void *ctx) {
     (void)ctx;
+    if (fake_save_note_fails) {
+        return false;
+    }
     int idx = fake_note_find(note->id);
     if (idx < 0) {
         for (int i = 0; i < FAKE_MAX; i++) {
@@ -208,6 +218,9 @@ static bool fake_load_note(const char *id, note_t *out, void *ctx) {
 
 static bool fake_delete_note(const char *id, void *ctx) {
     (void)ctx;
+    if (fake_delete_note_fails) {
+        return false;
+    }
     int idx = fake_note_find(id);
     if (idx < 0) {
         return false;
@@ -237,6 +250,9 @@ static bool fake_load_index(char ids[][VAULT_ID_BUF], size_t max, size_t *count,
 
 static bool fake_save_index(const char ids[][VAULT_ID_BUF], size_t count, void *ctx) {
     (void)ctx;
+    if (fake_save_index_fails) {
+        return false;
+    }
     fake_index_count = count < FAKE_MAX ? count : FAKE_MAX;
     for (size_t i = 0; i < fake_index_count; i++) {
         memcpy(fake_index_ids[i], ids[i], VAULT_ID_BUF);
@@ -249,6 +265,9 @@ static void fake_reset(void) {
     fake_index_count = 0;
     fake_short_note_id = NULL;
     fake_index_read_fails = false;
+    fake_save_note_fails = false;
+    fake_save_index_fails = false;
+    fake_delete_note_fails = false;
 }
 
 /* persist_index() already refuses to drop an id whose *note* failed to load,
@@ -425,6 +444,74 @@ static void test_persistence_roundtrip(void) {
     UL_CHECK(!vault_get_meta(id, &meta), "deletion survives a reload from storage");
 }
 
+/* A write that does not reach flash must not be reported as success. Storage
+ * failing is an ordinary outcome of use -- a full NVS partition is not
+ * corruption -- and a note the host is told exists but that never persisted is
+ * money destroyed on the next reboot. Every mutation rolls its RAM change back
+ * and returns an error when persistence fails, so RAM never disagrees with what
+ * a reboot would restore. */
+static void test_persist_failure_is_refused(void) {
+    fake_reset();
+    vault_storage_t storage = {
+        .load_index = fake_load_index,
+        .save_index = fake_save_index,
+        .load_note = fake_load_note,
+        .save_note = fake_save_note,
+        .delete_note = fake_delete_note,
+        .ctx = NULL,
+    };
+    vault_init(&storage, NULL);
+    srand(2024);
+    char id[VAULT_ID_BUF], h[VAULT_HASH_HEX_BUF];
+    note_meta_t meta;
+
+    /* Creation, blob write fails: refused, and nothing left behind. */
+    fake_save_note_fails = true;
+    UL_CHECK(vault_new_secret(rng_basic, NULL, 0, "doomed", id, h) != VAULT_OK,
+             "new_secret whose blob write fails is refused, not reported ok:true");
+    fake_save_note_fails = false;
+    UL_CHECK(vault_count() == 0, "a refused creation leaves no note in RAM");
+    vault_init(&storage, NULL);
+    UL_CHECK(vault_count() == 0, "and none on flash after a reload");
+
+    /* Creation, index write fails: refused too, and the written blob is undone
+     * so it is not left as an orphan a later boot would resurrect. */
+    fake_save_index_fails = true;
+    UL_CHECK(vault_new_secret(rng_basic, NULL, 0, "doomed2", id, h) != VAULT_OK,
+             "new_secret whose index write fails is refused");
+    fake_save_index_fails = false;
+    UL_CHECK(vault_count() == 0, "a refused creation leaves no note in RAM");
+    vault_init(&storage, NULL);
+    UL_CHECK(vault_count() == 0 && !vault_get_meta(id, &meta),
+             "the rolled-back blob is not left behind as a loadable note");
+
+    /* A note that DID persist, then a spend whose write fails: it stays
+     * CONFIRMED in RAM, not SPENT -- no reboot-resurrected double-spend. */
+    char keeper[VAULT_ID_BUF];
+    UL_CHECK(vault_new_secret(rng_basic, NULL, 0, "keeper", keeper, h) == VAULT_OK,
+             "a note persists when storage is healthy");
+    UL_CHECK(vault_confirm(keeper, 4200, "mint.example", NULL) == VAULT_OK, "and confirms");
+
+    fake_save_note_fails = true;
+    UL_CHECK(vault_mark_spent(keeper) != VAULT_OK, "mark_spent whose write fails is refused");
+    fake_save_note_fails = false;
+    UL_CHECK(vault_get_meta(keeper, &meta) && meta.state == NOTE_STATE_CONFIRMED,
+             "the note stays CONFIRMED, not SPENT-only-in-RAM");
+    UL_CHECK(vault_mark_spent(keeper) == VAULT_OK, "and a retry once storage recovers succeeds");
+
+    /* confirm whose write fails leaves the note PENDING, so export keeps
+     * refusing it until the confirm actually reaches flash. */
+    char pending[VAULT_ID_BUF];
+    UL_CHECK(vault_new_secret(rng_basic, NULL, 0, "pending", pending, h) == VAULT_OK,
+             "a fresh PENDING note");
+    fake_save_note_fails = true;
+    UL_CHECK(vault_confirm(pending, 9000, "mint.example", NULL) != VAULT_OK,
+             "confirm whose write fails is refused");
+    fake_save_note_fails = false;
+    UL_CHECK(vault_get_meta(pending, &meta) && meta.state == NOTE_STATE_PENDING,
+             "the note stays PENDING rather than CONFIRMED-only-in-RAM");
+}
+
 void test_vault_run(void) {
     test_state_machine();
     test_split_and_merge_lineage();
@@ -432,4 +519,5 @@ void test_vault_run(void) {
     test_persistence_roundtrip();
     test_load_bounds_parent_count();
     test_unreadable_index_is_not_an_empty_vault();
+    test_persist_failure_is_refused();
 }
