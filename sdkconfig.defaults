@@ -55,6 +55,11 @@ CONFIG_ESP_WIFI_ENABLED=n
 # secret.c and README.md's security posture section.
 CONFIG_BT_ENABLED=y
 CONFIG_BT_NIMBLE_ENABLED=y
+# One connection at a time. The device is a single-peer vault, and ble_gatt.c
+# keeps one reassembly/tx state (g_conn_handle/g_rx/g_tx_buf); a second central
+# would interleave framing and could be notified another's response, including
+# an export reply. Default was 3.
+CONFIG_BT_NIMBLE_MAX_CONNECTIONS=1
 
 # --- Flash size -------------------------------------------------------------
 # Both supported boards ship 16MB on the common variants; adjust if yours
