@@ -514,7 +514,10 @@ change is the likely cause and what to check against.
 Pushing a tag (`git tag v0.1.0 && git push origin v0.1.0`) triggers
 [`.github/workflows/release.yml`](.github/workflows/release.yml), which:
 
-1. Builds the firmware with PlatformIO (same as "Build & flash" above).
+1. Builds the firmware with PlatformIO for **both** supported boards (same
+   as "Build & flash" above). Releases used to build only the S3, so anyone
+   holding a classic T-Display got no installer image and no OTA image at
+   all, with nothing saying so.
 2. Signs `firmware.bin` for OTA (`tools/ota_push.py sign`, driven by the
    `OTA_SIGNING_SEED` repository secret) and publishes `firmware.bin.sig`
    alongside it — see "OTA firmware updates" above for the scheme and
@@ -522,10 +525,19 @@ Pushing a tag (`git tag v0.1.0 && git push origin v0.1.0`) triggers
    the first place. Fails the whole release closed if the secret isn't
    set, deliberately, rather than shipping a release nobody's device can
    ever accept over OTA.
-3. Merges `bootloader.bin` + `partitions.bin` + `firmware.bin` into one
-   `merged-firmware.bin` via `esptool.py merge_bin`, with the SPI flash
-   mode/frequency/size baked in (`dio`/`80m`/`16MB` — verified directly
-   against this board's own `pio run -t upload` invocation, not guessed).
+3. Merges `bootloader.bin` + `partitions.bin` + `ota_data_initial.bin` +
+   `firmware.bin` into one `merged-firmware.bin` per board via
+   `esptool.py merge_bin`, with each board's SPI flash mode/frequency/size
+   and — importantly — its own bootloader offset baked in, all read off
+   that board's own `pio run -t upload -v` invocation rather than guessed:
+
+   | Board | Flash | Bootloader at |
+   |---|---|---|
+   | ESP32-S3 | `dio` / `80m` / `16MB` | `0x0` |
+   | classic ESP32 | `dio` / `40m` / `16MB` | `0x1000` |
+
+   That offset differs by chip and an image built with the wrong one flashes
+   cleanly and never boots.
    [esp-web-tools](https://esphome.github.io/esp-web-tools/)' own docs are
    explicit that it can't patch these on the fly when writing multiple
    separate parts over Web Serial, and that ESP-IDF firmware needs to be
@@ -536,10 +548,11 @@ Pushing a tag (`git tag v0.1.0 && git push origin v0.1.0`) triggers
    bootloader or partition table, so it's signed separately in step 2
    rather than as part of this merge.)
 4. Publishes a GitHub Release for the tag with all of the above (including
-   `firmware.bin.sig`) plus a `manifest.json` pointing at the single merged
-   binary (offset `0` — `partitions.csv`'s offsets are already baked into
-   the merge, not re-declared in the manifest the way an earlier version
-   of this workflow did it).
+   both `.sig` files and a `SHA256SUMS` over everything) plus a
+   `manifest.json` carrying **both** boards — esp-web-tools picks the build
+   matching the chip it finds. Each build points at its own merged binary at
+   offset `0`; `partitions.csv`'s offsets are already baked into the merge,
+   not re-declared in the manifest the way an earlier version did it.
 5. Regenerates and deploys **[`webinstaller/`](webinstaller/)** to GitHub
    Pages: a page that lists every published release (fetched via `gh
    release list`, no server needed beyond static Pages hosting) and lets a
@@ -548,7 +561,19 @@ Pushing a tag (`git tag v0.1.0 && git push origin v0.1.0`) triggers
    binaries are copied into the deployed site itself (`firmware/<tag>/`)
    rather than linked cross-origin to GitHub's release CDN, which doesn't
    serve CORS headers `fetch()` would need — see the workflow's "Fetch
-   every release's firmware assets" step.
+   every release's firmware assets" step, which then **verifies that every
+   file each manifest references actually landed in the site** and fails the
+   job otherwise. That check exists because the installer had never once
+   worked: `merged-firmware.bin` was not among the copied patterns even
+   though it is the only file the manifest names, and the step reported
+   success while producing an empty `firmware/` directory, so every release
+   the page offered returned 404. A release that does not install is worse
+   than no release, because it looks like it worked.
+
+   A release whose assets cannot satisfy its manifest is dropped from the
+   page rather than failing the job — `v0.0.2` predates `merged-firmware.bin`
+   and nobody can change that history — and `releases.json` is filtered to
+   match, so the dropdown never offers a version that 404s on selection.
 
 That last step also runs standalone (`workflow_dispatch`, no new tag
 needed) — useful for updating `webinstaller/index.html` itself, or after
@@ -562,9 +587,23 @@ Secrets and variables → Actions), from `python3 tools/ota_push.py keygen`
 hardcodes this repo as `dni/lnurl-vault` in a couple of "view source"
 links.
 
-This workflow has now actually run end to end — a real tagged release has
-gone through it, unlike (per the Status section above) the rest of this
-project's ESP-IDF-specific parts before their own first real hardware run.
+**A flashed install erases every note on the device.** `merge_bin` pads the
+gaps between parts, so an image written from offset `0` covers the NVS
+region with `0xFF` — measured, on a board that went from a full vault to
+zero notes across a re-install. It is not an update in place, whatever the
+erase prompt suggests. Updating a device that already holds notes means a
+signed OTA image, which only ever replaces the app partition.
+
+This workflow has run and reported success on real tags. That is not the
+same as having worked: v0.0.2 through v0.0.4 all published usable release
+artefacts and all deployed an installer page that could not install any of
+them. What *is* verified as of v0.0.4 is the artefact side — checksums
+verify, and `firmware.bin.sig` verifies against the public key compiled into
+the firmware, over the domain-separated message `ota_signing_message()`
+builds rather than the bare digest. The device side is verified as far as
+`ota_begin`: a real board accepts that signature and refuses a tampered one
+in 0.2s, before the owner is prompted. Nothing has yet completed an approved
+transfer. See `docs/HARDWARE-TEST-CHECKLIST.md` sections 15 and 16.
 If `.pio/build/t-display-s3/`'s actual output filenames ever stop matching
 what the "Collect build outputs" step expects (a different PlatformIO/
 ESP-IDF version resolved by the runner could still rename them), that

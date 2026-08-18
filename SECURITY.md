@@ -67,6 +67,20 @@ The portable core — note state machine, protocol dispatch, framing, the
 approval gesture, signature verification — is covered by `test/native/`, which
 runs on every push and needs no hardware.
 
+## Installing over an existing device destroys its notes
+
+The web installer writes a single merged image from offset 0, and the padding
+between its parts covers the storage region. A re-install is therefore not an
+update in place: **every note on the device is erased**, whatever the erase
+prompt appears to offer. Measured, not inferred — a board holding a full vault
+came back with none.
+
+Updating a device that already holds notes means a signed OTA image, which
+only ever replaces the app partition and never touches storage.
+
+That is not a vulnerability, but it is the kind of thing people discover the
+expensive way, so it is written down here as well as on the installer page.
+
 ## Firmware updates
 
 OTA images are ed25519-signed and verified **twice**: at `ota_begin` against

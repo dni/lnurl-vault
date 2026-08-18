@@ -77,19 +77,37 @@ jobs:
       # hardcoded to 0.1.0 in platformio.ini, which meant every release ever
       # built reported 0.1.0 -- worse than reporting nothing, because a bug
       # report quoting it sends you to the wrong commit.
+      # BOTH supported boards. Releases used to build only the S3, so anyone
+      # holding a classic T-Display -- a target this repo has supported since
+      # the board seam landed -- got no installer image and no OTA image at
+      # all, with nothing saying so.
       - name: Build firmware
-        run: pio run -e t-display-s3
+        run: pio run -e t-display-s3 -e t-display
         env:
           LNURLVAULT_FW_VERSION: ${{ github.ref_name }}
 
+      # The S3's artefacts keep their plain names, so existing links and any
+      # consumer of an older release still resolve. The classic board's are
+      # suffixed.
+      #
+      # ota_data_initial.bin is collected too, which the merge below used to
+      # omit. PlatformIO flashes it on every upload for a reason: otadata
+      # decides which slot the bootloader starts. Leaving whatever was already
+      # on the chip means a full-flash install onto a board that had
+      # previously taken an OTA can boot a slot this install never wrote.
       - name: Collect build outputs
         run: |
           set -euo pipefail
           mkdir -p dist
-          BUILD_DIR=.pio/build/t-display-s3
-          cp "$(find "$BUILD_DIR" -maxdepth 1 -name 'bootloader.bin' | head -1)" dist/bootloader.bin
-          cp "$(find "$BUILD_DIR" -maxdepth 1 -name 'partition*.bin' | head -1)" dist/partitions.bin
-          cp "$(find "$BUILD_DIR" -maxdepth 1 -name 'firmware.bin' | head -1)" dist/firmware.bin
+          collect() {
+            local env_name="$1" suffix="$2" d=".pio/build/$1"
+            cp "$(find "$d" -maxdepth 1 -name 'bootloader.bin' | head -1)" "dist/bootloader${suffix}.bin"
+            cp "$(find "$d" -maxdepth 1 -name 'partition*.bin' | head -1)" "dist/partitions${suffix}.bin"
+            cp "$(find "$d" -maxdepth 1 -name 'ota_data_initial.bin' | head -1)" "dist/otadata${suffix}.bin"
+            cp "$(find "$d" -maxdepth 1 -name 'firmware.bin' | head -1)" "dist/firmware${suffix}.bin"
+          }
+          collect t-display-s3 ""
+          collect t-display "-t-display"
           ls -la dist
 
       # Signs dist/firmware.bin — the plain app image esp_ota_write() writes
@@ -119,8 +137,10 @@ jobs:
           # then failed on somebody's device with bad_signature -- after the
           # release was public. Fails the release instead.
           python3 tools/check_release_key.py --seed "$seed_file"
-          python3 tools/ota_push.py sign --seed "$seed_file" --image dist/firmware.bin --out dist/firmware.bin.sig
-          cat dist/firmware.bin.sig
+          for img in dist/firmware.bin dist/firmware-t-display.bin; do
+            python3 tools/ota_push.py sign --seed "$seed_file" --image "$img" --out "$img.sig"
+            echo "$img -> $(cat "$img.sig")"
+          done
         env:
           OTA_SIGNING_SEED: ${{ secrets.OTA_SIGNING_SEED }}
 
@@ -142,7 +162,25 @@ jobs:
       # the latter can resolve a much newer major version (v5, confirmed —
       # renamed this very command to `merge-bin` and restructured its
       # flags) that isn't the one this step was actually tested against.
-      - name: Merge into a single flashable image
+      # Per-board, because the parameters are NOT the same and getting them
+      # wrong produces an image that flashes cleanly and never boots. Both
+      # sets were read off a real `pio run -t upload -v` for that board rather
+      # than assumed:
+      #
+      #   ESP32-S3   dio 80m 16MB   bootloader at 0x0
+      #   ESP32      dio 40m 16MB   bootloader at 0x1000
+      #
+      # That bootloader offset is the one that bites: it differs by chip, and
+      # an ESP32 image built with the S3's 0x0 is silently unbootable.
+      #
+      # otadata is included now. See "Collect build outputs" above for why.
+      #
+      # Deliberately invoking the exact esptool.py PlatformIO already
+      # downloaded for this build, rather than a separately `pip install`ed
+      # esptool: the latter can resolve a much newer major version (v5,
+      # confirmed -- renamed this very command to `merge-bin` and restructured
+      # its flags) that isn't the one this step was tested against.
+      - name: Merge into single flashable images
         run: |
           set -euo pipefail
           ESPTOOL="$(find "$HOME/.platformio/packages/tool-esptoolpy" -maxdepth 1 -name 'esptool.py')"
@@ -151,7 +189,15 @@ jobs:
             --flash_mode dio --flash_freq 80m --flash_size 16MB \
             0x0 dist/bootloader.bin \
             0x8000 dist/partitions.bin \
+            0x2b000 dist/otadata.bin \
             0x30000 dist/firmware.bin
+          python3 "$ESPTOOL" --chip esp32 merge_bin \
+            -o dist/merged-firmware-t-display.bin \
+            --flash_mode dio --flash_freq 40m --flash_size 16MB \
+            0x1000 dist/bootloader-t-display.bin \
+            0x8000 dist/partitions-t-display.bin \
+            0x2b000 dist/otadata-t-display.bin \
+            0x30000 dist/firmware-t-display.bin
           ls -la dist
 
       - name: Generate manifest.json
@@ -171,6 +217,12 @@ jobs:
                 "chipFamily": "ESP32-S3",
                 "parts": [
                   { "path": "merged-firmware.bin", "offset": 0 }
+                ]
+              },
+              {
+                "chipFamily": "ESP32",
+                "parts": [
+                  { "path": "merged-firmware-t-display.bin", "offset": 0 }
                 ]
               }
             ]
@@ -193,7 +245,10 @@ jobs:
           set -euo pipefail
           cd dist
           sha256sum bootloader.bin partitions.bin firmware.bin \
-                    firmware.bin.sig merged-firmware.bin manifest.json > SHA256SUMS
+                    firmware.bin.sig merged-firmware.bin \
+                    bootloader-t-display.bin partitions-t-display.bin \
+                    firmware-t-display.bin firmware-t-display.bin.sig \
+                    merged-firmware-t-display.bin manifest.json > SHA256SUMS
           cat SHA256SUMS
 
       - name: Create GitHub release
@@ -204,8 +259,11 @@ jobs:
             --title "${GITHUB_REF_NAME}" \
             --generate-notes \
             dist/bootloader.bin dist/partitions.bin dist/firmware.bin \
-            dist/firmware.bin.sig dist/SHA256SUMS \
-            dist/merged-firmware.bin dist/manifest.json
+            dist/firmware.bin.sig dist/merged-firmware.bin \
+            dist/bootloader-t-display.bin dist/partitions-t-display.bin \
+            dist/firmware-t-display.bin dist/firmware-t-display.bin.sig \
+            dist/merged-firmware-t-display.bin \
+            dist/SHA256SUMS dist/manifest.json
 
   deploy-pages:
     needs: [build-firmware]
@@ -217,25 +275,99 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # THE WEB INSTALLER HAS NEVER WORKED, and this step is why. Two faults,
+      # both of which this fixes and then checks:
+      #
+      # 1. merged-firmware.bin was not in the pattern list, and it is the ONLY
+      #    file manifest.json references. Even a perfect download left the
+      #    installer pointing at a file that was never published to the site.
+      # 2. The step succeeded while producing nothing. The deployed artifact
+      #    for v0.0.4 contained an EMPTY firmware/ directory -- index.html,
+      #    favicon.svg, releases.json, console.html, and firmware/ with no
+      #    contents -- so every release offered by the page 404s, and has for
+      #    every release ever cut. `for tag in $(gh release list ...)` cannot
+      #    fail the script when the substitution comes back empty, so a
+      #    transient API failure silently ships a broken installer that still
+      #    lists releases and still looks fine.
+      #
+      # So it now verifies its own output and fails the job rather than
+      # deploying a page that cannot install anything. A release that does not
+      # install is worse than no release: it looks like it worked.
       - name: Fetch every release's firmware assets
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           mkdir -p site/firmware
-          for tag in $(gh release list --limit 100 --json tagName --jq '.[].tagName'); do
+
+          tags="$(gh release list --limit 100 --json tagName --jq '.[].tagName')"
+          if [ -z "$tags" ]; then
+            echo "::error::no releases returned -- refusing to deploy an installer with nothing to install" >&2
+            exit 1
+          fi
+
+          for tag in $tags; do
             dir="site/firmware/${tag}"
             mkdir -p "$dir"
+            # || true: older releases predate some of these assets, and a
+            # missing pattern is fatal to `gh release download`. The check
+            # below is what decides whether a release is actually usable.
             gh release download "$tag" --dir "$dir" \
-              --pattern 'bootloader.bin' \
-              --pattern 'partitions.bin' \
-              --pattern 'firmware.bin' \
+              --pattern 'bootloader*.bin' \
+              --pattern 'partitions*.bin' \
+              --pattern 'firmware*.bin' \
+              --pattern 'merged-firmware*.bin' \
               --pattern 'manifest.json' \
-              --clobber
+              --clobber || true
           done
+
+          # Every release the page OFFERS must be installable -- but an old
+          # release that cannot be made installable must not block new ones.
+          # v0.0.2 predates merged-firmware.bin entirely, so failing on any
+          # broken manifest would wedge releases forever on history nobody can
+          # change. Drop those from the page instead, and fail only if the
+          # newest release is unusable, because then there is genuinely
+          # nothing to install.
+          usable=""
+          for tag in $tags; do
+            dir="site/firmware/${tag}"
+            if [ ! -f "$dir/manifest.json" ]; then
+              echo "::warning::${tag}: no manifest.json -- not offered"
+              rm -rf "$dir"
+              continue
+            fi
+            missing=""
+            for part in $(jq -r '.builds[].parts[].path' "$dir/manifest.json"); do
+              [ -f "$dir/$part" ] || missing="$missing $part"
+            done
+            if [ -n "$missing" ]; then
+              echo "::warning::${tag}: manifest references missing asset(s) --${missing} -- not offered"
+              rm -rf "$dir"
+              continue
+            fi
+            usable="$usable $tag"
+          done
+
+          if [ -z "$usable" ]; then
+            echo "::error::no release is installable; refusing to deploy an installer that cannot install" >&2
+            exit 1
+          fi
+
+          newest="$(echo "$tags" | head -1)"
+          case " $usable " in
+            *" $newest "*) ;;
+            *) echo "::error::the newest release ${newest} is not installable" >&2; exit 1 ;;
+          esac
+
+          # releases.json lists only what the page can actually offer, so the
+          # dropdown never presents a version that 404s on selection.
           gh release list --limit 100 --json tagName,name,publishedAt \
-            | jq 'sort_by(.publishedAt) | reverse' > site/releases.json
+            | jq --argjson keep "$(printf '%s\n' $usable | jq -R . | jq -s .)" \
+                 '[.[] | select(.tagName as $t | $keep | index($t))] | sort_by(.publishedAt) | reverse' \
+            > site/releases.json
           cat site/releases.json
+          echo "deployed firmware tree:"
+          find site/firmware -type f | sort
 
       - name: Assemble the web installer page
         run: cp -r webinstaller/. site/
