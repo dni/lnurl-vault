@@ -115,8 +115,48 @@ static void test_u64_raw_scan(void) {
              "a key that exists only inside a nested object is not found");
 }
 
+/* A pathologically nested payload must be refused by the depth guard before
+ * cJSON recurses, not parsed. On the firmware this is reachable pre-auth from
+ * any BLE central, against a 4KB transport-task stack -- a few hundred brackets
+ * is enough to overflow it. See json.c's depth_within_limit(). */
+static void test_nesting_depth(void) {
+    char deep[600];
+    size_t n = 0;
+    for (; n < 300; n++) deep[n] = '[';
+    deep[n] = '\0';
+    uint64_t v;
+    char s[16];
+    UL_CHECK(!json_has(deep, "cmd"), "300 levels of nesting is refused by json_has, not parsed");
+    UL_CHECK(!json_get_str(deep, "cmd", s, sizeof(s)), "and by json_get_str");
+    UL_CHECK(!json_get_u64(deep, "a", &v), "and by json_get_u64");
+
+    /* A deep object wrapping a real key is refused wholesale, not mined for
+     * the key inside it. */
+    char nested[256];
+    n = 0;
+    for (size_t d = 0; d < 40; d++) nested[n++] = '{';
+    const char *inner = "\"cmd\":\"get_info\"";
+    memcpy(nested + n, inner, strlen(inner));
+    n += strlen(inner);
+    for (size_t d = 0; d < 40; d++) nested[n++] = '}';
+    nested[n] = '\0';
+    UL_CHECK(!json_has(nested, "cmd"), "a 40-deep wrapper is refused, its inner key not salvaged");
+
+    /* The legitimate maximum -- a flat object carrying a parent_ids array,
+     * depth 2 -- still parses, so the guard has real headroom. */
+    const char *legit = "{\"cmd\":\"new_secret\",\"parent_ids\":[\"aa\",\"bb\"]}";
+    char cmd[16];
+    UL_CHECK(json_get_str(legit, "cmd", cmd, sizeof(cmd)) && strcmp(cmd, "new_secret") == 0,
+             "a normal flat command with a parent_ids array still parses");
+    char ids[4][9];
+    size_t count = 0;
+    UL_CHECK(json_get_str_array(legit, "parent_ids", &ids[0][0], 9, 4, &count) && count == 2,
+             "and its depth-2 array is read normally");
+}
+
 void test_json_run(void) {
     test_u64_raw_scan();
     test_writer();
     test_reader();
+    test_nesting_depth();
 }
