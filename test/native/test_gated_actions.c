@@ -33,6 +33,12 @@ static char g_last_action[32];
 static char g_last_note_id[VAULT_ID_BUF];
 static bool g_saw_note;
 
+static confirm_result_t fake_confirm_export(const note_meta_t *note) {
+    (void)note;
+    g_asked++;
+    return g_answer;
+}
+
 static confirm_result_t fake_confirm(const char *action, const note_meta_t *note) {
     g_asked++;
     snprintf(g_last_action, sizeof(g_last_action), "%s", action ? action : "");
@@ -127,6 +133,47 @@ static void test_an_unanswered_prompt_changes_nothing(void) {
     dispatcher_handle(cmd, out, sizeof(out));
     UL_CHECK(strstr(out, "timeout") != NULL, "reported as a timeout, not a decline");
     UL_CHECK(vault_count() == 2, "and nothing was destroyed");
+}
+
+/* A device whose panel never came up cannot ask, and a hold nobody can read
+ * the meaning of is not consent -- display.h says so, and #64 is what happens
+ * when nothing enforces it. What matters just as much here is HOW the
+ * dispatcher treated an unfamiliar result: every gate used to name the two
+ * refusals and proceed if it was neither, so the safety of every disclosure
+ * rested on confirm_result_t never gaining a value. Adding one would have
+ * disclosed the secret rather than refused it. They ask for CONFIRM_YES now.
+ *
+ * Each of these fails on the old code by succeeding. */
+static void test_a_device_that_cannot_ask_refuses_everything(void) {
+    setup(true);
+    /* export_secret has its own hook, so wire it too -- without it the gate
+     * is skipped entirely and this would be testing nothing. */
+    dispatcher_deps_t deps = {
+        .rng = rng_seq, .confirm_action = fake_confirm, .confirm_export = fake_confirm_export};
+    dispatcher_init(&deps);
+    g_answer = CONFIRM_UNAVAILABLE;
+    char out[512], cmd[160];
+
+    snprintf(cmd, sizeof(cmd), "{\"cmd\":\"export_secret\",\"id\":\"%s\"}", g_confirmed);
+    dispatcher_handle(cmd, out, sizeof(out));
+    UL_CHECK(strstr(out, "display_unavailable") != NULL,
+             "export is refused when the device cannot show the prompt");
+    UL_CHECK(strstr(out, "\"k1\"") == NULL, "and no secret is disclosed");
+    UL_CHECK(strstr(out, "user_declined") == NULL,
+             "and it does not claim the owner declined -- nobody was asked");
+
+    snprintf(cmd, sizeof(cmd), "{\"cmd\":\"delete\",\"id\":\"%s\"}", g_confirmed);
+    dispatcher_handle(cmd, out, sizeof(out));
+    UL_CHECK(strstr(out, "display_unavailable") != NULL, "delete is refused too");
+    UL_CHECK(vault_count() == 2, "and nothing was destroyed");
+
+    snprintf(cmd, sizeof(cmd), "{\"cmd\":\"rename\",\"id\":\"%s\",\"label\":\"x\"}",
+             g_confirmed);
+    dispatcher_handle(cmd, out, sizeof(out));
+    UL_CHECK(strstr(out, "display_unavailable") != NULL, "so is rename");
+    note_meta_t m;
+    vault_get_meta(g_confirmed, &m);
+    UL_CHECK(strcmp(m.label, "keepme") == 0, "and the label is untouched");
 }
 
 /* ---- the screen has to be able to say what it is asking about ---------- */
@@ -231,6 +278,7 @@ void test_gated_actions_run(void) {
     test_a_stranger_cannot_destroy_a_live_note();
     test_rename_is_gated_too();
     test_an_unanswered_prompt_changes_nothing();
+    test_a_device_that_cannot_ask_refuses_everything();
     test_the_gate_is_told_which_action();
     test_the_gate_is_told_which_note();
     test_approval_lets_the_command_through();

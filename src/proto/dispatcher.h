@@ -16,10 +16,23 @@
  * dispatcher_deps_t / vault_init(), which is what makes both this module
  * and vault.c runnable from test/native/ without ESP-IDF. */
 
+/* Only CONFIRM_YES is approval. Every caller in dispatcher.c treats anything
+ * else as a refusal, deliberately -- see confirm_error_code(). They used to
+ * check for CONFIRM_NO and CONFIRM_TIMEOUT and proceed if it was neither,
+ * which made the safety of every disclosure depend on this enum never gaining
+ * a value. */
 typedef enum {
     CONFIRM_YES,
     CONFIRM_NO,
     CONFIRM_TIMEOUT,
+    /* The device cannot ask. Today that means the panel never came up, so
+     * there is nothing to show the owner and no informed consent to be had --
+     * see display.h's display_ready(), which says anything disclosing a
+     * secret MUST check it and refuse rather than proceed. Reported as its
+     * own error rather than as user_declined, because nobody declined and a
+     * client that cannot tell the difference sends its owner hunting for a
+     * button they were never shown. */
+    CONFIRM_UNAVAILABLE,
 } confirm_result_t;
 
 /* Shows note details on-device and waits for a physical confirm/cancel or a

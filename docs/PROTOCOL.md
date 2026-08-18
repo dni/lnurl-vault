@@ -47,7 +47,14 @@ message, not every chunk.
 Every response has a boolean `ok`. On failure: `{"ok":false,"error":"<code>","message":"..."}`
 (`message` is optional, human-readable). Error codes: `not_found`,
 `invalid_state`, `user_declined`, `timeout`, `storage_full`, `bad_request`,
-`response_too_large`.
+`response_too_large`, `display_unavailable`.
+
+`display_unavailable` means the device could not ask its owner: the panel
+never came up, so there is nothing to show and no informed consent to be had.
+It is deliberately distinct from `user_declined` — nobody declined, and a
+client that cannot tell the difference sends its owner hunting for a button
+they were never shown. Every physically-gated command can return it. Recovery
+is a power cycle, or a device whose display is repaired; see `export_secret`.
 
 `storage_full` has two causes, and they want opposite responses from the
 owner. Either the vault is genuinely out of room, or storage is degraded and
