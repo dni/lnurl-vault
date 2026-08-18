@@ -775,6 +775,23 @@ static void handle_wipe(const char *line, char *out, size_t outcap) {
     }
 
     vault_forget_all();
+    /* Verified, not assumed -- the same rule wipe_storage() applies to flash.
+     * PROTOCOL.md promises ok:true means "erased and verified", and that
+     * secrets are gone from RAM as well, but only the flash half was ever
+     * checked. Reaching this means vault_forget_all()'s stores did not take
+     * effect, so the device must not report the wipe as done. It still
+     * reboots below: unlike a failed flash erase, where a reboot would help
+     * nothing, a reboot is exactly what clears RAM. */
+    if (!vault_secrets_cleared()) {
+        write_error(out, outcap, "wipe_failed",
+                    "storage was erased and verified, but note secrets could not be confirmed "
+                    "cleared from RAM; treat this device as still holding secrets until it has "
+                    "rebooted");
+        if (g_deps.reset) {
+            g_deps.reset();
+        }
+        return;
+    }
 
     json_writer_t w;
     jw_init(&w, out, outcap);

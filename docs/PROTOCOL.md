@@ -321,6 +321,13 @@ Note state and secrets are gone from RAM as well as flash, and only in that
 order: flash is erased and verified first, because until the verification
 passes RAM holds the only intact copy.
 
+Both halves are verified, not just the flash one. After clearing RAM the
+device reads it back and checks that no byte of any note secret is still set;
+if any is, it answers `wipe_failed` naming RAM as the reason rather than
+`ok`. That path reboots anyway, unlike a failed flash erase where a reboot
+would help nothing — a reboot is precisely what clears RAM. Treat the reply
+as "this device still holds secrets until it has restarted".
+
 ### `ota_begin` / `ota_chunk` / `ota_finish`
 
 Firmware updates over this same JSON-over-serial protocol — no WiFi, no

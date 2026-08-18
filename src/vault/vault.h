@@ -176,6 +176,20 @@ size_t vault_count(void);
  * that has been verified, because until it has, RAM is the only intact copy
  * of the notes. */
 void vault_forget_all(void);
+
+/* True when no byte of any note secret remains set in RAM. Exists so a wipe
+ * can be VERIFIED rather than trusted, which is the rule the flash half of
+ * the wipe already follows: nvs_storage.c re-initialises and re-reads after
+ * erasing, and reports failure rather than success if anything is still
+ * readable, "because the owner acts on the claim". The RAM half asserted the
+ * same thing and checked nothing.
+ *
+ * Reading the bytes back is also what makes the clearing observable. The
+ * volatile stores in vault_forget_all() exist because a compiler is entitled
+ * to drop stores to memory that is never read again; a caller that actually
+ * reads it removes that entitlement, so this guards the property even if the
+ * volatile qualifier is ever lost. */
+bool vault_secrets_cleared(void);
 bool vault_get_meta_at(size_t index, note_meta_t *out);
 
 #endif

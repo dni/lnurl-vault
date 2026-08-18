@@ -10,6 +10,8 @@ void test_hex_run(void);
 void test_json_run(void);
 void test_vault_run(void);
 void test_dispatcher_run(void);
+void test_secret_leak_run(void);
+void test_response_bounds_run(void);
 void test_button_fsm_run(void);
 void test_note_url_run(void);
 void test_ble_frame_run(void);
@@ -31,6 +33,8 @@ int main(void) {
     test_json_run();
     test_vault_run();
     test_dispatcher_run();
+    test_secret_leak_run();
+    test_response_bounds_run();
     test_button_fsm_run();
     test_note_url_run();
     test_ble_frame_run();

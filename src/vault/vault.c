@@ -463,6 +463,22 @@ size_t vault_count(void) {
     return g_note_count;
 }
 
+bool vault_secrets_cleared(void) {
+    const volatile unsigned char *p = (const volatile unsigned char *)g_notes;
+    for (size_t i = 0; i < sizeof(g_notes); i++) {
+        if (p[i] != 0) {
+            return false;
+        }
+    }
+    const volatile unsigned char *q = (const volatile unsigned char *)g_unloaded_ids;
+    for (size_t i = 0; i < sizeof(g_unloaded_ids); i++) {
+        if (q[i] != 0) {
+            return false;
+        }
+    }
+    return g_note_count == 0 && g_unloaded_count == 0;
+}
+
 bool vault_get_meta_at(size_t index, note_meta_t *out) {
     if (index >= g_note_count) {
         return false;
