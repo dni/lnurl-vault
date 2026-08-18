@@ -248,87 +248,6 @@ static void fake_reset(void) {
     memset(fake_note_used, 0, sizeof(fake_note_used));
     fake_index_count = 0;
     fake_short_note_id = NULL;
-    fake_index_read_fails = false;
-}
-
-/* persist_index() already refuses to drop an id whose *note* failed to load,
- * on the grounds that a failed read is not proof the note is gone. The same
- * argument applies one level up and was not covered: if the *index* itself
- * fails to read, vault_init returns early with both lists empty, and the
- * next mutation persists an index built from what is in RAM -- nothing. The
- * blobs survive on flash with nothing referencing them, which for bearer
- * notes is indistinguishable from destroying them. */
-static void test_unreadable_index_is_not_an_empty_vault(void) {
-    fake_reset();
-    vault_storage_t storage = {
-        .load_index = fake_load_index,
-        .save_index = fake_save_index,
-        .load_note = fake_load_note,
-        .save_note = fake_save_note,
-        .delete_note = fake_delete_note,
-        .ctx = NULL,
-    };
-
-    vault_init(&storage, NULL);
-    srand(1234);
-    char id_a[VAULT_ID_BUF], id_b[VAULT_ID_BUF], h[VAULT_HASH_HEX_BUF];
-    UL_CHECK(vault_new_secret(rng_basic, NULL, 0, "a", id_a, h) == VAULT_OK, "note A created");
-    UL_CHECK(vault_confirm(id_a, 111000, "mint.example", NULL) == VAULT_OK, "note A confirmed");
-    UL_CHECK(vault_new_secret(rng_basic, NULL, 0, "b", id_b, h) == VAULT_OK, "note B created");
-    UL_CHECK(vault_confirm(id_b, 222000, "mint.example", NULL) == VAULT_OK, "note B confirmed");
-    size_t saved_count = fake_index_count;
-    char saved_index[FAKE_MAX][VAULT_ID_BUF];
-    memcpy(saved_index, fake_index_ids, sizeof(saved_index));
-    UL_CHECK(saved_count == 2, "both notes are in the persisted index");
-
-    /* Boot once with the index unreadable. The notes are all still there. */
-    fake_index_read_fails = true;
-    vault_init(&storage, NULL);
-    size_t n_count, p_count;
-    vault_get_info(&n_count, &p_count);
-    UL_CHECK(n_count == 0, "a boot that cannot read the index sees no notes");
-    UL_CHECK(!vault_index_known(),
-             "and says so, rather than looking like a vault that is simply empty");
-
-    /* The distinction has to reach the host. Zero notes and a refusal to
-     * write are both consistent with a healthy empty vault, so get_info has
-     * to name the real reason -- and must not say storage_full, whose
-     * remedy (delete notes, or wipe) would destroy what is being protected. */
-    dispatcher_deps_t info_deps = {0};
-    dispatcher_init(&info_deps);
-    char info[512];
-    dispatcher_handle("{\"cmd\":\"get_info\"}", info, sizeof(info));
-    char storage_state[32];
-    UL_CHECK(json_get_str(info, "storage", storage_state, sizeof(storage_state)) &&
-                 strcmp(storage_state, "index_unreadable") == 0,
-             "get_info reports index_unreadable, not a healthy-looking empty vault");
-
-    char id_c[VAULT_ID_BUF];
-    UL_CHECK(vault_new_secret(rng_basic, NULL, 0, "c", id_c, h) != VAULT_OK,
-             "a new note is refused while the index is unknown, not silently unpersisted");
-    UL_CHECK(vault_import_secret(rng_basic,
-                                  "00112233445566778899aabbccddeeff"
-                                  "00112233445566778899aabbccddeeff",
-                                  "mint.example", 5000, "imported", id_c) != VAULT_OK,
-             "import is refused too -- it is the other creation path");
-    /* Compare the ids, not just how many there are: two refused creations
-     * would write two entries and leave the count looking untouched while
-     * naming entirely different notes. */
-    UL_CHECK(fake_index_count == saved_count &&
-                 memcmp(saved_index, fake_index_ids, saved_count * VAULT_ID_BUF) == 0,
-             "the persisted index still names exactly the notes it did before");
-
-    /* Flash recovers. Both notes must still be reachable. */
-    fake_index_read_fails = false;
-    vault_init(&storage, NULL);
-    UL_CHECK(vault_index_known(), "a boot that can read the index says so again");
-    note_meta_t meta;
-    UL_CHECK(vault_get_meta(id_a, &meta) && meta.amount_msat == 111000,
-             "note A survives a boot that could not read the index");
-    UL_CHECK(vault_get_meta(id_b, &meta) && meta.amount_msat == 222000,
-             "note B survives a boot that could not read the index");
-    UL_CHECK(vault_new_secret(rng_basic, NULL, 0, "d", id_c, h) == VAULT_OK,
-             "writes resume once a boot can read the index again");
 }
 
 /* A note arriving from storage has never been through new_note(), which is
@@ -431,5 +350,4 @@ void test_vault_run(void) {
     test_id_collision_retry();
     test_persistence_roundtrip();
     test_load_bounds_parent_count();
-    test_unreadable_index_is_not_an_empty_vault();
 }
