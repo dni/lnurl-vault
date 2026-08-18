@@ -76,6 +76,16 @@ jobs:
       - name: Vendor QR library (ricmoo/QRCode, pinned)
         run: ./tools/vendor_qrcode.sh src/ui
 
+      # BOTH supported boards, matching release.yml. Building only the S3 here
+      # meant a change that broke the classic ESP32 build passed CI cleanly and
+      # failed only when a tag was pushed -- or was found by whoever got the
+      # broken artefact. The two differ in pin map, bootloader offset, flash
+      # frequency and display driver.
+      - name: Build firmware (both boards)
+        run: pio run -e t-display-s3 -e t-display
+
+  sanitizers:
+    name: Native tests under ASan/UBSan
       - name: Build firmware
         run: pio run -e t-display-s3
 
@@ -85,6 +95,16 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Install libcjson-dev
+        run: sudo apt-get update && sudo apt-get install -y libcjson-dev
+
+      # AddressSanitizer + UndefinedBehaviorSanitizer over the same suite:
+      # near-free and high-yield in a codebase built on fixed buffers and
+      # memcpy. See test/native/Makefile's test-sanitize target.
+      - name: Build and run test/native under sanitizers
+        run: |
+          cd test/native
+          make test-sanitize
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"

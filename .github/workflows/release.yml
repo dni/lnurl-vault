@@ -47,6 +47,19 @@ jobs:
         with:
           python-version: "3.12"
 
+      # Gate the release on the native suite. This job used to build, sign and
+      # publish without running a single test -- ci.yml does not trigger on tag
+      # pushes, so a tag could ship code that never passed the assertions that
+      # guard the security- and protocol-critical core. A failure here stops the
+      # release before anything is built or published.
+      - name: Install libcjson-dev
+        run: sudo apt-get update && sudo apt-get install -y libcjson-dev
+
+      - name: Native unit tests
+        run: |
+          cd test/native
+          make test
+
       # Pinned, not --upgrade: an unpinned install means the toolchain that
       # builds a release can change with no commit in this repo, and 6.1.19
       # is the version every hardware result in README.md's Status section
