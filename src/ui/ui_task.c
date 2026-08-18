@@ -22,6 +22,7 @@
 
 #include <stddef.h>
 #include <stdio.h>
+#include <string.h>
 
 #include "approval.h"
 #include "note_display.h"
@@ -59,6 +60,10 @@ static QueueHandle_t g_request_q;
 
 #define BROWSE_IDLE_TIMEOUT_MS 15000
 
+/* The unveiled QR is the secret in the clear, so clear it after a while rather
+ * than wait for a button press. Longer than browse (scanning is deliberate). */
+#define QR_SHOWN_TIMEOUT_MS 60000
+
 typedef enum {
     UI_IDLE,
     UI_BROWSE,
@@ -70,10 +75,13 @@ typedef enum {
  * beginning), wrapping around. Returns -1 if there are no CONFIRMED notes.
  * Only CONFIRMED notes are browsable — a PENDING note has no settled value
  * yet, and export_secret would reject it anyway. */
-static int find_confirmed(int from, int step) {
+static int find_confirmed(int from, int step, char out_id[VAULT_ID_BUF]) {
     vault_lock_acquire();
     size_t total = vault_count();
     int result = -1;
+    if (out_id) {
+        out_id[0] = '\0';
+    }
     if (total > 0) {
         int idx = from;
         for (size_t tries = 0; tries < total; tries++) {
@@ -86,6 +94,11 @@ static int find_confirmed(int from, int step) {
             note_meta_t meta;
             if (vault_get_meta_at((size_t)idx, &meta) && meta.state == NOTE_STATE_CONFIRMED) {
                 result = idx;
+                /* Capture the id under the same lock as the index; unveil()
+                 * discloses by id, not position. */
+                if (out_id) {
+                    memcpy(out_id, meta.id, VAULT_ID_BUF);
+                }
                 break;
             }
         }
@@ -152,14 +165,13 @@ static void wipe(char *buf, size_t len) {
     }
 }
 
-/* Exports the selected note's secret (re-validating it's still CONFIRMED
- * under the lock — browse_index is a snapshot that a concurrent remote
- * discard/delete could have invalidated since it was last set), builds its
- * lnurlw:// URL, and shows it as a QR code. The secret and the URL (which
- * embeds it) are wiped from their stack buffers as soon as each is no
- * longer needed. */
-static bool unveil(int browse_index) {
-    if (browse_index < 0) {
+/* Exports the selected note's secret and shows it as a QR. Resolves by the id
+ * captured at selection, NOT browse position: a concurrent remote delete
+ * compacts the array (vault.c's remove_at), so the index can point at a
+ * different note by unveil time. Looking up by id discloses exactly the
+ * selected note or nothing. Secret and URL are wiped once no longer needed. */
+static bool unveil(const char *browse_id) {
+    if (!browse_id || !browse_id[0]) {
         return false;
     }
 
@@ -168,8 +180,8 @@ static bool unveil(int browse_index) {
     bool got_secret = false;
 
     vault_lock_acquire();
-    if (vault_get_meta_at((size_t)browse_index, &meta) && meta.state == NOTE_STATE_CONFIRMED) {
-        got_secret = vault_export_secret(meta.id, k1) == VAULT_OK;
+    if (vault_get_meta(browse_id, &meta) && meta.state == NOTE_STATE_CONFIRMED) {
+        got_secret = vault_export_secret(browse_id, k1) == VAULT_OK;
     }
     vault_lock_release();
 
@@ -317,6 +329,7 @@ static void ui_task_fn(void *arg) {
 
     ui_mode_t mode = UI_IDLE;
     int browse_index = -1;
+    char browse_id[VAULT_ID_BUF] = {0}; /* identity of the selected note, for unveil() */
     int64_t browse_last_activity_us = 0;
 
     display_set_state(DISPLAY_STATE_IDLE);
@@ -337,6 +350,7 @@ static void ui_task_fn(void *arg) {
             xQueueSend(req.response_q, &result, portMAX_DELAY);
             mode = UI_IDLE;
             browse_index = -1;
+            browse_id[0] = '\0';
             display_set_state(DISPLAY_STATE_IDLE);
             continue;
         }
@@ -346,7 +360,7 @@ static void ui_task_fn(void *arg) {
         switch (mode) {
             case UI_IDLE:
                 if (ev == BTN_EVENT_1_TAP || ev == BTN_EVENT_2_TAP) {
-                    browse_index = find_confirmed(-1, 1);
+                    browse_index = find_confirmed(-1, 1, browse_id);
                     if (browse_index >= 0) {
                         mode = UI_BROWSE;
                         browse_last_activity_us = esp_timer_get_time();
@@ -357,7 +371,7 @@ static void ui_task_fn(void *arg) {
 
             case UI_BROWSE:
                 if (ev == BTN_EVENT_BOTH_CHORD) {
-                    if (unveil(browse_index)) {
+                    if (unveil(browse_id)) {
                         mode = UI_QR_SHOWN;
                     } else {
                         display_set_state(DISPLAY_STATE_DECLINED);
@@ -366,16 +380,17 @@ static void ui_task_fn(void *arg) {
                     }
                     browse_last_activity_us = esp_timer_get_time();
                 } else if (ev == BTN_EVENT_1_TAP) {
-                    browse_index = find_confirmed(browse_index, 1);
+                    browse_index = find_confirmed(browse_index, 1, browse_id);
                     browse_last_activity_us = esp_timer_get_time();
                     show_browse_note(browse_index, confirmed_position(browse_index));
                 } else if (ev == BTN_EVENT_2_TAP) {
-                    browse_index = find_confirmed(browse_index, -1);
+                    browse_index = find_confirmed(browse_index, -1, browse_id);
                     browse_last_activity_us = esp_timer_get_time();
                     show_browse_note(browse_index, confirmed_position(browse_index));
                 } else if ((esp_timer_get_time() - browse_last_activity_us) >
                            (int64_t)BROWSE_IDLE_TIMEOUT_MS * 1000) {
                     mode = UI_IDLE;
+                    browse_id[0] = '\0';
                     display_set_state(DISPLAY_STATE_IDLE);
                 }
                 break;
@@ -385,6 +400,13 @@ static void ui_task_fn(void *arg) {
                     mode = UI_BROWSE;
                     browse_last_activity_us = esp_timer_get_time();
                     show_browse_note(browse_index, confirmed_position(browse_index));
+                } else if ((esp_timer_get_time() - browse_last_activity_us) >
+                           (int64_t)QR_SHOWN_TIMEOUT_MS * 1000) {
+                    /* Clear the secret from screen rather than wait for a press. */
+                    mode = UI_IDLE;
+                    browse_index = -1;
+                    browse_id[0] = '\0';
+                    display_set_state(DISPLAY_STATE_IDLE);
                 }
                 break;
         }
