@@ -8,11 +8,14 @@
 <link rel="icon" type="image/svg+xml" href="favicon.svg">
 <!--
   esp-web-tools (Apache-2.0): https://esphome.github.io/esp-web-tools/
-  Pinned to major version 10 via unpkg's semver range. If the install
-  button below doesn't render, check whether a newer major version is
-  current and bump this.
+  Pinned to an exact version (not a floating @10) so unpkg can't silently
+  serve a different build into a page that flashes firmware; SRI covers this
+  entry, which imports content-hashed chunks immutable for this version.
+  To bump: change the version, refetch, recompute the integrity hash.
 -->
-<script type="module" src="https://unpkg.com/esp-web-tools@10/dist/web/install-button.js"></script>
+<script type="module" src="https://unpkg.com/esp-web-tools@10.4.0/dist/web/install-button.js"
+  integrity="sha384-9XfyvAabgkISlB/Xb3OpshGKpZx0TOt5Mmu78SeiNU3so/p4o2s9m66vy6Utdnom"
+  crossorigin="anonymous"></script>
 <style>
   :root {
     color-scheme: light dark;
