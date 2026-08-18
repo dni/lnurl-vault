@@ -110,10 +110,26 @@ void sha256_final(sha256_ctx_t *ctx, uint8_t out[32]) {
     uint8_t pad = 0x80;
     sha256_update(ctx, &pad, 1);
 
-    uint8_t zero = 0x00;
-    while (ctx->buf_len != 56) {
-        sha256_update(ctx, &zero, 1);
-    }
+    /* Append exactly the number of zero bytes needed, rather than looping
+     * until buf_len happens to equal 56.
+     *
+     * The condition-loop this replaces was correct, but its termination
+     * depended on an invariant maintained in sha256_update() rather than on
+     * anything visible here: that buf_len advances one at a time and wraps
+     * through 56. Break that invariant and this does not compute a wrong
+     * digest, it never returns -- demonstrated by injecting a one-line defect
+     * into sha256_update() and watching the test binary spin at 96% CPU
+     * instead of failing.
+     *
+     * That matters more here than the arithmetic does. This runs in
+     * ota_finish(), on a transport task, holding cmd_lock, and the task
+     * watchdog covers ui_task rather than the transports -- so a hang here
+     * wedges the whole command interface silently and permanently, on a
+     * device holding money. A computed count cannot do that. */
+    static const uint8_t zeros[64] = {0};
+    const size_t zeros_needed = (ctx->buf_len <= 56) ? (size_t)(56 - ctx->buf_len)
+                                                      : (size_t)(56 + 64 - ctx->buf_len);
+    sha256_update(ctx, zeros, zeros_needed);
 
     uint8_t len_bytes[8];
     for (int i = 0; i < 8; i++) {
