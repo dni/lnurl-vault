@@ -9,6 +9,15 @@
  * serialized against the transport task via vault_lock.h — see that
  * header's comment for why. None of this has been checked against real
  * button/display hardware. */
+/* Declares this translation unit as ui_task for cmd_lock.h's guard: that
+ * header refuses to be included here at all, because "ui_task must never
+ * acquire cmd_lock" is the invariant standing between this firmware and a
+ * deadlock that needs a power cycle. Anyone calling cmd_lock_acquire() from
+ * this file has to include the header to do it, and that is the moment this
+ * catches them -- at build time, rather than in the field with a paired host
+ * waiting on a confirm nobody can give. */
+#define LNURLVAULT_TU_IS_UI_TASK 1
+
 #include "ui_task.h"
 
 #include <stddef.h>
