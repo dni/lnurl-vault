@@ -18,6 +18,8 @@ sdkconfig.*
 !sdkconfig.defaults.*
 build/
 test/native/vault_tests
+test/native/vault_tests_san
+test/native/*.dSYM/
 *.o
 
 # PlatformIO auto-generates a project-root CMakeLists.txt wrapping ESP-IDF's

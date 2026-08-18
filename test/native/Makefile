@@ -75,12 +75,24 @@ BIN = vault_tests
 # binary in place and the next `make test` silently reports the old result.
 HDR = $(wildcard ../../src/vault/*.h ../../src/proto/*.h *.h)
 
-.PHONY: test clean
+# Address + Undefined Behaviour sanitizers over the same suite. Near-free and
+# high-yield in a codebase built on fixed buffers and memcpy; CI runs this as a
+# separate job. Built as a distinct binary so it never links stale objects from
+# the plain build, and -fno-sanitize-recover=all makes any finding a non-zero
+# exit so CI actually fails on it.
+SAN_BIN = vault_tests_san
+SAN_FLAGS = -fsanitize=address,undefined -fno-sanitize-recover=all -g -O1
+
+.PHONY: test test-sanitize clean
 test: $(BIN)
 	./$(BIN)
 
 $(BIN): $(SRC) $(HDR)
 	$(CC) $(CFLAGS) -o $(BIN) $(SRC) $(CJSON_LIBS)
 
+test-sanitize: $(SRC) $(HDR)
+	$(CC) $(CFLAGS) $(SAN_FLAGS) -o $(SAN_BIN) $(SRC) $(CJSON_LIBS)
+	./$(SAN_BIN)
+
 clean:
-	rm -f $(BIN)
+	rm -f $(BIN) $(SAN_BIN)
