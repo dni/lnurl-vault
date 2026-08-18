@@ -608,7 +608,17 @@ static void handle_ota_begin(const char *line, char *out, size_t outcap) {
         return;
     }
 
-    if (g_deps.ota_approve) {
+    /* Same rule as confirm_export/confirm_action/wipe: a gate that vanishes
+     * when a dep is NULL is not a gate. ota_begin authorises replacing the
+     * firmware, so a missing approval hook must refuse rather than silently
+     * proceed -- a build misconfiguration (or a port that forgets to wire
+     * this) must not become an unapproved firmware update. */
+    if (!g_deps.ota_approve) {
+        write_error(out, outcap, "unsupported",
+                    "no on-device confirmation available; refusing to start an OTA update");
+        return;
+    }
+    {
         confirm_result_t result = g_deps.ota_approve((uint32_t)size_u64, OTA_APPROVE_TIMEOUT_MS);
         if (result != CONFIRM_YES) {
             write_error(out, outcap, confirm_error_code(result), NULL);
