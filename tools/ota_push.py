@@ -45,15 +45,23 @@ import sys
 import time
 
 try:
-    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
-except ImportError:
-    print("the cryptography package is required: pip install cryptography", file=sys.stderr)
-    sys.exit(1)
-
-try:
     import serial
 except ImportError:
     serial = None  # only push actually needs it; keygen/pubkey/sign don't touch a port
+
+
+def _ed25519_key_cls():
+    """Imported lazily so the module loads without `cryptography` installed:
+    `push --sig` (the release workflow's path) never signs anything, and the
+    tests exercise the serial/retry logic with no key material at all. Only the
+    signing subcommands actually need it."""
+    try:
+        from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+    except ImportError:
+        print("the cryptography package is required for this: pip install cryptography",
+              file=sys.stderr)
+        sys.exit(1)
+    return Ed25519PrivateKey
 
 DOMAIN = b"lnurlvault-ota-v1"
 CHUNK_SIZE = 1024  # must not exceed src/proto/dispatcher.c's OTA_CHUNK_MAX_RAW
@@ -79,7 +87,7 @@ def cmd_keygen(args):
     fd = os.open(args.out, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
     with os.fdopen(fd, "wb") as f:
         f.write(seed)
-    pubkey = Ed25519PrivateKey.from_private_bytes(seed).public_key()
+    pubkey = _ed25519_key_cls().from_private_bytes(seed).public_key()
     pubkey_hex = pubkey.public_bytes_raw().hex()
     print(f"Wrote seed to {args.out} (mode 0600) — back this up offline; there is no rotation")
     print("path that doesn't involve re-flashing every device over USB. Losing it means")
@@ -102,13 +110,13 @@ def cmd_keygen(args):
 
 def cmd_pubkey(args):
     seed = load_seed(args.seed)
-    pubkey = Ed25519PrivateKey.from_private_bytes(seed).public_key()
+    pubkey = _ed25519_key_cls().from_private_bytes(seed).public_key()
     print(pubkey.public_bytes_raw().hex())
 
 
 def sign_image(seed: bytes, image: bytes) -> str:
     digest = hashlib.sha256(image).digest()
-    sk = Ed25519PrivateKey.from_private_bytes(seed)
+    sk = _ed25519_key_cls().from_private_bytes(seed)
     signature = sk.sign(signing_message(digest))
     return signature.hex()
 
@@ -140,31 +148,79 @@ class Device:
         self.ser.write((json.dumps(obj) + "\n").encode())
         self.ser.flush()
         deadline = time.time() + wait
-        while b"\n" not in self.buf and time.time() < deadline:
+        while time.time() < deadline:
+            while b"\n" in self.buf:
+                line, self.buf = self.buf.split(b"\n", 1)
+                line = line.strip()
+                # Boot chatter and any enabled diagnostics share this UART with
+                # the protocol on the classic board, so the reply is the line
+                # that starts with '{' -- not simply the next line. bench.py and
+                # test_serial.py match the same way.
+                if not line.startswith(b"{"):
+                    continue
+                try:
+                    return json.loads(line.decode())
+                except ValueError:
+                    continue
             chunk = self.ser.read(4096)
             if chunk:
                 self.buf += chunk
-        if b"\n" not in self.buf:
-            return None
-        line, self.buf = self.buf.split(b"\n", 1)
-        try:
-            return json.loads(line.decode())
-        except ValueError:
-            return None
+        return None
 
     def close(self):
         self.ser.close()
 
 
-def send_with_retry(dev, obj, what):
-    last = None
+def _chunk_already_applied(resp):
+    """A resent chunk whose previous ACK was lost: the device applied it, so
+    `bytes_received` advanced and it now expects the *next* offset -- it rejects
+    this one with a bad_request naming the offset (see dispatcher.c's
+    handle_ota_chunk, which does NOT abort the session for this). That is
+    success, not failure: the bytes are already on flash. This is the likeliest
+    real-world OTA failure mode given this device's documented serial flakiness,
+    and blindly resending the same offset would otherwise loop until it gave up."""
+    return (
+        isinstance(resp, dict)
+        and resp.get("ok") is False
+        and resp.get("error") == "bad_request"
+        and "offset" in (resp.get("message") or "")
+    )
+
+
+def send_chunk(dev, offset, data_b64):
     for attempt in range(1, CHUNK_RETRIES + 1):
-        resp = dev.send(obj)
-        if resp is not None and resp.get("ok") is True:
-            return resp
-        last = resp
-        print(f"  {what}: attempt {attempt}/{CHUNK_RETRIES} got {resp!r}, retrying...", file=sys.stderr)
-    raise RuntimeError(f"{what} failed after {CHUNK_RETRIES} attempts, last response: {last!r}")
+        resp = dev.send({"cmd": "ota_chunk", "offset": offset, "data": data_b64})
+        if isinstance(resp, dict) and resp.get("ok") is True:
+            return
+        if _chunk_already_applied(resp):
+            return  # a lost ACK, not a rejection -- the device already has it
+        print(f"  chunk at offset {offset}: attempt {attempt}/{CHUNK_RETRIES} got {resp!r}, retrying...",
+              file=sys.stderr)
+    raise RuntimeError(f"chunk at offset {offset} failed after {CHUNK_RETRIES} attempts")
+
+
+def push_image(dev, image, sig_hex, digest):
+    """Runs ota_begin -> ota_chunk* -> ota_finish over `dev` (anything with a
+    .send(obj, wait=...) method). Extracted from cmd_push so the transfer and
+    its retry behaviour can be tested against a fake device with no serial port."""
+    resp = dev.send(
+        {"cmd": "ota_begin", "size": len(image), "sha256": digest.hex(), "signature": sig_hex},
+        wait=35.0,  # >30s device-side approval window
+    )
+    if not (isinstance(resp, dict) and resp.get("ok")):
+        raise RuntimeError(f"ota_begin failed: {resp!r}")
+
+    offset = 0
+    while offset < len(image):
+        chunk = image[offset : offset + CHUNK_SIZE]
+        send_chunk(dev, offset, base64.b64encode(chunk).decode())
+        offset += len(chunk)
+        print(f"  {offset}/{len(image)} bytes ({100 * offset // len(image)}%)", end="\r", file=sys.stderr)
+    print(file=sys.stderr)
+
+    resp = dev.send({"cmd": "ota_finish"}, wait=10.0)
+    if not (isinstance(resp, dict) and resp.get("ok")):
+        raise RuntimeError(f"ota_finish failed: {resp!r}")
 
 
 def cmd_push(args):
@@ -189,29 +245,7 @@ def cmd_push(args):
     dev = Device(args.port)
     try:
         print("Sending ota_begin (approve on the device within 30s)...")
-        resp = dev.send(
-            {"cmd": "ota_begin", "size": len(image), "sha256": digest.hex(), "signature": sig_hex},
-            wait=35.0,  # >30s device-side approval window
-        )
-        if not resp or not resp.get("ok"):
-            raise RuntimeError(f"ota_begin failed: {resp!r}")
-
-        offset = 0
-        while offset < len(image):
-            chunk = image[offset : offset + CHUNK_SIZE]
-            send_with_retry(
-                dev,
-                {"cmd": "ota_chunk", "offset": offset, "data": base64.b64encode(chunk).decode()},
-                f"chunk at offset {offset}",
-            )
-            offset += len(chunk)
-            print(f"  {offset}/{len(image)} bytes ({100 * offset // len(image)}%)", end="\r", file=sys.stderr)
-        print(file=sys.stderr)
-
-        print("Sending ota_finish...")
-        resp = dev.send({"cmd": "ota_finish"}, wait=10.0)
-        if not resp or not resp.get("ok"):
-            raise RuntimeError(f"ota_finish failed: {resp!r}")
+        push_image(dev, image, sig_hex, digest)
         print("Done — device is rebooting into the new image.")
     finally:
         dev.close()
