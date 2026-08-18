@@ -56,9 +56,28 @@
  * and is ignored. Longer, and the owner has genuinely let go. */
 #define APPROVAL_RELEASE_BOUNCE_US (40 * 1000)
 
-/* Button 2 must be down at least this long to count as a cancel, so its own
- * bounce cannot throw away a request the owner never answered. */
-#define APPROVAL_CANCEL_DEBOUNCE_US (30 * 1000)
+/* Button 2 must be down at least this long to count as a cancel.
+ *
+ * 30ms was enough for contact bounce and was not enough for the real world.
+ * Measured on a classic T-Display: a confirm over serial, then a confirm over
+ * BLE, and the second was refused in about a second with nobody touching the
+ * device. On a fresh boot with only the BLE prompt it timed out correctly at
+ * 31s, so it is not a stuck line -- something makes that input read pressed
+ * briefly, and it correlates with the radio being busy.
+ *
+ * That is exactly the failure board_t_display.c warns about for this pin:
+ * button 2 there is GPIO35, which on the classic ESP32 is input-only and has
+ * NO internal pull resistor at all, so it depends entirely on the board's
+ * external one. A weak or absent pull-up leaves a high-impedance input next to
+ * a transmitting radio.
+ *
+ * 250ms is far below what a person pressing a button produces -- nobody taps a
+ * cancel that fast on purpose -- and far above bounce or a coupled glitch. It
+ * costs the owner nothing and removes a class of spurious refusal that, on a
+ * device whose whole job is to ask permission, reads as the device saying no
+ * on its own. It does NOT make a genuinely stuck line safe; that is what the
+ * fresh-press rule above is for. */
+#define APPROVAL_CANCEL_DEBOUNCE_US (250 * 1000)
 
 typedef enum {
     APPROVAL_PENDING, /* still waiting on the owner */

@@ -40,11 +40,37 @@
  * scale the panel width allows -- see display_note_detail(). */
 #define FONT5X7_MIN_READABLE_SCALE 3
 
+/* The largest scale anything is drawn at. A ceiling rather than a preference:
+ * it bounds the per-glyph arithmetic and, on the drawing side, the buffers
+ * that arithmetic sizes. Lives here rather than in display.h so the fitting
+ * logic below stays free of ESP-IDF and can be tested without a board. */
+#define FONT5X7_MAX_SCALE 6
+
 /* Five column bytes for `c`: bit 0 is the top row, bit 6 the bottom.
  *
  * Never returns NULL and never reads out of range: anything outside the
  * printable range renders as '?'. Note labels arrive over the wire, so this
  * is called on attacker-influenced bytes. */
 const uint8_t *font5x7_glyph(char c);
+
+/* Pixel width of `text` at `scale`. The last glyph occupies its cell but not
+ * the blank column after it, so this is not simply len * FONT5X7_ADVANCE --
+ * getting that wrong by one column per line is the kind of arithmetic that
+ * silently drops the last character off a screen edge. */
+int font5x7_text_width(const char *text, int scale);
+
+/* The largest scale in [FONT5X7_MIN_READABLE_SCALE, max_scale] at which `text`
+ * fits `avail_w` pixels -- and the minimum when nothing fits, because
+ * shortening beats shrinking: a line nobody can read conveys nothing whether or
+ * not it is complete.
+ *
+ * Portable, and tested, because this is where today's two display failures
+ * actually lived. The first version derived a scale from the panel HEIGHT and
+ * produced 21-pixel digits a person could not read; the second reserved room
+ * for a unit on the same line and ate 90 of 228 pixels, holding a seven-digit
+ * amount down to the same unreadable size. Neither was a drawing bug. Both were
+ * this arithmetic, and neither could be checked without a board until it moved
+ * here. */
+int font5x7_fit_scale(const char *text, int avail_w, int max_scale);
 
 #endif

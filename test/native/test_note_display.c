@@ -275,6 +275,79 @@ static void test_no_glyph_overflows_its_cell(void) {
     UL_CHECK(clean, "no glyph sets a bit outside its seven rows");
 }
 
+/* ---- the layout arithmetic ------------------------------------------- */
+
+/* Both of today's display failures were here, not in the drawing. The first
+ * derived a scale from the panel HEIGHT and gave 21-pixel digits a person
+ * could not read; the second reserved room for a unit on the same line, ate 90
+ * of 228 pixels, and held a seven-digit amount down to that same size. Neither
+ * could be checked without a board until this moved into portable code. */
+
+/* The last glyph occupies its cell but not the blank column after it. Getting
+ * that wrong by one column per line silently drops the last character off a
+ * screen edge. */
+static void test_text_width_excludes_the_trailing_gap(void) {
+    UL_CHECK(font5x7_text_width("A", 1) == FONT5X7_WIDTH, "one glyph is its own width");
+    UL_CHECK(font5x7_text_width("AB", 1) == FONT5X7_ADVANCE + FONT5X7_WIDTH,
+             "two glyphs are one advance plus one width, not two advances");
+    UL_CHECK(font5x7_text_width("A", 3) == FONT5X7_WIDTH * 3, "scale multiplies");
+    UL_CHECK(font5x7_text_width("", 3) == 0 && font5x7_text_width(NULL, 3) == 0,
+             "nothing is zero wide");
+}
+
+/* The property the whole thing exists for: the returned scale fits, and the
+ * next one up does not. Checked across every width a real panel might have. */
+static void test_fit_scale_returns_the_largest_that_fits(void) {
+    const char *samples[] = {"21", "2 100", "100 000", "sats  big one", "0"};
+    bool always_fits = true, always_largest = true;
+
+    for (size_t i = 0; i < sizeof(samples) / sizeof(samples[0]); i++) {
+        for (int avail = 40; avail <= 320; avail += 4) {
+            const int s = font5x7_fit_scale(samples[i], avail, FONT5X7_MAX_SCALE);
+
+            if (s > FONT5X7_MIN_READABLE_SCALE && font5x7_text_width(samples[i], s) > avail) {
+                always_fits = false;
+            }
+            if (s < FONT5X7_MAX_SCALE &&
+                font5x7_text_width(samples[i], s + 1) <= avail) {
+                always_largest = false;
+            }
+        }
+    }
+    UL_CHECK(always_fits, "the chosen scale always fits the space it was given");
+    UL_CHECK(always_largest, "and no larger scale would also have fitted");
+}
+
+/* Never below the readable floor, even when that overflows -- shortening beats
+ * shrinking, because a line nobody can read conveys nothing whether or not it
+ * is complete. */
+static void test_fit_scale_never_goes_below_readable(void) {
+    UL_CHECK(font5x7_fit_scale("a very long label indeed", 40, FONT5X7_MAX_SCALE) ==
+                 FONT5X7_MIN_READABLE_SCALE,
+             "text that cannot fit is still drawn at the readable minimum");
+    UL_CHECK(font5x7_fit_scale("x", 1, FONT5X7_MAX_SCALE) == FONT5X7_MIN_READABLE_SCALE,
+             "even in one pixel of space");
+    UL_CHECK(font5x7_fit_scale("x", 10000, 1) == FONT5X7_MIN_READABLE_SCALE,
+             "a max_scale below the floor is raised to it, not honoured");
+}
+
+/* The regression proper: on the classic panel a short amount must come out
+ * BIG. The version a person could not read gave everything scale 3. */
+static void test_the_amount_gets_a_big_scale_on_a_real_panel(void) {
+    const int avail = 240 - 12; /* 240px panel, 6px margins */
+
+    UL_CHECK(font5x7_fit_scale("21", avail, FONT5X7_MAX_SCALE) == FONT5X7_MAX_SCALE,
+             "a two-digit amount gets the largest scale there is");
+    UL_CHECK(font5x7_fit_scale("2 100", avail, FONT5X7_MAX_SCALE) >= 5,
+             "a four-digit amount is still far above the old 3");
+    UL_CHECK(font5x7_fit_scale("100 000", avail, FONT5X7_MAX_SCALE) >= 5,
+             "and so is a six-digit one -- this is the case that regressed");
+
+    /* Sanity: at that scale it really does fit the panel. */
+    const int s = font5x7_fit_scale("100 000", avail, FONT5X7_MAX_SCALE);
+    UL_CHECK(font5x7_text_width("100 000", s) <= avail, "and genuinely fits");
+}
+
 void test_note_display_run(void) {
     printf("-- note_display --\n");
     test_whole_sats();
@@ -291,4 +364,8 @@ void test_note_display_run(void) {
     test_every_byte_has_a_glyph();
     test_glyph_shapes();
     test_no_glyph_overflows_its_cell();
+    test_text_width_excludes_the_trailing_gap();
+    test_fit_scale_returns_the_largest_that_fits();
+    test_fit_scale_never_goes_below_readable();
+    test_the_amount_gets_a_big_scale_on_a_real_panel();
 }

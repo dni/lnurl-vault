@@ -151,19 +151,34 @@ def run_serial(dev, b):
         f"{before} -> {after.get('note_count') if after else '?'}",
     )
 
-    listed = dev.cmd({"cmd": "list_notes"})
-    if listed and listed.get("ok"):
-        ids = [n["id"] for n in listed["notes"]]
-        b.check("list_notes includes it", nid in ids, f"{len(ids)} notes listed")
-    else:
-        # Reproduces #7 rather than hiding it: the listing is a single
-        # response with no paging, so a device with enough notes cannot list
-        # them at all.
-        b.check(
-            "list_notes fits in one response",
-            False,
-            f"got {listed.get('error') if listed else None} -- see issue #7",
-        )
+    # Page through, rather than assuming one response holds everything. A
+    # vault with more notes than fit returns a page plus next_offset, so a
+    # client that reads only the first page and concludes a note is missing is
+    # simply wrong -- which is what this check did before paging landed, and it
+    # failed against a device holding 49 notes with the new one on page 2.
+    ids, offset, pages, total = [], 0, 0, None
+    while True:
+        page = dev.cmd({"cmd": "list_notes", "offset": offset})
+        if not page or not page.get("ok"):
+            b.check(
+                "list_notes answers",
+                False,
+                f"got {page.get('error') if page else None} at offset {offset}",
+            )
+            break
+        pages += 1
+        total = page.get("total")
+        ids += [n["id"] for n in page["notes"]]
+        if "next_offset" not in page or pages > 50:
+            break
+        offset = page["next_offset"]
+
+    if total is not None:
+        b.check("list_notes includes the new note", nid in ids,
+                f"{len(ids)} notes across {pages} page(s), device reports {total}")
+        b.check("paging reaches every note", len(ids) == total, f"{len(ids)} of {total}")
+        b.check("no note appears twice", len(set(ids)) == len(ids),
+                f"{len(set(ids))} distinct of {len(ids)}")
 
     print("\n-- the disclosure gate --")
     nid2 = confirmed_note(dev, "bench-timeout")
