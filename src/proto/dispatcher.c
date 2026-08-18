@@ -368,8 +368,17 @@ static void handle_confirm(const char *line, char *out, size_t outcap) {
  * behaviour, and it is what test/native uses. On real firmware main.c always
  * wires one. */
 static bool confirm_action(const char *action, const char *id, char *out, size_t outcap) {
+    /* No hook means no way to ask, and a gate that disappears because a dep
+     * is NULL is not a gate. wipe has always refused in this case, and
+     * test_wipe.c gives the reason: "proceeding because no confirm hook
+     * happens to be wired would make a build misconfiguration into a remote
+     * erase." The same sentence applies here, and to export_secret below,
+     * where the misconfiguration becomes a disclosure instead -- an erase
+     * destroys value, a disclosure hands it over. */
     if (!g_deps.confirm_action) {
-        return true;
+        write_error(out, outcap, "unsupported",
+                    "no on-device confirmation available; refusing to act on a held note");
+        return false;
     }
     note_meta_t meta;
     const bool known = vault_get_meta(id, &meta);
@@ -415,7 +424,14 @@ static void handle_export_secret(const char *line, char *out, size_t outcap) {
         return;
     }
 
-    if (g_deps.confirm_export) {
+    /* See confirm_action(): the one command that discloses a plaintext secret
+     * must not be the one whose gate vanishes when a dep is not wired. */
+    if (!g_deps.confirm_export) {
+        write_error(out, outcap, "unsupported",
+                    "no on-device confirmation available; refusing to disclose a secret");
+        return;
+    }
+    {
         confirm_result_t result = g_deps.confirm_export(&meta);
         /* Only YES proceeds. This used to name the two refusals and fall
          * through on anything else, so a result the enum gained later would

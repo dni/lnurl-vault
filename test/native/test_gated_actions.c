@@ -262,15 +262,32 @@ static void test_creating_is_not_gated(void) {
     UL_CHECK(g_asked == 0, "nor list_notes");
 }
 
-/* Without a hook wired the old behaviour stands, which is what keeps the rest
- * of the native suite meaningful. */
-static void test_ungated_build_is_unchanged(void) {
+/* A build with no way to ask refuses, rather than proceeding ungated.
+ *
+ * This test used to assert the opposite, on the grounds that the old
+ * behaviour "is what keeps the rest of the native suite meaningful". That is
+ * no longer so: every test that drives a gated command through the dispatcher
+ * now wires its own hook, so nothing else depends on the ungated path. What
+ * was left was a gate whose existence was a property of main.c's wiring
+ * rather than of the command -- losable by a port or a refactor, with nothing
+ * failing to say so.
+ *
+ * wipe has always refused here, and test_wipe.c argues why: proceeding
+ * because no hook happens to be wired turns a build misconfiguration into a
+ * remote erase. For export_secret it turns one into a remote disclosure. */
+static void test_a_build_that_cannot_ask_refuses(void) {
     setup(false);
     char out[512], cmd[128];
+
     snprintf(cmd, sizeof(cmd), "{\"cmd\":\"mark_spent\",\"id\":\"%s\"}", g_confirmed);
     dispatcher_handle(cmd, out, sizeof(out));
-    UL_CHECK(strstr(out, "\"ok\":true") != NULL, "no hook means no gate");
-    UL_CHECK(state_is(g_confirmed, NOTE_STATE_SPENT), "and the command ran");
+    UL_CHECK(strstr(out, "unsupported") != NULL, "no hook means the command is refused");
+    UL_CHECK(state_is(g_confirmed, NOTE_STATE_CONFIRMED), "and the note is untouched");
+
+    snprintf(cmd, sizeof(cmd), "{\"cmd\":\"export_secret\",\"id\":\"%s\"}", g_confirmed);
+    dispatcher_handle(cmd, out, sizeof(out));
+    UL_CHECK(strstr(out, "unsupported") != NULL, "and so is a disclosure");
+    UL_CHECK(strstr(out, "\"k1\"") == NULL, "with no secret handed out");
 }
 
 void test_gated_actions_run(void) {
@@ -284,5 +301,5 @@ void test_gated_actions_run(void) {
     test_approval_lets_the_command_through();
     test_a_bad_request_never_reaches_the_owner();
     test_creating_is_not_gated();
-    test_ungated_build_is_unchanged();
+    test_a_build_that_cannot_ask_refuses();
 }
