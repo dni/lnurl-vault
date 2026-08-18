@@ -188,6 +188,19 @@ void vault_init(const vault_storage_t *storage, vault_time_fn now_fn) {
     }
 }
 
+/* Firmware wiring for when persistent storage was expected but could not be
+ * brought up: fail closed. Leaves the index "unknown", so new_note() refuses
+ * to create notes and get_info reports it, rather than running in RAM and
+ * silently losing every note at the next reset. Distinct from
+ * vault_init(NULL, ...), which is in-RAM-by-design for the native tests. */
+void vault_init_storage_unavailable(vault_time_fn now_fn) {
+    g_storage = NULL;
+    g_now = now_fn;
+    g_note_count = 0;
+    g_unloaded_count = 0;
+    g_index_known = false;
+}
+
 bool vault_index_known(void) {
     return g_index_known;
 }

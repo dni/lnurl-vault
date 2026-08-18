@@ -94,6 +94,12 @@ typedef struct {
  * are always 0). */
 void vault_init(const vault_storage_t *storage, vault_time_fn now_fn);
 
+/* Fail-closed init for firmware whose storage was expected but did not come
+ * up: the vault refuses to create notes (they could not be persisted) and
+ * reports the index as unknown. NOT the same as vault_init(NULL, ...), which
+ * is the in-RAM-by-design mode the native tests use. See vault_index_known(). */
+void vault_init_storage_unavailable(vault_time_fn now_fn);
+
 /* Generates one fresh secret (rotate/merge). Stores it PENDING and returns
  * its id plus the hex SHA-256 hash to disclose to the mint as `h`. */
 vault_err_t vault_new_secret(vault_rng_fn rng, const char parent_ids[][VAULT_ID_BUF],

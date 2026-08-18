@@ -512,6 +512,22 @@ static void test_persist_failure_is_refused(void) {
              "the note stays PENDING rather than CONFIRMED-only-in-RAM");
 }
 
+/* A firmware boot whose storage was expected but could not be brought up must
+ * not mint RAM-only notes it will lose at the next reset (issue #72) -- unlike
+ * vault_init(NULL), the in-RAM-by-design mode the other tests use. */
+static void test_storage_unavailable_fails_closed(void) {
+    vault_init_storage_unavailable(NULL);
+    UL_CHECK(!vault_index_known(), "a storage-unavailable boot reports the index as unknown");
+    char id[VAULT_ID_BUF], h[VAULT_HASH_HEX_BUF];
+    UL_CHECK(vault_new_secret(rng_basic, NULL, 0, "x", id, h) != VAULT_OK,
+             "new_secret is refused when storage is unavailable, not run in-RAM");
+    UL_CHECK(vault_import_secret(rng_basic,
+                 "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff",
+                 "mint", 1000, "x", id) != VAULT_OK,
+             "import is refused too when storage is unavailable");
+    UL_CHECK(vault_count() == 0, "and nothing is created");
+}
+
 void test_vault_run(void) {
     test_state_machine();
     test_split_and_merge_lineage();
@@ -520,4 +536,5 @@ void test_vault_run(void) {
     test_load_bounds_parent_count();
     test_unreadable_index_is_not_an_empty_vault();
     test_persist_failure_is_refused();
+    test_storage_unavailable_fails_closed();
 }

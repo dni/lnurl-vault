@@ -219,12 +219,25 @@ void app_main(void) {
     };
     dispatcher_init(&deps);
 
+    /* Create ui_task's request queue before any transport starts, so a gated
+     * command arriving during boot (BLE comes up next, and vault_init below
+     * loads NVS) is queued for the task rather than sent to a NULL handle. The
+     * task itself still starts last, see ui_task_start() below. */
+    ui_task_init();
+
     /* Bring up BLE (and with it, the hardware RNG's documented full-entropy
      * precondition) before touching the RNG at all. */
     ble_gatt_start();
     rng_self_test();
 
-    vault_init(storage_ok ? vault_nvs_storage() : NULL, now_seconds);
+    if (storage_ok) {
+        vault_init(vault_nvs_storage(), now_seconds);
+    } else {
+        /* Storage was expected but could not be brought up. Fail closed --
+         * refuse to mint notes that would vanish at the next reset -- rather
+         * than run in RAM, which is vault_init(NULL)'s test-only mode. */
+        vault_init_storage_unavailable(now_seconds);
+    }
 
     board_serial_start();
 
@@ -237,9 +250,10 @@ void app_main(void) {
      * examined. Both were observed on hardware. No-ops unless their build
      * flags are set.
      *
-     * The gap this leaves: export_secret arriving during a diagnostic run
-     * would reach a ui_task that has not started. Acceptable only because
-     * these flags are never set in a shipping build. */
+     * A gated command arriving during this window (or during BLE bring-up and
+     * vault_init above) is queued -- ui_task_init() created the queue before
+     * any transport started -- and serviced once ui_task_start() runs below;
+     * the calling transport simply waits for it. */
     display_selftest_run();
     qr_selftest_run();
 
