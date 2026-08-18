@@ -445,9 +445,12 @@ of their Rust one. The release fails closed if the secret isn't set —
 to configure it, and the seed is stored **hex-encoded**, not as raw bytes:
 GitHub Actions secrets are handled as text/env vars, and a raw 32-byte
 value can contain bytes that don't survive that round-trip intact; the
-workflow decodes the hex back to bytes itself before signing. This part of
-the workflow has not been exercised on a real tagged release yet — the one
-release done so far predates it.
+workflow decodes the hex back to bytes itself before signing. This part of the workflow **has** now been exercised on a real tagged
+release. v0.0.4 was signed by CI, and its `firmware.bin.sig` verifies
+against the public key compiled into the firmware — checked from the
+published artefact rather than from the build that made it, and confirmed on
+a real board, which accepts that signature at `ota_begin` and refuses a
+tampered one in 0.2s.
 
 **Key rotation is a two-release operation**, the same shape as heartwood's
 own (`docs/ota-signing.md`), because a device only trusts the key it was
