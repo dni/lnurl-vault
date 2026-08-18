@@ -122,7 +122,16 @@ vault_err_t vault_discard(const char *id);
 vault_err_t vault_export_secret(const char *id, char out_hex[VAULT_SECRET_HEX_BUF]);
 
 /* Registers an externally-known secret (a received note, or a fresh mint
- * payment preimage) directly as CONFIRMED. */
+ * payment preimage) directly as CONFIRMED.
+ *
+ * Idempotent on the secret. Importing one the vault already holds returns
+ * VAULT_OK with the existing note's id in out_id and creates nothing -- a
+ * note is its secret, so holding it twice would report double the value and
+ * leave one copy looking spendable after the other was spent. The existing
+ * note is not modified, so a re-import cannot restate its amount or host.
+ * Callers should therefore treat out_id as "the note for this secret", not
+ * "the note I just created", and read its state if that matters (importing
+ * an already-SPENT secret returns that note, still SPENT). */
 vault_err_t vault_import_secret(vault_rng_fn rng, const char *k1_hex, const char *host,
                                  uint64_t amount_msat, const char *label,
                                  char out_id[VAULT_ID_BUF]);

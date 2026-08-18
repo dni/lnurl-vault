@@ -342,6 +342,28 @@ vault_err_t vault_import_secret(vault_rng_fn rng, const char *k1_hex, const char
         return VAULT_ERR_STORAGE_FULL;
     }
 
+    /* A bearer note IS its secret, so the vault cannot hold the same one
+     * twice -- two entries backed by one secret would report double the
+     * value actually held, and spending either would leave the other looking
+     * spendable while the mint has already paid it out.
+     *
+     * This is reached by ordinary retry, not by an attack: import_secret has
+     * no idempotency key, so a response lost after the note was committed
+     * (a BLE disconnect between the write and the reply) leaves the host
+     * with no way to know it landed. Answering with the existing note's id
+     * makes the retry return what the first call would have.
+     *
+     * Nothing about the existing note is updated, deliberately. Letting a
+     * re-import rewrite amount_msat or host would give the wire a way to
+     * change what the approval screen says about a note already held. First
+     * import wins; a duplicate is told which note it already is. */
+    for (size_t i = 0; i < g_note_count; i++) {
+        if (memcmp(g_notes[i].secret, secret, VAULT_SECRET_LEN) == 0) {
+            copy_trunc(out_id, g_notes[i].id, VAULT_ID_BUF);
+            return VAULT_OK;
+        }
+    }
+
     note_t n;
     memset(&n, 0, sizeof(n));
     if (!gen_unique_id(rng, n.id, NULL)) {
