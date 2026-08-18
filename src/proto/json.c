@@ -16,10 +16,62 @@
  * range in practice (LNURLcash bearer notes cap out at a tiny fraction of
  * total BTC supply expressed in msat). */
 
+/* cJSON's parser recurses one C stack-frame pair per level of array/object
+ * nesting. The transport tasks that call in here run on small stacks (the
+ * serial RX task has 4KB), so a line of a few hundred '[' -- not even a valid
+ * command -- would recurse deep enough to overflow one before any field is
+ * validated, corrupting whatever sits below the stack (which on this device
+ * includes the plaintext note array). Nothing authenticates the sender: any
+ * BLE central in range can write it.
+ *
+ * Reject over-deep input with a cheap, string-aware bracket scan before cJSON
+ * ever sees it, so the parser's recursion is bounded here regardless of
+ * CONFIG_CJSON_NESTING_LIMIT. Brackets inside string values do not count --
+ * the same in-string handling raw_u64_at_top_level() uses. The protocol schema
+ * is flat (an object of scalars plus the parent_ids string array -- depth 2),
+ * so 16 is generous headroom for anything legitimate. */
+#define JSON_MAX_DEPTH 16
+
+static bool depth_within_limit(const char *json) {
+    int depth = 0;
+    bool in_str = false;
+    for (const char *p = json; *p; p++) {
+        if (in_str) {
+            if (*p == '\\' && p[1]) {
+                p++;
+            } else if (*p == '"') {
+                in_str = false;
+            }
+            continue;
+        }
+        if (*p == '"') {
+            in_str = true;
+        } else if (*p == '{' || *p == '[') {
+            if (++depth > JSON_MAX_DEPTH) {
+                return false;
+            }
+        } else if (*p == '}' || *p == ']') {
+            if (depth > 0) {
+                depth--;
+            }
+        }
+    }
+    return true;
+}
+
+/* Depth-guarded cJSON_Parse -- every reader below goes through this so the one
+ * chokepoint bounds recursion for the whole firmware. See depth_within_limit(). */
+static cJSON *parse_bounded(const char *json) {
+    if (!depth_within_limit(json)) {
+        return NULL;
+    }
+    return cJSON_Parse(json);
+}
+
 /* ================= reader public API =================================== */
 
 bool json_has(const char *json, const char *key) {
-    cJSON *root = cJSON_Parse(json);
+    cJSON *root = parse_bounded(json);
     if (!root) {
         return false;
     }
@@ -29,7 +81,7 @@ bool json_has(const char *json, const char *key) {
 }
 
 bool json_get_str(const char *json, const char *key, char *out, size_t outcap) {
-    cJSON *root = cJSON_Parse(json);
+    cJSON *root = parse_bounded(json);
     if (!root) {
         return false;
     }
@@ -111,7 +163,7 @@ static bool raw_u64_at_top_level(const char *json, const char *key, uint64_t *ou
 bool json_get_u64(const char *json, const char *key, uint64_t *out) {
     /* Structure is still validated by cJSON -- a malformed document must not
      * be salvaged by the raw scan below. */
-    cJSON *root = cJSON_Parse(json);
+    cJSON *root = parse_bounded(json);
     if (!root) {
         return false;
     }
@@ -125,7 +177,7 @@ bool json_get_u64(const char *json, const char *key, uint64_t *out) {
 }
 
 bool json_get_bool(const char *json, const char *key, bool *out) {
-    cJSON *root = cJSON_Parse(json);
+    cJSON *root = parse_bounded(json);
     if (!root) {
         return false;
     }
@@ -141,7 +193,7 @@ bool json_get_bool(const char *json, const char *key, bool *out) {
 
 bool json_get_str_array(const char *json, const char *key, char *out_flat, size_t item_stride,
                          size_t max_items, size_t *count) {
-    cJSON *root = cJSON_Parse(json);
+    cJSON *root = parse_bounded(json);
     if (!root) {
         return false;
     }
