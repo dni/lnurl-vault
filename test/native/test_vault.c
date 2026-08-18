@@ -1,6 +1,8 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "dispatcher.h"
+#include "json.h"
 #include "unity_lite.h"
 #include "vault.h"
 
@@ -214,8 +216,17 @@ static bool fake_delete_note(const char *id, void *ctx) {
     return true;
 }
 
+/* When set, load_index reports failure — a transient flash read error, or an
+ * index blob larger than the buffer (which nvs_get_blob answers with
+ * ESP_ERR_NVS_INVALID_LENGTH, e.g. after VAULT_MAX_NOTES shrinks). The stored
+ * index is left completely intact; only this read of it fails. */
+static bool fake_index_read_fails = false;
+
 static bool fake_load_index(char ids[][VAULT_ID_BUF], size_t max, size_t *count, void *ctx) {
     (void)ctx;
+    if (fake_index_read_fails) {
+        return false;
+    }
     size_t n = fake_index_count < max ? fake_index_count : max;
     for (size_t i = 0; i < n; i++) {
         memcpy(ids[i], fake_index_ids[i], VAULT_ID_BUF);

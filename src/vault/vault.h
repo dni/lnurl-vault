@@ -141,6 +141,16 @@ size_t vault_list(note_meta_t *out, size_t max);
 bool vault_get_meta(const char *id, note_meta_t *out);
 void vault_get_info(size_t *note_count, size_t *pending_count);
 
+/* False when this boot could not read the persisted note index, so the vault
+ * is refusing to create notes and refusing to rewrite the index (either would
+ * risk overwriting a list it cannot see). Distinct from a vault that is
+ * genuinely empty, and NOT the same as the NVS-level state get_info reports
+ * from vault_nvs_state_name(): NVS itself can come up perfectly while this
+ * one read fails, in which case storage looks "ok" and the vault looks empty
+ * and neither is the useful truth. Callers reporting device state should ask
+ * this too. Recovery is a reboot, never a wipe. */
+bool vault_index_known(void);
+
 /* Index-based accessors so callers (dispatcher.c in particular, streaming
  * list_notes straight onto the wire) can iterate one note at a time instead
  * of materializing a VAULT_MAX_NOTES-sized array — that's ~50KB, too much
