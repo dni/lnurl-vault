@@ -87,6 +87,21 @@ void test_dispatcher_run(void) {
     UL_CHECK(json_get_bool(out, "ok", &ok) && ok,
              "reset returns ok:true even with no reset_fn wired (native has no device to reboot)");
 
+    /* reset over BLE is refused -- an unauthenticated central could otherwise
+     * reboot-loop the device (issue #79). */
+    {
+        char err[32];
+        dispatcher_set_source(DISPATCH_SOURCE_BLE);
+        dispatcher_handle("{\"cmd\":\"reset\"}", out, sizeof(out));
+        UL_CHECK(json_get_bool(out, "ok", &ok) && !ok, "reset over BLE is refused");
+        UL_CHECK(json_get_str(out, "error", err, sizeof(err)) && strcmp(err, "unsupported") == 0,
+                 "reset over BLE reports unsupported");
+        dispatcher_set_source(DISPATCH_SOURCE_SERIAL);
+        dispatcher_handle("{\"cmd\":\"reset\"}", out, sizeof(out));
+        UL_CHECK(json_get_bool(out, "ok", &ok) && ok, "reset over serial is allowed");
+        dispatcher_set_source(DISPATCH_SOURCE_LOCAL); /* restore default for later tests */
+    }
+
     /* import_secret is the one command that takes a secret FROM the wire,
      * and it had no dispatcher-level test at all. */
     const char *k1_a = "\"k1\":\"" "1111111111111111111111111111111111111111111111111111111111111111" "\"";

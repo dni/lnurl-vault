@@ -49,6 +49,7 @@ static void on_line(const char *line, void *ctx) {
      * now releases vault_lock during the approval wait, so vault_lock is no
      * longer standing in for it either. */
     cmd_lock_acquire();
+    dispatcher_set_source(DISPATCH_SOURCE_SERIAL);
     vault_lock_acquire();
     dispatcher_handle(line, g_resp, sizeof(g_resp));
     vault_lock_release();

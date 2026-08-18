@@ -201,6 +201,7 @@ static void ble_cmd_task(void *arg) {
          * callbacks in main.c release vault_lock around the human wait and
          * reacquire it after; cmd_lock is deliberately held throughout. */
         cmd_lock_acquire();
+        dispatcher_set_source(DISPATCH_SOURCE_BLE);
         vault_lock_acquire();
         dispatcher_handle(item.data, (char *)g_tx_buf + 2, TX_BUF_SIZE - 2);
         vault_lock_release();

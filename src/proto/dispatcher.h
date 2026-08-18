@@ -202,6 +202,13 @@ typedef struct {
 
 void dispatcher_init(const dispatcher_deps_t *deps);
 
+/* Transport a command arrived on. reset is refused over BLE (an unauthenticated
+ * central could otherwise reboot-loop the device); set under cmd_lock before
+ * dispatcher_handle(). Defaults to LOCAL, which allows reset, so native tests
+ * need no change. */
+typedef enum { DISPATCH_SOURCE_LOCAL = 0, DISPATCH_SOURCE_SERIAL, DISPATCH_SOURCE_BLE } dispatch_source_t;
+void dispatcher_set_source(dispatch_source_t source);
+
 /* Parses one complete JSON command object and writes a NUL-terminated JSON
  * response into out (outcap bytes) — always writes something valid, even a
  * bad_request error, never leaves out unwritten. */
