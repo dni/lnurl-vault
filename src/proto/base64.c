@@ -48,6 +48,15 @@ size_t base64_decoded_len(size_t in_len) {
 }
 
 bool base64_decode(const char *in, size_t in_len, unsigned char *out, size_t *out_len) {
+    /* Guarded rather than assumed: this parses ota_chunk's `data` field, so
+     * every argument reaching it is shaped by a remote party even when the
+     * pointers are the caller's. The rest of this function already validates
+     * the whole input before writing any of it -- which is what makes the
+     * header's "without writing partial output" true, unlike hex_decode's
+     * identical promise, which was not. */
+    if (!in || !out || !out_len) {
+        return false;
+    }
     if (in_len % 4 != 0) {
         return false;
     }
