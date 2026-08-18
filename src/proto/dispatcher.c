@@ -103,7 +103,13 @@ static void write_note_obj(json_writer_t *w, const note_meta_t *n) {
         jw_str(w, "sig", n->sig);
     }
     jw_begin_arr(w, "parent_ids");
-    for (uint8_t i = 0; i < n->parent_count; i++) {
+    /* parent_count bounds a read of a fixed-size array straight onto the
+     * wire, so it is clamped at the point of use as well as on load. Past
+     * the end of parent_ids is the next note in g_notes, and that note
+     * starts with its id and secret. */
+    uint8_t parent_n =
+        n->parent_count > VAULT_MAX_PARENTS ? VAULT_MAX_PARENTS : n->parent_count;
+    for (uint8_t i = 0; i < parent_n; i++) {
         jw_str_item(w, n->parent_ids[i]);
     }
     jw_end_arr(w);

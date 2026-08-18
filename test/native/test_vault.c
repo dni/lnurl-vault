@@ -185,11 +185,20 @@ static bool fake_save_note(const note_t *note, void *ctx) {
     return true;
 }
 
+/* When set, load_note reports success for this id having written only its
+ * leading bytes — what ESP-IDF's nvs_get_blob does for a stored blob shorter
+ * than the buffer (it returns ESP_OK and fills only what it had). */
+static const char *fake_short_note_id = NULL;
+
 static bool fake_load_note(const char *id, note_t *out, void *ctx) {
     (void)ctx;
     int idx = fake_note_find(id);
     if (idx < 0) {
         return false;
+    }
+    if (fake_short_note_id && strcmp(id, fake_short_note_id) == 0) {
+        memcpy(out, &fake_note_store[idx], VAULT_ID_BUF); /* the id, and nothing after it */
+        return true;
     }
     *out = fake_note_store[idx];
     return true;
@@ -227,6 +236,68 @@ static bool fake_save_index(const char ids[][VAULT_ID_BUF], size_t count, void *
 static void fake_reset(void) {
     memset(fake_note_used, 0, sizeof(fake_note_used));
     fake_index_count = 0;
+    fake_short_note_id = NULL;
+}
+
+/* A note arriving from storage has never been through new_note(), which is
+ * the only place parent_count is bounded. dispatcher.c serializes
+ * parent_ids[0 .. parent_count) straight onto the wire, and past the end of
+ * that fixed 16-entry array is the next note in g_notes — whose first fields
+ * are its id and then its secret. list_notes has no physical gate, so an
+ * out-of-range count read from flash is a disclosure, not just a wrong
+ * answer. */
+static void test_load_bounds_parent_count(void) {
+    fake_reset();
+    vault_storage_t storage = {
+        .load_index = fake_load_index,
+        .save_index = fake_save_index,
+        .load_note = fake_load_note,
+        .save_note = fake_save_note,
+        .delete_note = fake_delete_note,
+        .ctx = NULL,
+    };
+
+    vault_init(&storage, NULL);
+    srand(4242);
+    char id[VAULT_ID_BUF], h[VAULT_HASH_HEX_BUF];
+    UL_CHECK(vault_new_secret(rng_basic, NULL, 0, "lineage", id, h) == VAULT_OK, "note created");
+
+    /* Corrupt the persisted blob the way a different note_t layout would. */
+    int idx = fake_note_find(id);
+    UL_CHECK(idx >= 0, "the note reached the fake backend");
+    fake_note_store[idx].parent_count = 200;
+
+    vault_init(&storage, NULL);
+    note_meta_t meta;
+    UL_CHECK(vault_get_meta(id, &meta), "a note with an out-of-range parent_count still loads");
+    UL_CHECK(meta.parent_count <= VAULT_MAX_PARENTS,
+             "parent_count from storage is clamped to the size of the array it indexes");
+
+    /* A backend that reports success while writing less than a whole note_t
+     * must not leave the untouched tail carrying the previous note's fields.
+     * vault_init reuses one stack slot for every iteration of its load loop,
+     * so without zeroing, the short note inherits the tail of the note loaded
+     * just before it — including its parent_count and its amount. */
+    fake_reset();
+    vault_init(&storage, NULL);
+    char full_id[VAULT_ID_BUF], short_id[VAULT_ID_BUF];
+    UL_CHECK(vault_new_secret(rng_basic, NULL, 0, "full", full_id, h) == VAULT_OK, "first note");
+    UL_CHECK(vault_confirm(full_id, 777000, "mint.example", NULL) == VAULT_OK,
+             "first note carries a distinctive amount");
+    UL_CHECK(vault_new_secret(rng_basic, NULL, 0, "short", short_id, h) == VAULT_OK, "second note");
+    fake_note_store[fake_note_find(full_id)].parent_count = VAULT_MAX_PARENTS;
+
+    fake_short_note_id = short_id;
+    vault_init(&storage, NULL);
+    if (vault_get_meta(short_id, &meta)) {
+        UL_CHECK(meta.amount_msat == 0,
+                 "a partially-read note does not inherit the previous note's amount");
+        UL_CHECK(meta.parent_count == 0,
+                 "a partially-read note does not inherit the previous note's parent_count");
+    } else {
+        UL_CHECK(true, "a partially-read note is refused outright");
+    }
+    fake_short_note_id = NULL;
 }
 
 static void test_persistence_roundtrip(void) {
@@ -267,4 +338,5 @@ void test_vault_run(void) {
     test_split_and_merge_lineage();
     test_id_collision_retry();
     test_persistence_roundtrip();
+    test_load_bounds_parent_count();
 }
