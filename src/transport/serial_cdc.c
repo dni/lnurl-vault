@@ -200,39 +200,42 @@ static void serial_rx_task(void *arg) {
 static void handle_rx(int itf, cdcacm_event_t *event) {
     (void)event;
     uint8_t chunk[64];
-    size_t rx_size = 0;
-    esp_err_t err = tinyusb_cdcacm_read(itf, chunk, sizeof(chunk), &rx_size);
-    if (err != ESP_OK) {
-        return;
-    }
+    /* Drain the whole FIFO: tud_cdc_rx_cb fires once per packet, so a single
+     * 64-byte read leaves any surplus in the 512-byte FIFO until the next
+     * packet arrives, and the backlog grows across a boot. Loop until empty. */
+    for (;;) {
+        size_t rx_size = 0;
+        if (tinyusb_cdcacm_read(itf, chunk, sizeof(chunk), &rx_size) != ESP_OK || rx_size == 0) {
+            return;
+        }
+        for (size_t i = 0; i < rx_size; i++) {
+            char c = (char)chunk[i];
+            if (c == '\n' || c == '\r') {
+                if (g_line_len > 0) {
+                    g_line_buf[g_line_len] = '\0';
 
-    for (size_t i = 0; i < rx_size; i++) {
-        char c = (char)chunk[i];
-        if (c == '\n' || c == '\r') {
-            if (g_line_len > 0) {
-                g_line_buf[g_line_len] = '\0';
-
-                /* static: this task (TinyUSB's own) never re-enters
-                 * handle_rx() concurrently with itself, so a static buffer
-                 * here is safe, same reasoning as tx_item_t above. */
-                static rx_item_t item;
-                item.itf = itf;
-                item.len = g_line_len;
-                memcpy(item.data, g_line_buf, g_line_len + 1); /* + NUL */
-                if (xQueueSend(g_rx_queue, &item, 0) != pdTRUE) {
-                    ESP_LOGW(TAG, "rx queue full, dropping a %u-byte command",
-                             (unsigned)item.len);
+                    /* static: this task (TinyUSB's own) never re-enters
+                     * handle_rx() concurrently with itself, so a static buffer
+                     * here is safe, same reasoning as tx_item_t above. */
+                    static rx_item_t item;
+                    item.itf = itf;
+                    item.len = g_line_len;
+                    memcpy(item.data, g_line_buf, g_line_len + 1); /* + NUL */
+                    if (xQueueSend(g_rx_queue, &item, 0) != pdTRUE) {
+                        ESP_LOGW(TAG, "rx queue full, dropping a %u-byte command",
+                                 (unsigned)item.len);
+                    }
+                    g_line_len = 0;
                 }
-                g_line_len = 0;
+                continue;
             }
-            continue;
+            if (g_line_len + 1 < LINE_BUF_SIZE) {
+                g_line_buf[g_line_len++] = c;
+            }
+            /* else: silently drop overlong line content; g_line_len resets on
+             * the next newline and the dispatcher will see a truncated (likely
+             * malformed -> bad_request) line rather than the device wedging. */
         }
-        if (g_line_len + 1 < LINE_BUF_SIZE) {
-            g_line_buf[g_line_len++] = c;
-        }
-        /* else: silently drop overlong line content; g_line_len resets on
-         * the next newline and the dispatcher will see a truncated (likely
-         * malformed -> bad_request) line rather than the device wedging. */
     }
 }
 
