@@ -177,6 +177,7 @@ static void serial_rx_task(void *arg) {
          * the whole command, which is what keeps the dispatcher's own OTA
          * session state safe from the other transport meanwhile. */
         cmd_lock_acquire();
+        dispatcher_set_source(DISPATCH_SOURCE_SERIAL);
         vault_lock_acquire();
         dispatcher_handle(item.data, g_resp_buf, sizeof(g_resp_buf) - 1);
         vault_lock_release();

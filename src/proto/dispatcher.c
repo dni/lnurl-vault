@@ -13,9 +13,14 @@
 #endif
 
 static dispatcher_deps_t g_deps;
+static dispatch_source_t g_source = DISPATCH_SOURCE_LOCAL;
 
 void dispatcher_init(const dispatcher_deps_t *deps) {
     g_deps = *deps;
+}
+
+void dispatcher_set_source(dispatch_source_t source) {
+    g_source = source;
 }
 
 /* Closes a response and, if it did not fit, replaces it with an explicit
@@ -526,6 +531,12 @@ static void handle_rename(const char *line, char *out, size_t outcap) {
  * so this response actually has a chance to reach the client first. See
  * dispatcher.h's reset_fn comment. */
 static void handle_reset(char *out, size_t outcap) {
+    /* Refused over BLE: an unauthenticated central could otherwise reboot-loop
+     * the device. A physically-wired serial/local client may still use it. */
+    if (g_source == DISPATCH_SOURCE_BLE) {
+        write_error(out, outcap, "unsupported", "reset is not available over BLE");
+        return;
+    }
     write_ok(out, outcap);
     if (g_deps.reset) {
         g_deps.reset();
