@@ -47,7 +47,20 @@ message, not every chunk.
 Every response has a boolean `ok`. On failure: `{"ok":false,"error":"<code>","message":"..."}`
 (`message` is optional, human-readable). Error codes: `not_found`,
 `invalid_state`, `user_declined`, `timeout`, `storage_full`, `bad_request`,
-`response_too_large`, `display_unavailable`.
+`response_too_large`, `display_unavailable`, `unsupported`, `wipe_failed`, and
+two OTA-specific codes (see `ota_begin`/`ota_finish` below): `bad_signature`,
+`ota_failed`.
+
+**Physically-gated commands.** `export_secret`, `mark_spent`, `rename`,
+`delete`, `discard`, `wipe` and `ota_begin` take effect only after an
+on-device confirmation, so beyond their own success reply each can also return
+`user_declined`, `timeout`, `display_unavailable`, or `unsupported` (no
+confirmation hook available). A client must handle a refusal, not assume
+`{"ok":true}`.
+
+`unsupported` means the command cannot be honoured on this device as
+configured — a gated command with no on-device confirmation wired, or `reset`
+sent over BLE (it is serial-only).
 
 `display_unavailable` means the device could not ask its owner: the panel
 never came up, so there is nothing to show and no informed consent to be had.
@@ -63,19 +76,15 @@ the device is refusing to write rather than risk what is already there. Read
 notes; `index_unreadable` means reboot, and specifically do **not** wipe.
 
 `response_too_large` means the reply did not fit the transport's response
-buffer. Today only `list_notes` can produce it (every other command's reply
-is a fixed set of fields). A client should treat it as "ask for less", not as
-a device fault — but note there is currently no way to ask for less, so a
-vault holding more notes than fit cannot be listed at all. Paging is the
-outstanding fix.
-plus two OTA-specific codes (see `ota_begin`/`ota_finish` below):
-`bad_signature`, `ota_failed`.
+buffer. Today only `list_notes` can produce it (every other command's reply is
+a fixed set of fields). Treat it as "ask for less": `list_notes` takes
+`offset`/`limit` to page through a vault larger than one response (see below).
 
 ### `get_info`
 
 ```json
 {"cmd":"get_info"}
-→ {"ok":true,"fw_version":"0.1.0","board":"t-display-s3","note_count":3,"pending_count":1}
+→ {"ok":true,"fw_version":"0.0.6","board":"t-display-s3","note_count":3,"pending_count":1}
 ```
 
 `board` identifies the hardware and therefore the pin map -- useful in a bug
@@ -99,6 +108,14 @@ many notes exist -- it is how many the device could load. The firmware never
 erases to recover from any of these; see `wipe`.
 
 The field is absent on a build with no persistent storage.
+
+Two more groups of fields appear when their source is compiled in.
+`free_heap_bytes` reports the current free heap (a health signal). And after an
+unexpected reset the device reports how the previous boot ended, for diagnosing
+a field reset over the wire — on a board whose console is disabled this is the
+only channel: `last_reset_reason` (`poweron`, `panic`, `sw`, …), `boot_count`,
+`last_boot_unexpected` (bool), and `last_cmd_in_flight` (the command in flight
+at the crash, if any).
 
 ### `list_notes`
 
