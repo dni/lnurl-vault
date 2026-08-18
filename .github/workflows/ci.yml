@@ -78,3 +78,22 @@ jobs:
 
       - name: Build firmware
         run: pio run -e t-display-s3
+
+  ota-push-tests:
+    name: OTA host-tool tests (ota_push.py)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # cryptography is needed for the sign-and-verify round-trip; without it
+      # that one test skips (see tests/test_ota_push.py) and the retry/wire-
+      # format tests still run. pyserial lets ota_push.py import cleanly.
+      - name: Install test deps
+        run: pip install pytest cryptography pyserial
+
+      - name: Run host-tool tests
+        run: pytest -q tests/
