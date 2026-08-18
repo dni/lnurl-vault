@@ -55,19 +55,23 @@
  * unsigned char bool;` fails outright ("'bool' cannot be defined via
  * 'typedef'"), and nothing short of not compiling under C23 would dodge
  * it, which this project doesn't control. Since C99 and later already
- * provide bool/true/false one way or another (macros pre-C23, keywords
- * from C23 on) and ESP-IDF is never C89, this shim is simply unnecessary
- * for our purposes regardless of standard version — so the fix is to
- * delete it, as an automated step every time the library is (re)vendored,
- * not a one-off hand-edit:
+ * provide bool/true/false — but pre-C23 they come from <stdbool.h> and
+ * are not automatic, which is the part that matters here. So the shim is
+ * REPLACED by that include rather than simply deleted: deleting it alone
+ * left the header declaring `bool qrcode_getModule(...)` with nothing
+ * defining bool, which compiles only where bool is already a keyword,
+ * i.e. C23 and up. That is true of this firmware build and of nothing
+ * else, so the header could not be included from an ordinary C11
+ * translation unit at all. Including <stdbool.h> is correct under every
+ * standard from C99 on, and it sits inside the library's own
+ * `#ifndef __cplusplus` guard, where the shim was.
  *
- *   sed -i '/typedef unsigned char bool;/d; \
- *           /static const bool false = 0;/d; \
- *           /static const bool true = 1;/d' src/ui/qrcode.h
- *
- * (See README.md's Build & flash section and .github/workflows/ci.yml's
- * "Vendor QR library" step — both run this same sed command.) This leaves
- * an empty, harmless `#ifndef __cplusplus` / `#endif` wrapper behind. */
+ * This is an automated step, not a one-off hand-edit: it lives in
+ * tools/vendor_qrcode.sh, which is what README.md's Build & flash section
+ * and both workflows actually run. The script uses awk rather than the
+ * `sed -i` this comment used to suggest — BSD sed takes an argument to
+ * -i and GNU sed does not, so no single sed invocation works on both
+ * macOS and CI; that failed for real once already. */
 #include "qr_display.h"
 
 #include "display.h"
