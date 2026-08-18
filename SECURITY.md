@@ -99,9 +99,9 @@ device. There is no key-rotation path that avoids that.
 Tracked as issues rather than hidden here. At the time of writing:
 
 - **BLE is unauthenticated** — no bonding, no passkey ([#16](../../issues/16)).
-  The destructive commands (`mark_spent`, `delete`, `discard`, `rename`) are
-  also ungated, so someone in radio range can destroy notes without ever
-  reading one. A fix for that half is in review; bonding is not addressed.
+  Any central in radio range can connect and issue commands. The destructive
+  commands (`mark_spent`, `delete`, `discard`, `rename`) are now gated behind
+  the same physical confirmation as `export_secret`; bonding is not addressed.
 - **No PIN or lockout** on the device itself.
 - **No Secure Boot or Flash Encryption**, per the eFuse reasoning above.
 - **OTA has never been run end to end on hardware** — the signature and

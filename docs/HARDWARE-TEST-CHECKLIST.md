@@ -66,6 +66,13 @@ Pass: both builds succeed, and `{"cmd":"get_info"}` answers after flashing.
 >
 > Everything else below still says "classic" where only the classic board was
 > used. The S3 is no longer wholly unverified, but it is not equally verified.
+>
+> **Bench record — 2026-08-18, v0.0.6.** Classic T-Display, `fw_version='0.0.6'`
+> — first hardware run of the post-#87..#93 firmware. `bench.py --ble`:
+> **25 passed, 0 failed, 5 skipped**. Re-confirms serial and BLE transport, the
+> note lifecycle, `list_notes` paging, the export gate timing out at 31.1s over
+> both transports, and every wipe refusal — none bench-run since v0.0.4. The 5
+> skips are the physical-press rows (§8/§10) and a granted wipe (§13).
 
 ## 2. Host transport — serial
 

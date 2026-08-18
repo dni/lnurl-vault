@@ -297,7 +297,7 @@ relevant file's own header comment as a starting point if it does.
 `src/vault/` and `src/proto/` (the note state machine, SHA-256, hex, base64,
 JSON reader/writer, command dispatcher, button gesture state machine, and
 `lnurlw://` URL builder) are pure portable C with no ESP-IDF dependency at
-all, and are additionally exercised by `test/native/` — **188/188
+all, and are additionally exercised by `test/native/` — **767/767
 assertions pass** — independent of the ESP32 build. This is the security-
 and protocol-critical logic, including the debounce/tap/chord logic gating
 every plaintext-secret disclosure and the OTA signature-verification/
@@ -627,16 +627,20 @@ step's `find` patterns are the first thing to check.
   self-test (two 16-byte draws must differ and not be all-zero) guards
   against a catastrophically stuck RNG; it is *not* a statistical
   randomness test suite.
-- **Storage**: NVS encryption is enabled by default
-  (`CONFIG_NVS_ENCRYPTION=y`, HMAC-peripheral key scheme — no separate key
-  partition, see `src/storage/nvs_storage.c` and `partitions.csv`). This
-  protects against casual flash dumping only. **Real protection against
-  physical extraction requires provisioning Flash Encryption + Secure Boot
-  V2** — a deliberate, irreversible (eFuse-burning) manual step,
-  intentionally left to you before this device ever holds value you care
-  about. OTA image signing (below) does not substitute for this: it
-  protects the update path, not a first USB flash or physical/debugger
-  access — see "OTA firmware updates" above for exactly where that line is.
+- **Storage**: NVS encryption is **off** (`CONFIG_NVS_ENCRYPTION=n`, see
+  `sdkconfig.defaults`), so **note storage is not encrypted at rest — a
+  physical flash dump recovers every secret**. It is off deliberately: on the
+  ESP32-S3 the HMAC key-protection scheme burns an eFuse on first boot,
+  irreversibly, as a silent side effect of powering the device on. Physical
+  possession is the protection model — treat the device like cash in a wallet.
+  **Real protection against physical extraction requires provisioning Flash
+  Encryption + Secure Boot V2** — a deliberate, irreversible (eFuse-burning)
+  manual production step, intentionally left to you before this device ever
+  holds value you care about. OTA image signing (below) does not substitute
+  for this: it protects the update path, not a first USB flash or physical/
+  debugger access — see "OTA firmware updates" above for exactly where that
+  line is. (Making NVS encryption a build-time production option is tracked in
+  the issues.)
 - **No networking on-device.** The only attack surface is the paired
   USB-CDC or BLE session — OTA firmware updates included, deliberately (see
   "OTA firmware updates" above). All mint calls are the browser's
@@ -664,16 +668,14 @@ step's `find` patterns are the first thing to check.
 
 ## Known limitations / next steps
 
-- **No on-screen note detail.** Both confirm/cancel gating and on-device
-  browsing are fully functional (a real button gesture is required before
-  any secret is ever shown), but the display shows only a full-screen color
-  per state and, while browsing, a blinked-out 1-based position — never a
-  note's actual id/amount/label — a hand-transcribed bitmap font couldn't be
-  visually verified without hardware in this environment, and a silently-
-  wrong glyph felt like the wrong risk to ship. Adding real text (most
-  likely via LVGL) is the natural next step, particularly before relying on
-  this for anything beyond bench testing — right now, browsing to the wrong
-  note and unveiling it is a real, unmitigated risk of this v1.
+- **On-screen note detail** is now rendered (`src/ui/display.c`'s
+  `display_note_detail`, over the `src/ui/font5x7.c` bitmap font): while
+  browsing, the screen shows the selected note's amount, label and id plus its
+  1-based position, and the confirm prompt shows the same for the note being
+  approved — so approving or unveiling a note is a deliberate read, not a
+  miscount. The font is a hand-transcribed 5x7 bitmap; it renders and scans on
+  hardware (see `docs/HARDWARE-TEST-CHECKLIST.md`), and moving to LVGL for
+  richer text remains a possible future step.
 - **The QR encoder is a required external dependency**, not included in
   this repo — see "Build & flash" above. Nothing in `src/ui/qr_display.c`
   will compile until it's vendored (confirmed both PlatformIO `lib_deps`
@@ -703,7 +705,7 @@ needs the system cJSON library — `pacman -S cjson` or
 cd test/native && make test
 ```
 
-This actually runs in this environment — 188 assertions across SHA-256
+This actually runs in this environment — 767 assertions across SHA-256
 known-answer vectors, JSON reader/writer round-trips (including escaping and
 the overflow-detection path), the full vault state machine (legal and
 illegal state transitions, split/merge parent lineage, the id-collision
