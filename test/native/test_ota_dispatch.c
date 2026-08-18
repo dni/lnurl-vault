@@ -183,6 +183,26 @@ void test_ota_dispatch_run(void) {
              "a declined approval reports user_declined");
     UL_CHECK(!g_write_begin_called, "a declined approval never opens the OTA partition");
 
+    /* --- a build with no approval hook wired refuses, rather than installing
+     * unasked. The three other physical gates (export_secret, the note
+     * actions, wipe) all fail closed when their dep is NULL; ota_begin must
+     * too, or a port that forgets to wire ota_approve turns a valid signature
+     * straight into an unapproved firmware replacement. --- */
+    {
+        dispatcher_deps_t no_approve = deps;
+        no_approve.ota_approve = NULL;
+        dispatcher_init(&no_approve);
+        reset_fakes();
+        dispatcher_handle(cmd_buf, out, sizeof(out)); /* the same signed, valid ota_begin */
+        UL_CHECK(json_get_bool(out, "ok", &ok) && !ok,
+                 "ota_begin with no approval hook wired is refused");
+        UL_CHECK(json_get_str(out, "error", err, sizeof(err)) && strcmp(err, "unsupported") == 0,
+                 "a missing approval hook reports unsupported, the same as the other gates");
+        UL_CHECK(!g_write_begin_called,
+                 "no flash partition is opened for an update the owner could never approve");
+        dispatcher_init(&deps); /* restore the provisioned deps for the blocks below */
+    }
+
     /* --- a chunk with the wrong offset doesn't kill the session --- */
     reset_fakes();
     dispatcher_handle(cmd_buf, out, sizeof(out)); /* re-run the valid ota_begin from above */

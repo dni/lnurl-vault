@@ -44,9 +44,9 @@ static int find_index(const char *id) {
     return -1;
 }
 
-static void persist_index(void) {
+static bool persist_index(void) {
     if (!g_storage || !g_storage->save_index) {
-        return;
+        return true; /* in-RAM mode: nothing to persist, so nothing can fail */
     }
     /* The index on flash is the only thing that says which notes exist. If
      * this boot could not read it, everything below builds a replacement out
@@ -55,7 +55,7 @@ static void persist_index(void) {
      * references them again. Same reasoning as the carry-through below, one
      * level up: a failed read is not proof the notes are gone. */
     if (!g_index_known) {
-        return;
+        return true; /* deliberately does not write (see above); not a failure */
     }
     char ids[VAULT_MAX_NOTES][VAULT_ID_BUF];
     size_t n = 0;
@@ -71,28 +71,35 @@ static void persist_index(void) {
     for (size_t i = 0; i < g_unloaded_count && n < VAULT_MAX_NOTES; i++) {
         memcpy(ids[n++], g_unloaded_ids[i], VAULT_ID_BUF);
     }
-    g_storage->save_index(ids, n, g_storage->ctx);
+    return g_storage->save_index(ids, n, g_storage->ctx);
 }
 
-static void persist_note(const note_t *n) {
+static bool persist_note(const note_t *n) {
     if (!g_storage || !g_storage->save_note) {
-        return;
+        return true; /* in-RAM mode: nothing to persist, so nothing can fail */
     }
-    g_storage->save_note(n, g_storage->ctx);
+    return g_storage->save_note(n, g_storage->ctx);
 }
 
-/* Removes g_notes[idx], compacting the array, and persists the deletion. */
-static void remove_at(size_t idx) {
+/* Removes g_notes[idx], compacting the array, and persists the deletion.
+ * Returns false if the storage side (dropping the blob, or rewriting the
+ * shortened index) did not stick -- the note is gone from RAM either way, so
+ * the caller reports the failure rather than claiming a clean delete a reboot
+ * would undo. */
+static bool remove_at(size_t idx) {
     char id[VAULT_ID_BUF];
     memcpy(id, g_notes[idx].id, VAULT_ID_BUF);
     for (size_t i = idx; i + 1 < g_note_count; i++) {
         g_notes[i] = g_notes[i + 1];
     }
     g_note_count--;
+    bool deleted = true;
     if (g_storage && g_storage->delete_note) {
-        g_storage->delete_note(id, g_storage->ctx);
+        deleted = g_storage->delete_note(id, g_storage->ctx);
     }
-    persist_index();
+    /* Rewrite the index regardless: the note is already gone from RAM, so the
+     * on-flash index must stop naming it too. */
+    return persist_index() && deleted;
 }
 
 /* `reserved` is an id that is spoken for but not yet in g_notes, so
@@ -236,8 +243,18 @@ vault_err_t vault_new_secret(vault_rng_fn rng, const char parent_ids[][VAULT_ID_
     copy_trunc(out_id, n.id, VAULT_ID_BUF);
 
     g_notes[g_note_count++] = n;
-    persist_note(&n);
-    persist_index();
+    if (!persist_note(&n) || !persist_index()) {
+        /* The host is about to be told this note exists and handed its hash to
+         * disclose to the mint. If it did not reach flash, a reboot destroys
+         * it -- so undo the RAM addition and refuse, rather than hand back an
+         * id for money that will not survive. */
+        g_note_count--;
+        if (g_storage && g_storage->delete_note) {
+            g_storage->delete_note(n.id, g_storage->ctx);
+        }
+        persist_index();
+        return VAULT_ERR_STORAGE_FULL;
+    }
     return VAULT_OK;
 }
 
@@ -271,9 +288,18 @@ vault_err_t vault_new_secret_pair(vault_rng_fn rng, const char parent_ids[][VAUL
 
     g_notes[g_note_count++] = n1;
     g_notes[g_note_count++] = n2;
-    persist_note(&n1);
-    persist_note(&n2);
-    persist_index();
+    if (!persist_note(&n1) || !persist_note(&n2) || !persist_index()) {
+        /* Both halves of a split reach flash, or neither is claimed: undo the
+         * RAM additions and refuse rather than hand back ids for notes that
+         * did not persist. */
+        g_note_count -= 2;
+        if (g_storage && g_storage->delete_note) {
+            g_storage->delete_note(n1.id, g_storage->ctx);
+            g_storage->delete_note(n2.id, g_storage->ctx);
+        }
+        persist_index();
+        return VAULT_ERR_STORAGE_FULL;
+    }
     return VAULT_OK;
 }
 
@@ -286,6 +312,7 @@ vault_err_t vault_confirm(const char *id, uint64_t amount_msat, const char *host
     if (g_notes[idx].state != NOTE_STATE_PENDING) {
         return VAULT_ERR_INVALID_STATE;
     }
+    note_t snapshot = g_notes[idx];
     g_notes[idx].state = NOTE_STATE_CONFIRMED;
     g_notes[idx].amount_msat = amount_msat;
     if (host) {
@@ -297,7 +324,13 @@ vault_err_t vault_confirm(const char *id, uint64_t amount_msat, const char *host
         g_notes[idx].sig[0] = '\0';
     }
     g_notes[idx].updated_at = g_now ? g_now() : 0;
-    persist_note(&g_notes[idx]);
+    if (!persist_note(&g_notes[idx])) {
+        /* All-or-nothing: if the transition did not reach flash, restore the
+         * note so RAM matches storage. A confirm that reverts to PENDING on a
+         * reboot would leave export_secret refusing a note that holds value. */
+        g_notes[idx] = snapshot;
+        return VAULT_ERR_STORAGE_FULL;
+    }
     return VAULT_OK;
 }
 
@@ -309,8 +342,7 @@ vault_err_t vault_discard(const char *id) {
     if (g_notes[idx].state != NOTE_STATE_PENDING) {
         return VAULT_ERR_INVALID_STATE;
     }
-    remove_at((size_t)idx);
-    return VAULT_OK;
+    return remove_at((size_t)idx) ? VAULT_OK : VAULT_ERR_STORAGE_FULL;
 }
 
 vault_err_t vault_export_secret(const char *id, char out_hex[VAULT_SECRET_HEX_BUF]) {
@@ -382,8 +414,17 @@ vault_err_t vault_import_secret(vault_rng_fn rng, const char *k1_hex, const char
     copy_trunc(out_id, n.id, VAULT_ID_BUF);
 
     g_notes[g_note_count++] = n;
-    persist_note(&n);
-    persist_index();
+    if (!persist_note(&n) || !persist_index()) {
+        /* As vault_new_secret: an imported note the host is told about must
+         * have reached flash, or a reboot loses a note it now believes it
+         * holds. Undo and refuse. */
+        g_note_count--;
+        if (g_storage && g_storage->delete_note) {
+            g_storage->delete_note(n.id, g_storage->ctx);
+        }
+        persist_index();
+        return VAULT_ERR_STORAGE_FULL;
+    }
     return VAULT_OK;
 }
 
@@ -395,9 +436,16 @@ vault_err_t vault_mark_spent(const char *id) {
     if (g_notes[idx].state != NOTE_STATE_CONFIRMED) {
         return VAULT_ERR_INVALID_STATE;
     }
+    note_t snapshot = g_notes[idx];
     g_notes[idx].state = NOTE_STATE_SPENT;
     g_notes[idx].updated_at = g_now ? g_now() : 0;
-    persist_note(&g_notes[idx]);
+    if (!persist_note(&g_notes[idx])) {
+        /* All-or-nothing: a spend that did not reach flash must not stand in
+         * RAM either. A note resurrected as CONFIRMED by a reboot invites a
+         * double-spend, so restore it and report the failure. */
+        g_notes[idx] = snapshot;
+        return VAULT_ERR_STORAGE_FULL;
+    }
     return VAULT_OK;
 }
 
@@ -406,9 +454,13 @@ vault_err_t vault_rename(const char *id, const char *label) {
     if (idx < 0) {
         return VAULT_ERR_NOT_FOUND;
     }
+    note_t snapshot = g_notes[idx];
     copy_trunc(g_notes[idx].label, label, VAULT_LABEL_BUF);
     g_notes[idx].updated_at = g_now ? g_now() : 0;
-    persist_note(&g_notes[idx]);
+    if (!persist_note(&g_notes[idx])) {
+        g_notes[idx] = snapshot; /* keep RAM consistent with what is on flash */
+        return VAULT_ERR_STORAGE_FULL;
+    }
     return VAULT_OK;
 }
 
@@ -420,8 +472,7 @@ vault_err_t vault_delete(const char *id) {
     if (g_notes[idx].state != NOTE_STATE_SPENT) {
         return VAULT_ERR_INVALID_STATE;
     }
-    remove_at((size_t)idx);
-    return VAULT_OK;
+    return remove_at((size_t)idx) ? VAULT_OK : VAULT_ERR_STORAGE_FULL;
 }
 
 size_t vault_list(note_meta_t *out, size_t max) {
