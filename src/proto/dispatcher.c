@@ -183,6 +183,43 @@ static void handle_get_info(char *out, size_t outcap) {
     } else if (g_deps.storage_state) {
         jw_str(&w, "storage", g_deps.storage_state());
     }
+    /* What this device can physically do, so a client stops guessing. The
+     * `gated` flag is derived here rather than injected: dispatcher.c is the
+     * module that refuses an ungated disclosure, so it is the one that knows
+     * whether a confirmation hook is actually wired. A client that reads
+     * gated:false knows every physically-gated command on this build will
+     * answer `unsupported`, and can say so before the owner tries one. */
+    capability_report_t caps;
+    if (g_deps.capabilities && g_deps.capabilities(&caps)) {
+        jw_begin_obj(&w, "capabilities");
+        jw_uint64(&w, "buttons", caps.buttons);
+        jw_bool(&w, "touch", caps.touch);
+        jw_bool(&w, "gated", g_deps.confirm_export != NULL);
+        jw_begin_obj(&w, "display");
+        jw_uint64(&w, "width", caps.display_width);
+        jw_uint64(&w, "height", caps.display_height);
+        jw_end_obj(&w);
+        jw_begin_arr(&w, "transports");
+        if (caps.serial) {
+            jw_str_item(&w, "serial");
+        }
+        if (caps.ble) {
+            jw_str_item(&w, "ble");
+        }
+        jw_end_arr(&w);
+        jw_end_obj(&w);
+    }
+    /* Which of this device's buttons can be believed. Reported unconditionally
+     * rather than only when something is wrong: a client that only ever sees
+     * the field on a faulty board cannot tell "this vault's cancel button
+     * works" from "this firmware does not report input health". */
+    input_report_t inputs;
+    if (g_deps.input_report && g_deps.input_report(&inputs)) {
+        jw_begin_obj(&w, "inputs");
+        jw_str(&w, "confirm", inputs.confirm);
+        jw_str(&w, "cancel", inputs.cancel);
+        jw_end_obj(&w);
+    }
     /* Why the previous boot ended, so a device that resets in the field can
      * be diagnosed over the wire — on a board whose console is deliberately
      * disabled, this is the only channel there is. See src/crash_crumb.h. */

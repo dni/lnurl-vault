@@ -170,6 +170,36 @@ typedef bool (*boot_report_fn)(boot_report_t *out);
  * native tests use. */
 typedef confirm_result_t (*action_confirm_fn)(const char *action, const note_meta_t *note);
 
+/* Optional: get_info's `inputs`. A wedged input is already harmless
+ * (approval.c) but invisible -- a vault with a wedged cancel line has lost its
+ * cancel button and nothing says so. See src/proto/input_health.h.
+ *
+ * Fields are "ok" | "stuck" | "unknown", never NULL on a true return. NULL
+ * hook, or false, omits the field. */
+typedef struct {
+    const char *confirm;
+    const char *cancel;
+} input_report_t;
+
+typedef bool (*input_report_fn)(input_report_t *out);
+
+/* Optional: get_info's `capabilities`, so a client stops guessing. Telling
+ * someone to "press cancel" is wrong on a one-button board and meaningless on
+ * a touch-only one; whether a QR handoff fits is a pixel count the host has to
+ * know. buttons/touch come from board_input_caps(); display size is the usable
+ * surface after the board's rotation, or zero if the panel never came up.
+ * NULL omits the object -- native tests have no hardware to describe. */
+typedef struct {
+    uint8_t buttons;
+    bool touch;
+    uint16_t display_width;  /* 0 if the panel is unavailable */
+    uint16_t display_height;
+    bool serial; /* a host transport is compiled in and started */
+    bool ble;
+} capability_report_t;
+
+typedef bool (*capability_report_fn)(capability_report_t *out);
+
 typedef struct {
     vault_rng_fn rng;
     export_confirm_fn confirm_export;
@@ -198,6 +228,8 @@ typedef struct {
     trace_cmd_fn trace_cmd;
     boot_report_fn boot_report;
     action_confirm_fn confirm_action;
+    input_report_fn input_report;
+    capability_report_fn capabilities;
 } dispatcher_deps_t;
 
 void dispatcher_init(const dispatcher_deps_t *deps);

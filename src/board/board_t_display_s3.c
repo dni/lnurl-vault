@@ -37,6 +37,7 @@
 #include "board.h"
 
 #include "driver/gpio.h"
+#include "driver/rtc_io.h"
 #include "esp_lcd_panel_io.h"
 #include "esp_lcd_panel_ops.h"
 #include "esp_lcd_panel_vendor.h"
@@ -244,7 +245,29 @@ void board_serial_start(void) {
     serial_cdc_start(); /* native USB-CDC on the S3's USB-OTG peripheral */
 }
 
+board_input_caps_t board_input_caps(void) {
+    /* Two buttons, no touch panel. See board.h. */
+    return (board_input_caps_t){.buttons = 2, .touch = false};
+}
+
 void board_buttons_init(void) {
+    /* Back to plain digital GPIO first. gpio_config() undoes neither a pad
+     * hold nor RTC mux ownership; both survive a software reset, both outrank
+     * the digital register, and both present as a permanently-pressed button
+     * -- the section 7a fault. These boards get reflashed with other firmware.
+     *
+     * Idempotent and free when the pads were already clean. Returns ignored:
+     * rtc_gpio_deinit() answers INVALID_ARG on a pin with no RTC function,
+     * which is the correct outcome there.
+     *
+     * Not confirmed as the cause of 7a -- that needs the board. It is the
+     * cheapest hypothesis, and one flash cycle to rule out. */
+    gpio_deep_sleep_hold_dis();
+    gpio_hold_dis(PIN_BUTTON_1);
+    gpio_hold_dis(PIN_BUTTON_2);
+    rtc_gpio_deinit(PIN_BUTTON_1);
+    rtc_gpio_deinit(PIN_BUTTON_2);
+
     gpio_config_t cfg = {
         .pin_bit_mask = (1ULL << PIN_BUTTON_1) | (1ULL << PIN_BUTTON_2),
         .mode = GPIO_MODE_INPUT,

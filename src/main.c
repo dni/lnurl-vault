@@ -23,6 +23,7 @@
 #include "esp_random.h"
 #include "esp_system.h"
 #include "esp_timer.h"
+#include "input_health.h"
 #include "nvs_storage.h"
 #include "ota.h"
 #include "release_key.h"
@@ -64,6 +65,30 @@ static bool boot_report(boot_report_t *out) {
     out->last_cmd = crash_crumb_last_cmd();
     out->boot_count = crash_crumb_boot_count();
     out->unexpected = crash_crumb_last_boot_was_unexpected();
+    return true;
+}
+
+/* get_info's `inputs`. Unconditional, so a missing field means "this build
+ * cannot observe its buttons", not "they are fine". */
+static bool input_report(input_report_t *out) {
+    out->confirm = input_health_name(buttons_input_state(INPUT_CONFIRM));
+    out->cancel = input_health_name(buttons_input_state(INPUT_CANCEL));
+    return true;
+}
+
+/* get_info's `capabilities`. Display size is zero when the panel did not come
+ * up, not its compiled-in dimensions: a client deciding whether a QR handoff
+ * fits needs the pixels there ARE. Both transports are unconditional in
+ * app_main(), so both are always reported -- if that changes, so must this. */
+static bool capability_report(capability_report_t *out) {
+    const board_input_caps_t caps = board_input_caps();
+    const bool panel = display_ready();
+    out->buttons = caps.buttons;
+    out->touch = caps.touch;
+    out->display_width = panel ? (uint16_t)display_width() : 0;
+    out->display_height = panel ? (uint16_t)display_height() : 0;
+    out->serial = true;
+    out->ble = true;
     return true;
 }
 
@@ -216,6 +241,8 @@ void app_main(void) {
         .trace_cmd = trace_cmd,
         .boot_report = boot_report,
         .confirm_action = confirm_action_on_device,
+        .input_report = input_report,
+        .capabilities = capability_report,
     };
     dispatcher_init(&deps);
 

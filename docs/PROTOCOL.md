@@ -109,6 +109,58 @@ erases to recover from any of these; see `wipe`.
 
 The field is absent on a build with no persistent storage.
 
+`capabilities` says what this device is physically able to do, so a client
+does not have to guess:
+
+```json
+"capabilities":{"buttons":2,"touch":false,"gated":true,
+                "display":{"width":320,"height":170},"transports":["serial","ble"]}
+```
+
+| Field | Meaning |
+|---|---|
+| `buttons` | buttons wired for confirm/cancel: `2`, `1` or `0`. Not buttons present — a board whose second button is unreachable reports `1`, because that is what the gesture has to work with |
+| `touch` | the panel takes touch input |
+| `gated` | this build has an on-device confirmation wired. **`false` means every physically-gated command will answer `unsupported`** — worth telling the owner before they try one, not after |
+| `display` | usable pixels, after the board's own rotation. **Zero when the panel did not come up**, which is how a client knows a QR handoff is not available on this device right now |
+| `transports` | which of `serial` / `ble` this build serves |
+
+The point of the field is the sentence a client puts in front of a person.
+"Hold the button on your vault to approve" is right for two buttons and wrong
+for a touchscreen; "press cancel" is meaningless on a board that has one
+button. A client that reads `capabilities` can say the true thing.
+
+The object is absent on a build that cannot describe its own hardware — which
+is not the same as a build with no hardware, so do not read a missing
+`capabilities` as "no buttons and no screen".
+
+`inputs` says whether this device's own buttons can be believed. Present
+whenever the firmware can observe them at all — its **absence** means the
+build cannot report on its inputs, not that they are healthy:
+
+```json
+{"ok":true,"fw_version":"0.0.7","board":"t-display-s3","inputs":{"confirm":"ok","cancel":"stuck"}}
+```
+
+| Value | Meaning |
+|---|---|
+| `ok` | the pin has been seen released at least once, so it is not wedged |
+| `stuck` | pressed continuously since boot, past any plausible person holding it. Something is wrong with this pin |
+| `unknown` | pressed since boot, but not yet for long enough to call |
+
+A `stuck` input is **not** a security problem — a button that has not been
+seen released since a prompt began cannot answer that prompt, so a wedged
+cancel line can no longer refuse anything (and a wedged confirm line can no
+longer approve anything). It is a **usability** problem, and a client should
+say so plainly: a vault reporting `"cancel":"stuck"` has lost its cancel
+button, so every gated command on it can now only be approved or left to time
+out. Telling the owner that beats leaving them to press a dead button for
+thirty seconds and conclude the firmware is broken.
+
+Note what `ok` does not claim. Reading a pin released proves it is not wedged
+low; nothing proves a button is *connected*, because a disconnected one reads
+released forever and looks perfect. `ok` means "not stuck", not "works".
+
 Two more groups of fields appear when their source is compiled in.
 `free_heap_bytes` reports the current free heap (a health signal). And after an
 unexpected reset the device reports how the previous boot ended, for diagnosing

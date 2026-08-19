@@ -43,6 +43,7 @@ SRC = ../../src/vault/sha256.c \
       ../../src/ui/font5x7.c \
       ../../src/proto/line_proto.c \
       ../../src/proto/approval.c \
+      ../../src/proto/input_health.c \
       ../../src/ui/qr_capacity.c \
       ../../src/ota/monocypher.c \
       ../../src/ota/monocypher-ed25519.c \
@@ -60,6 +61,7 @@ SRC = ../../src/vault/sha256.c \
       test_note_display.c \
       test_line_proto.c \
       test_approval.c \
+      test_input_health.c \
       test_qr_capacity.c \
       test_wipe.c \
       test_gated_actions.c \

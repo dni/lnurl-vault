@@ -11,8 +11,10 @@ record says **NOT YET BENCH-RUN** in those words, so nothing quietly counts as
 verified by having been written down.
 
 **Open faults**, so they are not buried in a numbered section: the ESP32-S3's
-confirm gate answers itself, making `export_secret` impossible on that board —
-section 7a.
+cancel button reads as permanently pressed, so that board has no working way
+to decline a prompt — section 7a. It is no longer believed to block approval
+(the record that said so predates the firmware that fixed it), but that has
+**not been re-run on hardware**.
 
 **Run the machine-driven parts first:**
 
@@ -146,26 +148,71 @@ both transports, with the BLE link still up.
 > link supervision would tear the connection down during the wait. It does
 > not, on this controller; measured on unfixed firmware too.
 
-## 7a. The confirm gate answers itself on the S3 — OPEN FAULT
+## 7a. The S3's cancel button is dead — OPEN FAULT, and a stale record
 
-**On the ESP32-S3, `export_secret` cannot succeed.** With nothing touched:
+**What is still true:** on the ESP32-S3, `PIN_BUTTON_2` (GPIO14) reads as
+permanently pressed. Nothing in this repo drives GPIO14 and
+`board_buttons_init()` enables the internal pull-up, so it is a wrong pin, a
+board revision that moved the button, or a pad left held or in RTC mux by
+firmware flashed before this.
 
-```
-export_secret -> {"ok":false,"error":"user_declined"}  after 0.92s
-wipe          -> {"ok":false,"error":"user_declined"}  after 0.91s
-```
+**What is no longer true, and was left standing here for a day:** that this
+makes `export_secret` impossible on that board.
 
-0.92s is the cancel debounce plus the result card, so the cancel button reads
-as pressed on that board and every confirmation is refused before the owner can
-act. Nothing in this repo drives GPIO14, and `board_buttons_init()` enables the
-internal pull-up, so it is a wrong pin or a board revision that moved it.
+The record below was taken against firmware `0.0.2-25-g0b3477c`. That commit
+**predates PR #33** (hold-to-approve), which introduced the rule that a button
+which has not been seen released since a prompt began cannot answer that
+prompt. On current firmware a wedged cancel line can no longer deny anything —
+`cancel_stale` never clears on a pin that never reads released, so the cancel
+branch is never taken, and a genuine two-second hold on button 1 should still
+approve.
 
-**Diagnosing it needs the board in download mode** — hold BOOT, tap RESET,
-release BOOT. Its ROM port disappears once the firmware's TinyUSB claims USB
-and does not return on a software reset (checked), so this cannot be automated.
+That is a claim about the logic, not a bench result. It is pinned by
+`test/native/test_approval.c`'s
+`test_a_wedged_cancel_line_does_not_block_a_real_approval`, which fails if the
+rule is ever weakened. **On hardware it is NOT YET BENCH-RUN.**
 
-> **Bench record — 2026-08-17.** T-Display S3. Reproduced on demand. The
+So the consequence has changed shape rather than gone away. The S3 has not got
+a broken confirmation gate; it has got no cancel button. Every gated command
+on that board can be approved or left to time out, and nothing else.
+
+**What the device now says about it.** `get_info` reports an `inputs` object
+(`docs/PROTOCOL.md`), and on this board it should read
+`{"confirm":"ok","cancel":"stuck"}`. That is the single fastest check of
+whether the pin is still wrong, and it needs no download mode — the command
+protocol works fine on the S3.
+
+**Next steps, cheapest first:**
+
+1. Flash current firmware and read `get_info`. If `cancel` reports `ok`, the
+   pad-state fix below was the cause and this section closes.
+   `board_buttons_init()` now calls `gpio_hold_dis()` / `rtc_gpio_deinit()` on
+   both button pins before configuring them, because neither a pad hold nor
+   RTC mux ownership is cleared by `gpio_config()`, both survive a software
+   reset, and both present exactly as a permanently-pressed button. This board
+   has carried other firmware.
+2. If it still reports `stuck`, hold a real export prompt and try approving it
+   with a two-second hold on button 1. That answers the question this section
+   was wrong about, and it is worth answering before hunting the pin.
+3. Only then go looking for the right pin, which does need the board in
+   download mode — hold BOOT, tap RESET, release BOOT. Its ROM port disappears
+   once the firmware's TinyUSB claims USB and does not return on a software
+   reset (checked), so this cannot be automated.
+
+> **Bench record — 2026-08-17, SUPERSEDED.** T-Display S3, firmware
+> `0.0.2-25-g0b3477c`. With nothing touched:
+>
+> ```
+> export_secret -> {"ok":false,"error":"user_declined"}  after 0.92s
+> wipe          -> {"ok":false,"error":"user_declined"}  after 0.91s
+> ```
+>
+> 0.92s is the cancel debounce plus the result card. Reproduced on demand. The
 > classic board does not share it: the same prompt there times out at 31s.
+>
+> Kept, not deleted, because it is the evidence that GPIO14 reads low — which
+> is still the open half. It is superseded only in what it implies about
+> approval, for the reason given above: this firmware predates #33.
 
 ## 7b. A glitch on the cancel line
 
@@ -234,6 +281,19 @@ the QR density ladder (`-DLNURLVAULT_QR_SELFTEST`) is what separates them.
 ## 11. Buttons
 
 Pass: no spurious events at rest, and both buttons register.
+
+Also check what the device says about its own inputs. `get_info` now carries
+an `inputs` object (`docs/PROTOCOL.md`), and on a healthy board it must read
+`{"confirm":"ok","cancel":"ok"}` within a few seconds of boot — `ok` means the
+pin has been seen released, which is the only thing that can be proven without
+a finger on the board. A board that reports `stuck` has a pin wedged low; see
+section 7a. A board that reports `unknown` for more than five seconds after
+boot is reporting a pin it has never once read released, which is the same
+thing arriving slowly.
+
+Note what this does **not** check: a disconnected button reads released
+forever and reports `ok`. Proving a button works still needs a person to press
+it, which is the row above.
 
 > **Bench record — 2026-08-17.** Classic T-Display. `button_fsm` produced
 > zero spurious events across 31s at rest. GPIO35 is input-only with no
