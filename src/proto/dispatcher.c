@@ -288,11 +288,18 @@ static void handle_get_info(char *out, size_t outcap) {
      * rather than only when something is wrong: a client that only ever sees
      * the field on a faulty board cannot tell "this vault's cancel button
      * works" from "this firmware does not report input health". */
-    input_report_t inputs;
+    input_report_t inputs = {NULL, NULL};
     if (g_deps.input_report && g_deps.input_report(&inputs)) {
         jw_begin_obj(&w, "inputs");
-        jw_str(&w, "confirm", inputs.confirm);
-        jw_str(&w, "cancel", inputs.cancel);
+        /* A NULL field is a button this board has not got. Reporting "ok" for
+         * one would be a claim about hardware that is not there, and a client
+         * would then tell its owner to press it. */
+        if (inputs.confirm) {
+            jw_str(&w, "confirm", inputs.confirm);
+        }
+        if (inputs.cancel) {
+            jw_str(&w, "cancel", inputs.cancel);
+        }
         jw_end_obj(&w);
     }
     /* Why the previous boot ended, so a device that resets in the field can

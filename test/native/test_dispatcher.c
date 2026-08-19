@@ -194,6 +194,14 @@ static void test_get_info_reports_input_health(void) {
     UL_CHECK(strstr(out, "\"inputs\"") != NULL, "a healthy board reports inputs too");
     UL_CHECK(strstr(out, "stuck") == NULL, "and reports nothing stuck");
 
+    /* A board with one button reports one. Claiming a healthy cancel button
+     * that is not there would have a client tell its owner to press it. */
+    g_input_report.cancel = NULL;
+    dispatcher_handle("{\"cmd\":\"get_info\"}", out, sizeof(out));
+    UL_CHECK(strstr(out, "\"confirm\":\"ok\"") != NULL, "the button it has is reported");
+    UL_CHECK(strstr(out, "\"cancel\"") == NULL, "the one it has not is not");
+    g_input_report.cancel = "ok";
+
     /* No hook wired -- a build with no buttons at all -- omits it entirely
      * rather than claiming health it cannot observe. */
     g_input_report_available = false;

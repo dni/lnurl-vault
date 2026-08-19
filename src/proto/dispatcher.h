@@ -175,8 +175,9 @@ typedef confirm_result_t (*action_confirm_fn)(const char *action, const note_met
  * (approval.c) but invisible -- a vault with a wedged cancel line has lost its
  * cancel button and nothing says so. See src/proto/input_health.h.
  *
- * Fields are "ok" | "stuck" | "unknown", never NULL on a true return. NULL
- * hook, or false, omits the field. */
+ * Fields are "ok" | "stuck" | "unknown", or NULL for a button this board has
+ * not got -- reporting "ok" for one would be a claim about absent hardware.
+ * A NULL hook, or a false return, omits the object. */
 typedef struct {
     const char *confirm;
     const char *cancel;

@@ -150,6 +150,10 @@ build cannot report on its inputs, not that they are healthy:
 | `stuck` | pressed continuously since boot, past any plausible person holding it. Something is wrong with this pin |
 | `unknown` | pressed since boot, but not yet for long enough to call |
 
+A field is **absent** for a button this board has not got — a one-button
+vault reports `confirm` and no `cancel`. That is not the same as `unknown`,
+and a client must not tell someone to press a button that is not there.
+
 A `stuck` input is **not** a security problem — a button that has not been
 seen released since a prompt began cannot answer that prompt, so a wedged
 cancel line can no longer refuse anything (and a wedged confirm line can no

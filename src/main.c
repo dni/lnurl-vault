@@ -74,9 +74,13 @@ static bool boot_report(boot_report_t *out) {
 /* get_info's `inputs`. Unconditional, so a missing field means "this build
  * cannot observe its buttons", not "they are fine". */
 static bool input_report(input_report_t *out) {
-    out->confirm = input_health_name(buttons_input_state(INPUT_CONFIRM));
-    out->cancel = input_health_name(buttons_input_state(INPUT_CANCEL));
-    return true;
+    /* Only report buttons this board actually has: a one-button board would
+     * otherwise claim a healthy cancel button that is not there, and a client
+     * would tell its owner to press it. */
+    const uint8_t buttons = board_input_caps().buttons;
+    out->confirm = buttons >= 1 ? input_health_name(buttons_input_state(INPUT_CONFIRM)) : NULL;
+    out->cancel = buttons >= 2 ? input_health_name(buttons_input_state(INPUT_CANCEL)) : NULL;
+    return out->confirm != NULL || out->cancel != NULL;
 }
 
 /* get_info's `capabilities`. Display size is zero when the panel did not come
