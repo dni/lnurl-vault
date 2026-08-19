@@ -23,6 +23,12 @@
  * dispatcher_init(), buttons_init(), and display_init(). */
 void ui_task_start(void);
 
+/* Creates the request queue without starting the task. Call once, before any
+ * transport starts, so a gated command arriving during boot is queued rather
+ * than sent to a NULL handle; ui_task_start() then starts the task last.
+ * Idempotent, and folded into ui_task_start() if you skip it. */
+void ui_task_init(void);
+
 /* Called from any other task (in practice, the active transport's task, via
  * main.c's confirm_export_on_device) to request an on-device confirm/
  * cancel for one export_secret call coming in over serial/BLE. Blocks the

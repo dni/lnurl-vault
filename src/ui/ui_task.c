@@ -416,8 +416,17 @@ static void ui_task_fn(void *arg) {
     }
 }
 
+void ui_task_init(void) {
+    /* Split from ui_task_start() so the queue exists before any transport
+     * starts: a gated command arriving during boot is then queued for the
+     * task, not sent to a NULL handle. Idempotent. */
+    if (!g_request_q) {
+        g_request_q = xQueueCreate(4, sizeof(remote_confirm_request_t));
+    }
+}
+
 void ui_task_start(void) {
-    g_request_q = xQueueCreate(4, sizeof(remote_confirm_request_t));
+    ui_task_init(); /* idempotent, in case start is called without init */
     xTaskCreate(ui_task_fn, "ui_task", 4096, NULL, 5, NULL);
 }
 
@@ -439,7 +448,15 @@ static confirm_result_t request_confirm(uint32_t timeout_ms) {
 }
 
 static confirm_result_t request_confirm_detailed(uint32_t timeout_ms, const note_meta_t *note) {
+    /* Refuse rather than crash if a command reaches here before ui_task_init(),
+     * or if the per-request queue can't be allocated. */
+    if (!g_request_q) {
+        return CONFIRM_UNAVAILABLE;
+    }
     QueueHandle_t resp_q = xQueueCreate(1, sizeof(confirm_result_t));
+    if (!resp_q) {
+        return CONFIRM_UNAVAILABLE;
+    }
     remote_confirm_request_t req = {.timeout_ms = timeout_ms, .response_q = resp_q};
     if (note) {
         req.has_detail = true;
