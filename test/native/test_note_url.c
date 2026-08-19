@@ -13,6 +13,7 @@
 #include <string.h>
 
 #include "note_url.h"
+#include "qr_capacity.h"
 #include "unity_lite.h"
 #include "vault.h" /* VAULT_SECRET_HEX_BUF, VAULT_HOST_BUF */
 
@@ -142,6 +143,74 @@ static void test_the_separators_are_present_exactly_once(void) {
     UL_CHECK(strstr(out, "&amount=") != NULL, "amount is the second");
 }
 
+/* ---- the QR a stranger has to be able to use (issue #26) --------------- */
+
+/* lnurlw:// codes render and phone cameras decode them, and nothing opens
+ * them: no handler exists on a stock phone. A bearer note that cannot be
+ * handed to someone with a phone is not a bearer note. */
+static void test_claim_format_is_an_ordinary_https_link(void) {
+    char out[256];
+    bool ok =
+        note_url_build_as(NOTE_URL_CLAIM, NULL, "mint.example", K1_64, 21000, out, sizeof(out));
+    UL_CHECK(ok, "the claim URL builds");
+    UL_CHECK(strncmp(out, "https://", 8) == 0, "and is a link a camera will open");
+    UL_CHECK(strstr(out, "u=mint.example") != NULL, "carrying the mint it came from");
+    UL_CHECK(strstr(out, K1_64) != NULL, "and the secret");
+}
+
+/* The property that matters. Everything after the first '#' is a fragment,
+ * and a fragment is not sent in the request line: no server log, no referrer,
+ * no proxy sees it. The secret must land on that side of the '#'. */
+static void test_the_secret_never_precedes_the_fragment(void) {
+    char out[256];
+    UL_CHECK(
+        note_url_build_as(NOTE_URL_CLAIM, NULL, "mint.example", K1_64, 21000, out, sizeof(out)),
+        "built");
+    const char *hash = strchr(out, '#');
+    const char *secret = strstr(out, K1_64);
+    UL_CHECK(hash != NULL, "there is a fragment");
+    UL_CHECK(secret != NULL && hash != NULL && secret > hash, "and the secret is inside it");
+}
+
+/* LUD-17 is still the smaller code and what LNURL-native wallets want.
+ * Changing the default must not remove the option. */
+static void test_lud17_format_is_unchanged(void) {
+    char via_as[256], direct[256];
+    UL_CHECK(note_url_build_as(NOTE_URL_LUD17, NULL, "mint.example", K1_64, 21000, via_as,
+                                sizeof(via_as)),
+              "built via note_url_build_as");
+    UL_CHECK(note_url_build("mint.example", K1_64, 21000, direct, sizeof(direct)), "built direct");
+    UL_CHECK(strcmp(via_as, direct) == 0, "the LUD-17 path is byte-identical");
+}
+
+/* Same contract as note_url_build: empty, never partial. A truncated claim
+ * URL is a plausible link carrying a shortened k1. */
+static void test_a_claim_url_that_does_not_fit_is_emptied(void) {
+    char out[32];
+    UL_CHECK(
+        !note_url_build_as(NOTE_URL_CLAIM, NULL, "mint.example", K1_64, 21000, out, sizeof(out)),
+        "refused");
+    UL_CHECK(out[0] == '\0', "and left empty, never partially written");
+}
+
+/* The format has to fit on the glass, not just in the buffer. A code the
+ * panel cannot render is not a handoff, so tie the payload length to the
+ * smallest screen with a bench record: the classic T-Display, 135px short. */
+static void test_the_claim_url_still_fits_the_screens_we_have(void) {
+    char out[256];
+    UL_CHECK(note_url_build_as(NOTE_URL_CLAIM, NULL, "mint.lnurlcash.com", K1_64, 2100000000ULL,
+                                out, sizeof(out)),
+              "built at a realistic host and amount");
+
+    uint8_t version = qr_version_for_length(strlen(out));
+    UL_CHECK(version != 0, "it fits a QR code at all");
+
+    const int qr_size = 17 + 4 * (int)version;
+    UL_CHECK(qr_square_modules(qr_size) > 0, "with a sane module count");
+    UL_CHECK(qr_scale_for(qr_size, 240, 135) >= 2,
+              "and renders at two pixels per module on a 135px panel");
+}
+
 void test_note_url_run(void) {
     printf("-- note_url --\n");
     test_the_expected_shape();
@@ -151,4 +220,9 @@ void test_note_url_run(void) {
     test_the_real_worst_case_fits();
     test_amount_edges();
     test_the_separators_are_present_exactly_once();
+    test_claim_format_is_an_ordinary_https_link();
+    test_the_secret_never_precedes_the_fragment();
+    test_lud17_format_is_unchanged();
+    test_a_claim_url_that_does_not_fit_is_emptied();
+    test_the_claim_url_still_fits_the_screens_we_have();
 }

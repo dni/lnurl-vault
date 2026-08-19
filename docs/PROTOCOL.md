@@ -509,7 +509,7 @@ involved in this flow.
 |---|---|
 | Tap either button (idle) | Enter browse mode at the first `CONFIRMED` note |
 | Tap button 1 / button 2 (browsing) | Next / previous `CONFIRMED` note (wraps around) |
-| Hold both buttons together for ~200ms ("the chord") | **Unveil**: exports the selected note's secret and shows its `lnurlw://` URL as a QR code on-screen |
+| Hold both buttons together for ~200ms ("the chord") | **Unveil**: exports the selected note's secret and shows it as a QR code on-screen |
 | Any tap while a QR is shown | Dismiss it, back to browsing |
 | ~15s with no input while browsing | Back to idle |
 
@@ -518,6 +518,21 @@ yet; `SPENT` notes have nothing left to show). There's no on-screen text yet
 (see README.md's "Known limitations"), so the display blinks the selected
 note's 1-based position among `CONFIRMED` notes instead of printing a
 number.
+
+**What the QR encodes.** By default a plain `https://` claim link into a
+wallet, `<wallet>/#/claim?u=<host>&k1=<secret>&a=<msat>` — because a stock
+phone camera opens that, and does not open `lnurlw://` (issue #26: the codes
+render and decode fine, nothing handles them). A note nobody can accept with
+the phone in their pocket is not a bearer note.
+
+The secret sits in the **fragment**, never the query, so it is not in a
+request line, a referrer or a server log.
+
+It costs one QR version over LUD-17 — about 138 characters against 113, so
+version 7 rather than 6 — which still renders at two pixels per module on the
+smaller of the two supported panels. `LNURLVAULT_QR_FORMAT` selects
+`NOTE_URL_LUD17` instead for an LNURL-native audience, and
+`LNURLVAULT_CLAIM_BASE` points the link at a different wallet.
 
 The chord *is* the confirmation — unlike `export_secret` over serial/BLE,
 there's no separate confirm/cancel step, because reaching this point already

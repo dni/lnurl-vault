@@ -267,10 +267,18 @@ Pass: the code scans. Note that "does it scan" collapses the encoder, the
 renderer, the optics and the phone's decoder into a single bit — if it fails,
 the QR density ladder (`-DLNURLVAULT_QR_SELFTEST`) is what separates them.
 
+Pass now also means the code **opens something**, not just that it decodes.
+The payload is an https claim link by default (`docs/PROTOCOL.md`), so scan it
+with a stock iPhone camera and a stock Android camera and check each lands in
+the wallet with the note claimable. **NOT YET BENCH-RUN** — the format changed
+after the record below and no phone has seen the new one.
+
 > **Bench record — 2026-08-17.** Classic T-Display. Codes render and a phone
-> camera decodes them. **But** nothing opened them: the URL is a
+> camera decodes them. **But** nothing opened them: the URL was a
 > `lnurlw://` (LUD-17) scheme with no handler on the phones tried — issue
-> #26, a product decision, not a rendering fault.
+> #26. Addressed since by switching the default payload to an https claim
+> link; this record stands as the evidence that rendering and decoding were
+> never the problem.
 >
 > Do not enable `-DLNURLVAULT_QR_SELFTEST` in a shipping build: `app_main()`
 > runs the diagnostics before `ui_task_start()`, and the ladder waits for a
