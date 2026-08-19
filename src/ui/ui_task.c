@@ -190,7 +190,8 @@ static bool unveil(const char *browse_id) {
     }
 
     char url[256];
-    bool built = note_url_build(meta.host, k1, meta.amount_msat, url, sizeof(url));
+    bool built = note_url_build_as(LNURLVAULT_QR_FORMAT, NULL, meta.host, k1, meta.amount_msat,
+                                    url, sizeof(url));
     wipe(k1, sizeof(k1));
     if (!built) {
         return false;

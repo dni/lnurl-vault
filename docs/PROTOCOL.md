@@ -75,6 +75,8 @@ the device is refusing to write rather than risk what is already there. Read
 `get_info`'s `storage` field to tell them apart: `full` means spend or delete
 notes; `index_unreadable` means reboot, and specifically do **not** wipe.
 
+`unsupported` also covers `identify` on a build with no device identity.
+
 `response_too_large` means the reply did not fit the transport's response
 buffer. Today only `list_notes` can produce it (every other command's reply is
 a fixed set of fields). Treat it as "ask for less": `list_notes` takes
@@ -109,6 +111,62 @@ erases to recover from any of these; see `wipe`.
 
 The field is absent on a build with no persistent storage.
 
+`capabilities` says what this device is physically able to do, so a client
+does not have to guess:
+
+```json
+"capabilities":{"buttons":2,"touch":false,"gated":true,
+                "display":{"width":320,"height":170},"transports":["serial","ble"]}
+```
+
+| Field | Meaning |
+|---|---|
+| `buttons` | buttons wired for confirm/cancel: `2`, `1` or `0`. Not buttons present — a board whose second button is unreachable reports `1`, because that is what the gesture has to work with |
+| `touch` | the panel takes touch input |
+| `gated` | this build has an on-device confirmation wired. **`false` means every physically-gated command will answer `unsupported`** — worth telling the owner before they try one, not after |
+| `display` | usable pixels, after the board's own rotation. **Zero when the panel did not come up**, which is how a client knows a QR handoff is not available on this device right now |
+| `transports` | which of `serial` / `ble` this build serves |
+
+The point of the field is the sentence a client puts in front of a person.
+"Hold the button on your vault to approve" is right for two buttons and wrong
+for a touchscreen; "press cancel" is meaningless on a board that has one
+button. A client that reads `capabilities` can say the true thing.
+
+The object is absent on a build that cannot describe its own hardware — which
+is not the same as a build with no hardware, so do not read a missing
+`capabilities` as "no buttons and no screen".
+
+`inputs` says whether this device's own buttons can be believed. Present
+whenever the firmware can observe them at all — its **absence** means the
+build cannot report on its inputs, not that they are healthy:
+
+```json
+{"ok":true,"fw_version":"0.0.7","board":"t-display-s3","inputs":{"confirm":"ok","cancel":"stuck"}}
+```
+
+| Value | Meaning |
+|---|---|
+| `ok` | the pin has been seen released at least once, so it is not wedged |
+| `stuck` | pressed continuously since boot, past any plausible person holding it. Something is wrong with this pin |
+| `unknown` | pressed since boot, but not yet for long enough to call |
+
+A field is **absent** for a button this board has not got — a one-button
+vault reports `confirm` and no `cancel`. That is not the same as `unknown`,
+and a client must not tell someone to press a button that is not there.
+
+A `stuck` input is **not** a security problem — a button that has not been
+seen released since a prompt began cannot answer that prompt, so a wedged
+cancel line can no longer refuse anything (and a wedged confirm line can no
+longer approve anything). It is a **usability** problem, and a client should
+say so plainly: a vault reporting `"cancel":"stuck"` has lost its cancel
+button, so every gated command on it can now only be approved or left to time
+out. Telling the owner that beats leaving them to press a dead button for
+thirty seconds and conclude the firmware is broken.
+
+Note what `ok` does not claim. Reading a pin released proves it is not wedged
+low; nothing proves a button is *connected*, because a disconnected one reads
+released forever and looks perfect. `ok` means "not stuck", not "works".
+
 Two more groups of fields appear when their source is compiled in.
 `free_heap_bytes` reports the current free heap (a health signal). And after an
 unexpected reset the device reports how the previous boot ended, for diagnosing
@@ -116,6 +174,43 @@ a field reset over the wire — on a board whose console is disabled this is the
 only channel: `last_reset_reason` (`poweron`, `panic`, `sw`, …), `boot_count`,
 `last_boot_unexpected` (bool), and `last_cmd_in_flight` (the command in flight
 at the crash, if any).
+
+### `identify`
+
+Challenge-response over a per-device key, so a client can tell one vault from
+another ([issue #69](https://github.com/dni/lnurl-vault/issues/69)).
+
+```json
+{"cmd":"identify","nonce":"<16-32 bytes of hex, chosen by the client>"}
+→ {"ok":true,"pubkey":"<64-hex ed25519 public key>","sig":"<128-hex signature>"}
+```
+
+The signature is over `"lnurlvault-id-v1" || 0x00 || nonce`, domain-separated
+the same way OTA images are, so an identity challenge can never be replayed as
+a firmware approval.
+
+**The client picks the nonce, every time.** A fixed one turns this into a
+recording anything can replay. The device refuses a nonce shorter than 16
+bytes (too little to stop precomputation) or longer than 32 (a challenge must
+not become an oracle for signing something else), with `bad_request`.
+
+What it proves: the thing answering now holds the same key as the thing that
+answered before. That is enough for trust-on-first-use — pin the `pubkey` on
+first pair and warn loudly if it ever changes.
+
+What it does **not** prove: anything about what the device is, or who has it.
+It is not a defence against someone holding the vault. Physical possession is
+still the model.
+
+The key is **not** a note secret: it never signs a spend and never leaves the
+device. `wipe` destroys it along with everything else, so a wiped vault is
+deliberately a *different* vault to any client that had pinned it — the right
+answer for a device that has been sold or handed on.
+
+`unsupported` means this build has no identity, or the device has one it could
+not store. A device that cannot remember its key does not serve it, because a
+client pinning a key that changes at every boot would be warned about a swap
+every single time.
 
 ### `list_notes`
 
@@ -457,7 +552,7 @@ involved in this flow.
 |---|---|
 | Tap either button (idle) | Enter browse mode at the first `CONFIRMED` note |
 | Tap button 1 / button 2 (browsing) | Next / previous `CONFIRMED` note (wraps around) |
-| Hold both buttons together for ~200ms ("the chord") | **Unveil**: exports the selected note's secret and shows its `lnurlw://` URL as a QR code on-screen |
+| Hold both buttons together for ~200ms ("the chord") | **Unveil**: exports the selected note's secret and shows it as a QR code on-screen |
 | Any tap while a QR is shown | Dismiss it, back to browsing |
 | ~15s with no input while browsing | Back to idle |
 
@@ -466,6 +561,21 @@ yet; `SPENT` notes have nothing left to show). There's no on-screen text yet
 (see README.md's "Known limitations"), so the display blinks the selected
 note's 1-based position among `CONFIRMED` notes instead of printing a
 number.
+
+**What the QR encodes.** By default a plain `https://` claim link into a
+wallet, `<wallet>/#/claim?u=<host>&k1=<secret>&a=<msat>` — because a stock
+phone camera opens that, and does not open `lnurlw://` (issue #26: the codes
+render and decode fine, nothing handles them). A note nobody can accept with
+the phone in their pocket is not a bearer note.
+
+The secret sits in the **fragment**, never the query, so it is not in a
+request line, a referrer or a server log.
+
+It costs one QR version over LUD-17 — about 138 characters against 113, so
+version 7 rather than 6 — which still renders at two pixels per module on the
+smaller of the two supported panels. `LNURLVAULT_QR_FORMAT` selects
+`NOTE_URL_LUD17` instead for an LNURL-native audience, and
+`LNURLVAULT_CLAIM_BASE` points the link at a different wallet.
 
 The chord *is* the confirmation — unlike `export_secret` over serial/BLE,
 there's no separate confirm/cancel step, because reaching this point already

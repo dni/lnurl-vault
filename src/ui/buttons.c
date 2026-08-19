@@ -20,20 +20,35 @@
 #include "board.h"
 #include "button_fsm.h"
 #include "esp_timer.h"
+#include "input_health.h"
 
 static button_fsm_t g_fsm;
+
+/* Updated by the raw reads below rather than by a tick of its own, so that
+ * both the browsing poll and the approval loop feed it without either having
+ * to remember to. See input_health.h. */
+static input_health_t g_health;
 
 void buttons_init(void) {
     board_buttons_init();
     button_fsm_init(&g_fsm);
+    input_health_init(&g_health, esp_timer_get_time());
 }
 
 bool buttons_raw_1(void) {
-    return board_button_1_pressed();
+    const bool pressed = board_button_1_pressed();
+    input_health_observe(&g_health, INPUT_CONFIRM, pressed);
+    return pressed;
 }
 
 bool buttons_raw_2(void) {
-    return board_button_2_pressed();
+    const bool pressed = board_button_2_pressed();
+    input_health_observe(&g_health, INPUT_CANCEL, pressed);
+    return pressed;
+}
+
+input_state_t buttons_input_state(input_index_t which) {
+    return input_health_state(&g_health, which, esp_timer_get_time());
 }
 
 void buttons_consume_press(void) {
@@ -41,6 +56,9 @@ void buttons_consume_press(void) {
 }
 
 button_event_t buttons_poll(void) {
-    return button_fsm_poll(&g_fsm, board_button_1_pressed(), board_button_2_pressed(),
-                            esp_timer_get_time());
+    /* Through the raw accessors, not board_button_*_pressed() directly, so
+     * this path feeds the health record too. */
+    const bool b1 = buttons_raw_1();
+    const bool b2 = buttons_raw_2();
+    return button_fsm_poll(&g_fsm, b1, b2, esp_timer_get_time());
 }

@@ -2,6 +2,7 @@
 #define LNURLVAULT_BOARD_H
 
 #include <stdbool.h>
+#include <stdint.h>
 
 #include "esp_lcd_panel_ops.h" /* esp_lcd_panel_swap_xy / _mirror */
 #include "esp_lcd_types.h"    /* esp_lcd_panel_handle_t */
@@ -91,7 +92,23 @@ board_display_t board_display_init(void);
  * newline-delimited JSON is identical either way. */
 void board_serial_start(void);
 
-/* Configures the board's two buttons as inputs. */
+/* What this board can ask its owner with.
+ *
+ * Every gated command here assumes two buttons. True of both current boards,
+ * false of the next ones worth having: T-Dongle-S3 has one, T-Watch-S3 has
+ * none and a touchscreen. Those need a different gesture, and something above
+ * this layer has to know which. Reported via get_info's `capabilities`.
+ *
+ * `buttons` counts buttons wired for confirm/cancel, not buttons present --
+ * that is what the gesture layer has to work with. */
+typedef struct {
+    uint8_t buttons; /* 0, 1 or 2 */
+    bool touch;
+} board_input_caps_t;
+
+board_input_caps_t board_input_caps(void);
+
+/* Configures the board's buttons as inputs. */
 void board_buttons_init(void);
 
 /* True while the button is physically pressed, whatever polarity and pull

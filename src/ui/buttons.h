@@ -4,6 +4,7 @@
 #include <stdbool.h>
 
 #include "button_fsm.h" /* button_event_t */
+#include "input_health.h" /* input_state_t, input_index_t */
 
 void buttons_init(void);
 
@@ -32,5 +33,13 @@ bool buttons_raw_2(void);
  * screen calls this once it has an answer, because the button that gave that
  * answer is still physically down. */
 void buttons_consume_press(void);
+
+/* Whether each button can be believed, for get_info's `inputs` object.
+ *
+ * Fed automatically by buttons_raw_1()/buttons_raw_2(), which every read path
+ * goes through -- both the browsing poll and the approval loop -- so there is
+ * no separate tick to forget. See src/proto/input_health.h for what the states
+ * mean and, more importantly, what they deliberately do not claim. */
+input_state_t buttons_input_state(input_index_t which);
 
 #endif

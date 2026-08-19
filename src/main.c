@@ -9,6 +9,7 @@
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdlib.h>
+#include <string.h>
 
 #include "ble_gatt.h"
 #include "board.h"
@@ -23,6 +24,9 @@
 #include "esp_random.h"
 #include "esp_system.h"
 #include "esp_timer.h"
+#include "identity.h"
+#include "input_health.h"
+#include "monocypher.h"
 #include "nvs_storage.h"
 #include "ota.h"
 #include "release_key.h"
@@ -65,6 +69,73 @@ static bool boot_report(boot_report_t *out) {
     out->boot_count = crash_crumb_boot_count();
     out->unexpected = crash_crumb_last_boot_was_unexpected();
     return true;
+}
+
+/* get_info's `inputs`. Unconditional, so a missing field means "this build
+ * cannot observe its buttons", not "they are fine". */
+static bool input_report(input_report_t *out) {
+    /* Only report buttons this board actually has: a one-button board would
+     * otherwise claim a healthy cancel button that is not there, and a client
+     * would tell its owner to press it. */
+    const uint8_t buttons = board_input_caps().buttons;
+    out->confirm = buttons >= 1 ? input_health_name(buttons_input_state(INPUT_CONFIRM)) : NULL;
+    out->cancel = buttons >= 2 ? input_health_name(buttons_input_state(INPUT_CANCEL)) : NULL;
+    return out->confirm != NULL || out->cancel != NULL;
+}
+
+/* get_info's `capabilities`. Display size is zero when the panel did not come
+ * up, not its compiled-in dimensions: a client deciding whether a QR handoff
+ * fits needs the pixels there ARE. Both transports are unconditional in
+ * app_main(), so both are always reported -- if that changes, so must this. */
+static bool capability_report(capability_report_t *out) {
+    const board_input_caps_t caps = board_input_caps();
+    const bool panel = display_ready();
+    out->buttons = caps.buttons;
+    out->touch = caps.touch;
+    out->display_width = panel ? (uint16_t)display_width() : 0;
+    out->display_height = panel ? (uint16_t)display_height() : 0;
+    out->serial = true;
+    out->ble = true;
+    return true;
+}
+
+/* This device's identity key (#69). Generated once, kept in NVS, never
+ * disclosed -- only what it derives. */
+static uint8_t g_identity_seed[IDENTITY_SEED_LEN];
+static bool g_identity_ready;
+
+static bool identity_seed(uint8_t out[IDENTITY_SEED_LEN]) {
+    if (!g_identity_ready) {
+        return false;
+    }
+    memcpy(out, g_identity_seed, IDENTITY_SEED_LEN);
+    return true;
+}
+
+/* Must run after ble_gatt_start(), which is what satisfies the RNG's
+ * documented full-entropy precondition -- see rng_self_test(). */
+static void identity_boot(void) {
+    if (vault_nvs_identity_load(g_identity_seed) && !identity_seed_is_blank(g_identity_seed)) {
+        g_identity_ready = true;
+        return;
+    }
+    if (!rng_fill(g_identity_seed, sizeof(g_identity_seed)) ||
+        identity_seed_is_blank(g_identity_seed)) {
+        ESP_LOGE(TAG, "identity: could not generate a key; identify will report unsupported");
+        crypto_wipe(g_identity_seed, sizeof(g_identity_seed));
+        return;
+    }
+    /* Refuse to serve an identity that cannot be remembered. A host that
+     * pinned a key the device forgets at the next boot would warn about a
+     * swapped vault every time it reconnected, which trains people to
+     * dismiss exactly the warning this exists to raise. */
+    if (!vault_nvs_identity_save(g_identity_seed)) {
+        ESP_LOGE(TAG, "identity: generated a key but could not store it; not serving it");
+        crypto_wipe(g_identity_seed, sizeof(g_identity_seed));
+        return;
+    }
+    g_identity_ready = true;
+    ESP_LOGI(TAG, "identity: generated and stored a new device key");
 }
 
 /* Cheap sanity check, not a statistical test suite: catches a
@@ -216,6 +287,9 @@ void app_main(void) {
         .trace_cmd = trace_cmd,
         .boot_report = boot_report,
         .confirm_action = confirm_action_on_device,
+        .input_report = input_report,
+        .capabilities = capability_report,
+        .identity_seed = identity_seed,
     };
     dispatcher_init(&deps);
 
@@ -229,6 +303,11 @@ void app_main(void) {
      * precondition) before touching the RNG at all. */
     ble_gatt_start();
     rng_self_test();
+
+    /* After ble_gatt_start()/rng_self_test() above, and after storage is up:
+     * the key is generated from the same RNG the notes use and has to be
+     * stored before it is served. */
+    identity_boot();
 
     if (storage_ok) {
         vault_init(vault_nvs_storage(), now_seconds);

@@ -23,6 +23,7 @@
 #include "board.h"
 
 #include "driver/gpio.h"
+#include "driver/rtc_io.h"
 #include "driver/spi_master.h"
 #include "esp_lcd_panel_io.h"
 #include "esp_lcd_panel_ops.h"
@@ -178,7 +179,29 @@ void board_serial_start(void) {
     serial_uart_start(); /* CH9102 USB-UART bridge on UART0 */
 }
 
+board_input_caps_t board_input_caps(void) {
+    /* Two buttons, no touch panel. See board.h. */
+    return (board_input_caps_t){.buttons = 2, .touch = false};
+}
+
 void board_buttons_init(void) {
+    /* Back to plain digital GPIO first. gpio_config() undoes neither a pad
+     * hold nor RTC mux ownership; both survive a software reset, both outrank
+     * the digital register, and both present as a permanently-pressed button
+     * -- the section 7a fault. These boards get reflashed with other firmware.
+     *
+     * Idempotent and free when the pads were already clean. Returns ignored:
+     * rtc_gpio_deinit() answers INVALID_ARG on a pin with no RTC function,
+     * which is the correct outcome there.
+     *
+     * Not confirmed as the cause of 7a -- that needs the board. It is the
+     * cheapest hypothesis, and one flash cycle to rule out. */
+    gpio_deep_sleep_hold_dis();
+    gpio_hold_dis(PIN_BUTTON_1);
+    gpio_hold_dis(PIN_BUTTON_2);
+    rtc_gpio_deinit(PIN_BUTTON_1);
+    rtc_gpio_deinit(PIN_BUTTON_2);
+
     /* Button 1 (GPIO0) gets the internal pull-up. Button 2 (GPIO35) cannot:
      * GPIO34-39 on the classic ESP32 are input-only and have no internal
      * pull resistors at all, so it depends entirely on the board's external

@@ -33,3 +33,31 @@ bool note_url_build(const char *host, const char *k1_hex, uint64_t amount_msat, 
     }
     return true;
 }
+
+bool note_url_build_as(note_url_format_t format, const char *claim_base, const char *host,
+                        const char *k1_hex, uint64_t amount_msat, char *out, size_t outcap) {
+    if (format == NOTE_URL_LUD17) {
+        return note_url_build(host, k1_hex, amount_msat, out, outcap);
+    }
+    if (!out || outcap == 0) {
+        return false;
+    }
+    /* Emptied before anything else can be written -- see note_url_build: a
+     * truncated URL is a plausible-looking link carrying a SHORTENED k1,
+     * which is a different secret or none, rendered into a QR and handed to
+     * somebody as money. */
+    out[0] = '\0';
+    if (!host || !host[0] || !k1_hex || !k1_hex[0]) {
+        return false;
+    }
+    const char *base = (claim_base && claim_base[0]) ? claim_base : LNURLVAULT_CLAIM_BASE;
+    /* `a` and `u` rather than `amount` and `host`: eleven characters saved is
+     * most of a QR version at this length. */
+    int written = snprintf(out, outcap, "%s?u=%s&k1=%s&a=%llu", base, host, k1_hex,
+                            (unsigned long long)amount_msat);
+    if (written < 0 || (size_t)written >= outcap) {
+        out[0] = '\0';
+        return false;
+    }
+    return true;
+}

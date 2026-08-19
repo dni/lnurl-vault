@@ -11,8 +11,10 @@ record says **NOT YET BENCH-RUN** in those words, so nothing quietly counts as
 verified by having been written down.
 
 **Open faults**, so they are not buried in a numbered section: the ESP32-S3's
-confirm gate answers itself, making `export_secret` impossible on that board —
-section 7a.
+cancel button reads as permanently pressed, so that board has no working way
+to decline a prompt — section 7a. It is no longer believed to block approval
+(the record that said so predates the firmware that fixed it), but that has
+**not been re-run on hardware**.
 
 **Run the machine-driven parts first:**
 
@@ -146,26 +148,71 @@ both transports, with the BLE link still up.
 > link supervision would tear the connection down during the wait. It does
 > not, on this controller; measured on unfixed firmware too.
 
-## 7a. The confirm gate answers itself on the S3 — OPEN FAULT
+## 7a. The S3's cancel button is dead — OPEN FAULT, and a stale record
 
-**On the ESP32-S3, `export_secret` cannot succeed.** With nothing touched:
+**What is still true:** on the ESP32-S3, `PIN_BUTTON_2` (GPIO14) reads as
+permanently pressed. Nothing in this repo drives GPIO14 and
+`board_buttons_init()` enables the internal pull-up, so it is a wrong pin, a
+board revision that moved the button, or a pad left held or in RTC mux by
+firmware flashed before this.
 
-```
-export_secret -> {"ok":false,"error":"user_declined"}  after 0.92s
-wipe          -> {"ok":false,"error":"user_declined"}  after 0.91s
-```
+**What is no longer true, and was left standing here for a day:** that this
+makes `export_secret` impossible on that board.
 
-0.92s is the cancel debounce plus the result card, so the cancel button reads
-as pressed on that board and every confirmation is refused before the owner can
-act. Nothing in this repo drives GPIO14, and `board_buttons_init()` enables the
-internal pull-up, so it is a wrong pin or a board revision that moved it.
+The record below was taken against firmware `0.0.2-25-g0b3477c`. That commit
+**predates PR #33** (hold-to-approve), which introduced the rule that a button
+which has not been seen released since a prompt began cannot answer that
+prompt. On current firmware a wedged cancel line can no longer deny anything —
+`cancel_stale` never clears on a pin that never reads released, so the cancel
+branch is never taken, and a genuine two-second hold on button 1 should still
+approve.
 
-**Diagnosing it needs the board in download mode** — hold BOOT, tap RESET,
-release BOOT. Its ROM port disappears once the firmware's TinyUSB claims USB
-and does not return on a software reset (checked), so this cannot be automated.
+That is a claim about the logic, not a bench result. It is pinned by
+`test/native/test_approval.c`'s
+`test_a_wedged_cancel_line_does_not_block_a_real_approval`, which fails if the
+rule is ever weakened. **On hardware it is NOT YET BENCH-RUN.**
 
-> **Bench record — 2026-08-17.** T-Display S3. Reproduced on demand. The
+So the consequence has changed shape rather than gone away. The S3 has not got
+a broken confirmation gate; it has got no cancel button. Every gated command
+on that board can be approved or left to time out, and nothing else.
+
+**What the device now says about it.** `get_info` reports an `inputs` object
+(`docs/PROTOCOL.md`), and on this board it should read
+`{"confirm":"ok","cancel":"stuck"}`. That is the single fastest check of
+whether the pin is still wrong, and it needs no download mode — the command
+protocol works fine on the S3.
+
+**Next steps, cheapest first:**
+
+1. Flash current firmware and read `get_info`. If `cancel` reports `ok`, the
+   pad-state fix below was the cause and this section closes.
+   `board_buttons_init()` now calls `gpio_hold_dis()` / `rtc_gpio_deinit()` on
+   both button pins before configuring them, because neither a pad hold nor
+   RTC mux ownership is cleared by `gpio_config()`, both survive a software
+   reset, and both present exactly as a permanently-pressed button. This board
+   has carried other firmware.
+2. If it still reports `stuck`, hold a real export prompt and try approving it
+   with a two-second hold on button 1. That answers the question this section
+   was wrong about, and it is worth answering before hunting the pin.
+3. Only then go looking for the right pin, which does need the board in
+   download mode — hold BOOT, tap RESET, release BOOT. Its ROM port disappears
+   once the firmware's TinyUSB claims USB and does not return on a software
+   reset (checked), so this cannot be automated.
+
+> **Bench record — 2026-08-17, SUPERSEDED.** T-Display S3, firmware
+> `0.0.2-25-g0b3477c`. With nothing touched:
+>
+> ```
+> export_secret -> {"ok":false,"error":"user_declined"}  after 0.92s
+> wipe          -> {"ok":false,"error":"user_declined"}  after 0.91s
+> ```
+>
+> 0.92s is the cancel debounce plus the result card. Reproduced on demand. The
 > classic board does not share it: the same prompt there times out at 31s.
+>
+> Kept, not deleted, because it is the evidence that GPIO14 reads low — which
+> is still the open half. It is superseded only in what it implies about
+> approval, for the reason given above: this firmware predates #33.
 
 ## 7b. A glitch on the cancel line
 
@@ -220,10 +267,18 @@ Pass: the code scans. Note that "does it scan" collapses the encoder, the
 renderer, the optics and the phone's decoder into a single bit — if it fails,
 the QR density ladder (`-DLNURLVAULT_QR_SELFTEST`) is what separates them.
 
+Pass now also means the code **opens something**, not just that it decodes.
+The payload is an https claim link by default (`docs/PROTOCOL.md`), so scan it
+with a stock iPhone camera and a stock Android camera and check each lands in
+the wallet with the note claimable. **NOT YET BENCH-RUN** — the format changed
+after the record below and no phone has seen the new one.
+
 > **Bench record — 2026-08-17.** Classic T-Display. Codes render and a phone
-> camera decodes them. **But** nothing opened them: the URL is a
+> camera decodes them. **But** nothing opened them: the URL was a
 > `lnurlw://` (LUD-17) scheme with no handler on the phones tried — issue
-> #26, a product decision, not a rendering fault.
+> #26. Addressed since by switching the default payload to an https claim
+> link; this record stands as the evidence that rendering and decoding were
+> never the problem.
 >
 > Do not enable `-DLNURLVAULT_QR_SELFTEST` in a shipping build: `app_main()`
 > runs the diagnostics before `ui_task_start()`, and the ladder waits for a
@@ -234,6 +289,19 @@ the QR density ladder (`-DLNURLVAULT_QR_SELFTEST`) is what separates them.
 ## 11. Buttons
 
 Pass: no spurious events at rest, and both buttons register.
+
+Also check what the device says about its own inputs. `get_info` now carries
+an `inputs` object (`docs/PROTOCOL.md`), and on a healthy board it must read
+`{"confirm":"ok","cancel":"ok"}` within a few seconds of boot — `ok` means the
+pin has been seen released, which is the only thing that can be proven without
+a finger on the board. A board that reports `stuck` has a pin wedged low; see
+section 7a. A board that reports `unknown` for more than five seconds after
+boot is reporting a pin it has never once read released, which is the same
+thing arriving slowly.
+
+Note what this does **not** check: a disconnected button reads released
+forever and reports `ok`. Proving a button works still needs a person to press
+it, which is the row above.
 
 > **Bench record — 2026-08-17.** Classic T-Display. `button_fsm` produced
 > zero spurious events across 31s at rest. GPIO35 is input-only with no
@@ -363,3 +431,51 @@ then boots and reports the tag as its `fw_version`.
 > **Still not bench-run:** flashing `merged-firmware.bin` onto a blank board
 > via the web installer, and an actual OTA transfer of `firmware.bin` to a
 > device. The signature is proven acceptable; nothing has yet accepted it.
+
+## 17. End to end with the wallet — NOT YET BENCH-RUN
+
+The gap nothing else covers. `lnurl-wallet`'s `deviceOrchestration.ts`
+implements every LUD-25 operation against a paired vault, and every one of
+them is verified only against mocks. The two-phase commit the whole design
+rests on — device stages a secret and discloses only its hash, mint burns
+against that hash, device commits — has never run with a real mint and a real
+board in the loop.
+
+Run a local `lnurl-mint`, point a dev build of the wallet at it, pair over USB,
+and walk the chain. One row per operation, and each needs a physical approval
+on the device:
+
+| Operation | Expect |
+|---|---|
+| mint | a note in the browser, then `import_secret` + immediate rotate onto the device |
+| rotate | old note `SPENT`, new note `CONFIRMED`, same value |
+| split | two outputs confirmed, every input spent |
+| merge | one output worth the sum, every input spent |
+| melt | invoice paid, note `SPENT` |
+| receive | an imported note rotated before it is trusted |
+
+Pass: the plaintext secret leaves the vault only on a press, `list_notes`
+agrees with the wallet after each step, and nothing is left `PENDING`.
+
+Do this on the **classic T-Display**, which is the board whose confirm gate is
+known to work. Section 7a is why.
+
+**NOT YET BENCH-RUN.**
+
+## 18. Device identity — NOT YET BENCH-RUN
+
+`identify` (issue #69) is what lets a wallet notice a swapped vault. Three
+things need a board, and none of them are provable in a native test:
+
+| Check | Expect |
+|---|---|
+| Two challenges, same boot | different signatures, **same** `pubkey` |
+| Power-cycle, then challenge again | the same `pubkey` as before. A key that changes at every boot warns about a swap every time and trains people to dismiss it |
+| A second board | a different `pubkey`. Two devices sharing one identity would be worse than having none |
+| After an approved `wipe` | a different `pubkey`, deliberately: a wiped vault is a different vault to any wallet that pinned it |
+| First boot on a blank device | a key is generated and stored, and `identify` answers rather than reporting `unsupported` |
+
+Also worth one check with the wallet: pair, then present the other board, and
+confirm the wallet says it is not the vault it paired with.
+
+**NOT YET BENCH-RUN.**

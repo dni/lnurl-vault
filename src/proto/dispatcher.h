@@ -5,6 +5,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include "identity.h"
 #include "vault.h"
 
 /* Transport-agnostic command router: both transport/serial_cdc.c and
@@ -170,6 +171,48 @@ typedef bool (*boot_report_fn)(boot_report_t *out);
  * native tests use. */
 typedef confirm_result_t (*action_confirm_fn)(const char *action, const note_meta_t *note);
 
+/* Optional: get_info's `inputs`. A wedged input is already harmless
+ * (approval.c) but invisible -- a vault with a wedged cancel line has lost its
+ * cancel button and nothing says so. See src/proto/input_health.h.
+ *
+ * Fields are "ok" | "stuck" | "unknown", or NULL for a button this board has
+ * not got -- reporting "ok" for one would be a claim about absent hardware.
+ * A NULL hook, or a false return, omits the object. */
+typedef struct {
+    const char *confirm;
+    const char *cancel;
+} input_report_t;
+
+typedef bool (*input_report_fn)(input_report_t *out);
+
+/* Optional: get_info's `capabilities`, so a client stops guessing. Telling
+ * someone to "press cancel" is wrong on a one-button board and meaningless on
+ * a touch-only one; whether a QR handoff fits is a pixel count the host has to
+ * know. buttons/touch come from board_input_caps(); display size is the usable
+ * surface after the board's rotation, or zero if the panel never came up.
+ * NULL omits the object -- native tests have no hardware to describe. */
+typedef struct {
+    uint8_t buttons;
+    bool touch;
+    uint16_t display_width;  /* 0 if the panel is unavailable */
+    uint16_t display_height;
+    bool serial; /* a host transport is compiled in and started */
+    bool ble;
+} capability_report_t;
+
+typedef bool (*capability_report_fn)(capability_report_t *out);
+
+/* Optional: this device's identity seed, for the `identify` command (#69).
+ *
+ * Nothing in the protocol has been pinnable: fw_version and board are class
+ * identifiers every unit of a build shares, so a swapped vault is
+ * indistinguishable from the one paired yesterday. A challenge-response over
+ * a per-device key is what makes trust-on-first-use possible.
+ *
+ * NULL => `identify` answers unsupported. See src/vault/identity.h for what
+ * the key does and does not prove. */
+typedef bool (*identity_seed_fn)(uint8_t seed[IDENTITY_SEED_LEN]);
+
 typedef struct {
     vault_rng_fn rng;
     export_confirm_fn confirm_export;
@@ -198,6 +241,9 @@ typedef struct {
     trace_cmd_fn trace_cmd;
     boot_report_fn boot_report;
     action_confirm_fn confirm_action;
+    input_report_fn input_report;
+    capability_report_fn capabilities;
+    identity_seed_fn identity_seed;
 } dispatcher_deps_t;
 
 void dispatcher_init(const dispatcher_deps_t *deps);

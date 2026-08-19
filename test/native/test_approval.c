@@ -296,6 +296,41 @@ static void test_cancel_after_release_still_works(void) {
     UL_CHECK(st == APPROVAL_DENIED, "a fresh cancel press denies");
 }
 
+/* The question section 7a of the hardware checklist never answered, and the
+ * one that decides whether the ESP32-S3 is usable at all.
+ *
+ * That record -- export_secret refused in 0.92s with nobody touching the
+ * board -- was taken against firmware 0.0.2-25-g0b3477c, which PREDATES the
+ * fresh-press rule above (it arrived with hold-to-approve, #33). So it
+ * describes logic this file no longer contains. What it does not tell us is
+ * what the S3 does NOW, and there are two possibilities that look identical
+ * from the outside: the wedged cancel line is merely ignored, or it also
+ * blocks approval, in which case that board can still never disclose
+ * anything and the fault is just quieter.
+ *
+ * It is the first. cancel_stale never clears on a pin that never reads
+ * released, so cancel_down is never set, so nothing stands in the hold's way.
+ * A board with a dead cancel button can still approve -- it has simply lost
+ * the ability to say no, which is what input_health.c is for reporting.
+ *
+ * This is a claim about the logic, not a bench result. It is here so that the
+ * claim is checked every time the suite runs, rather than believed. */
+static void test_a_wedged_cancel_line_does_not_block_a_real_approval(void) {
+    approval_t a;
+    int64_t now = 1000000;
+    approval_begin(&a, now, 30000);
+
+    /* Cancel wedged low since before the prompt and never released -- the S3.
+     * The owner has not touched button 1 yet. */
+    run(&a, false, true, &now, 200 * 1000);
+    UL_CHECK(a.state == APPROVAL_PENDING, "the wedged line has not answered anything");
+
+    /* Now they hold the approve button, properly, for the full two seconds. */
+    approval_state_t st = run(&a, true, true, &now, APPROVAL_HOLD_US + TICK_US);
+    UL_CHECK(st == APPROVAL_GRANTED,
+              "a real hold still approves past a permanently wedged cancel line");
+}
+
 /* Both stuck at once must still lapse rather than resolve either way. */
 static void test_both_stuck_lapses(void) {
     approval_t a;
@@ -366,6 +401,7 @@ void test_approval_run(void) {
     test_a_stuck_cancel_button_cannot_answer();
     test_a_still_held_approve_button_cannot_approve_the_next_prompt();
     test_cancel_after_release_still_works();
+    test_a_wedged_cancel_line_does_not_block_a_real_approval();
     test_both_stuck_lapses();
     test_a_brief_glitch_does_not_cancel();
     test_a_glitch_does_not_interrupt_a_hold();

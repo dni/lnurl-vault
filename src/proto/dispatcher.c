@@ -1,5 +1,8 @@
 #include "dispatcher.h"
 
+#include "identity.h"
+#include "monocypher.h"
+
 #include <string.h>
 
 #include "base64.h"
@@ -152,6 +155,78 @@ static size_t parse_parent_ids(const char *line, char out[VAULT_MAX_PARENTS][VAU
     return count;
 }
 
+/* Challenge-response over this device's identity key (#69). The host picks
+ * the nonce; the device signs "lnurlvault-id-v1" || 0x00 || nonce and returns
+ * that with its public key, so a wallet can pin on first pair and notice a
+ * swap afterwards.
+ *
+ * Proves only that whatever is answering holds the same key as last time. Not
+ * a defence against someone holding the device -- physical possession is
+ * still the model -- and the key never signs a spend. */
+static void handle_identify(const char *line, char *out, size_t outcap) {
+    if (!g_deps.identity_seed) {
+        write_error(out, outcap, "unsupported", "this build has no device identity");
+        return;
+    }
+
+    char nonce_hex[IDENTITY_NONCE_MAX_LEN * 2 + 1];
+    if (!json_get_str(line, "nonce", nonce_hex, sizeof(nonce_hex))) {
+        write_error(out, outcap, "bad_request", "identify requires a hex \"nonce\"");
+        return;
+    }
+    const size_t hex_len = strlen(nonce_hex);
+    /* The host must choose the nonce, and it must be long enough that answers
+     * cannot be usefully precomputed. Bounded at the top so a challenge is
+     * never an oracle for signing something longer. */
+    if (hex_len % 2 != 0 || hex_len < IDENTITY_NONCE_MIN_LEN * 2 ||
+        hex_len > IDENTITY_NONCE_MAX_LEN * 2) {
+        write_error(out, outcap, "bad_request", "nonce must be 16 to 32 bytes of hex");
+        return;
+    }
+    uint8_t nonce[IDENTITY_NONCE_MAX_LEN];
+    const size_t nonce_len = hex_len / 2;
+    if (!hex_decode(nonce_hex, hex_len, nonce, nonce_len)) {
+        write_error(out, outcap, "bad_request", "nonce is not hex");
+        return;
+    }
+
+    uint8_t seed[IDENTITY_SEED_LEN];
+    if (!g_deps.identity_seed(seed) || identity_seed_is_blank(seed)) {
+        /* An all-zero seed is a valid ed25519 key, so nothing downstream
+         * would notice -- and every device that failed to generate one would
+         * share an identity, which is worse than having none. */
+        crypto_wipe(seed, sizeof(seed));
+        write_error(out, outcap, "unsupported", "this device has no identity key");
+        return;
+    }
+
+    uint8_t pubkey[IDENTITY_PUBKEY_LEN];
+    uint8_t sig[IDENTITY_SIG_LEN];
+    identity_pubkey(seed, pubkey);
+    const bool signed_ok = identity_sign(seed, nonce, nonce_len, sig);
+    crypto_wipe(seed, sizeof(seed));
+    if (!signed_ok) {
+        write_error(out, outcap, "bad_request", "nonce could not be signed");
+        return;
+    }
+
+    char pubkey_hex[IDENTITY_PUBKEY_LEN * 2 + 1];
+    char sig_hex[IDENTITY_SIG_LEN * 2 + 1];
+    if (!hex_encode(pubkey, sizeof(pubkey), pubkey_hex, sizeof(pubkey_hex)) ||
+        !hex_encode(sig, sizeof(sig), sig_hex, sizeof(sig_hex))) {
+        write_error(out, outcap, "bad_request", "could not encode identity");
+        return;
+    }
+
+    json_writer_t w;
+    jw_init(&w, out, outcap);
+    jw_begin_obj(&w, NULL);
+    jw_bool(&w, "ok", true);
+    jw_str(&w, "pubkey", pubkey_hex);
+    jw_str(&w, "sig", sig_hex);
+    finish(&w, out, outcap);
+}
+
 static void handle_get_info(char *out, size_t outcap) {
     size_t note_count, pending_count;
     vault_get_info(&note_count, &pending_count);
@@ -182,6 +257,50 @@ static void handle_get_info(char *out, size_t outcap) {
         jw_str(&w, "storage", "index_unreadable");
     } else if (g_deps.storage_state) {
         jw_str(&w, "storage", g_deps.storage_state());
+    }
+    /* What this device can physically do, so a client stops guessing. The
+     * `gated` flag is derived here rather than injected: dispatcher.c is the
+     * module that refuses an ungated disclosure, so it is the one that knows
+     * whether a confirmation hook is actually wired. A client that reads
+     * gated:false knows every physically-gated command on this build will
+     * answer `unsupported`, and can say so before the owner tries one. */
+    capability_report_t caps;
+    if (g_deps.capabilities && g_deps.capabilities(&caps)) {
+        jw_begin_obj(&w, "capabilities");
+        jw_uint64(&w, "buttons", caps.buttons);
+        jw_bool(&w, "touch", caps.touch);
+        jw_bool(&w, "gated", g_deps.confirm_export != NULL);
+        jw_begin_obj(&w, "display");
+        jw_uint64(&w, "width", caps.display_width);
+        jw_uint64(&w, "height", caps.display_height);
+        jw_end_obj(&w);
+        jw_begin_arr(&w, "transports");
+        if (caps.serial) {
+            jw_str_item(&w, "serial");
+        }
+        if (caps.ble) {
+            jw_str_item(&w, "ble");
+        }
+        jw_end_arr(&w);
+        jw_end_obj(&w);
+    }
+    /* Which of this device's buttons can be believed. Reported unconditionally
+     * rather than only when something is wrong: a client that only ever sees
+     * the field on a faulty board cannot tell "this vault's cancel button
+     * works" from "this firmware does not report input health". */
+    input_report_t inputs = {NULL, NULL};
+    if (g_deps.input_report && g_deps.input_report(&inputs)) {
+        jw_begin_obj(&w, "inputs");
+        /* A NULL field is a button this board has not got. Reporting "ok" for
+         * one would be a claim about hardware that is not there, and a client
+         * would then tell its owner to press it. */
+        if (inputs.confirm) {
+            jw_str(&w, "confirm", inputs.confirm);
+        }
+        if (inputs.cancel) {
+            jw_str(&w, "cancel", inputs.cancel);
+        }
+        jw_end_obj(&w);
     }
     /* Why the previous boot ended, so a device that resets in the field can
      * be diagnosed over the wire — on a board whose console is deliberately
@@ -860,7 +979,9 @@ void dispatcher_handle(const char *line, char *out, size_t outcap) {
         g_deps.trace_cmd(cmd);
     }
 
-    if (strcmp(cmd, "get_info") == 0) {
+    if (strcmp(cmd, "identify") == 0) {
+        handle_identify(line, out, outcap);
+    } else if (strcmp(cmd, "get_info") == 0) {
         handle_get_info(out, outcap);
     } else if (strcmp(cmd, "list_notes") == 0) {
         handle_list_notes(line, out, outcap);

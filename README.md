@@ -13,7 +13,7 @@ protocol.
 
 It also works fully offline, with nothing paired at all: tap either button
 to browse `CONFIRMED` notes, hold both together for ~200ms to unveil the
-selected note's `lnurlw://` URL as an on-screen QR code — the offline
+selected note as an on-screen QR code — the offline
 banknote handoff [LUD-25](https://github.com/lnurl/luds/pull/301) itself describes. See
 [`docs/PROTOCOL.md`](docs/PROTOCOL.md)'s "On-device note browsing" section.
 
@@ -684,6 +684,13 @@ step's `find` patterns are the first thing to check.
 - **OTA exists but is untested on hardware and unusable until a release key
   is generated** — see the "OTA firmware updates" section above for what's
   built, what's cross-checked, and what still needs a real device.
+- **Device identity** (`identify`, issue #69) gives a host something to pin:
+  a per-device ed25519 key, generated on first boot and kept in NVS, answering
+  a challenge the host chooses. It proves the vault answering now holds the
+  same key as last time, which is what trust-on-first-use needs — and nothing
+  about who is holding it. A `wipe` destroys it, so a wiped vault is
+  deliberately a different vault to anything that pinned it. Not bench-run;
+  see `docs/HARDWARE-TEST-CHECKLIST.md` section 18.
 - BLE pairing/bonding is unauthenticated in this v1 (any nearby device can
   connect and issue commands, though it still can't extract a secret
   without a physical gesture on the vault itself). Consider BLE
@@ -743,9 +750,11 @@ and recovery via a fresh `ota_begin` after an abort).
 4. Exercise on-device browsing with at least two `CONFIRMED` notes: tap to
    enter browse mode (watch it blink out position 1), tap again (blinks
    position 2), hold both buttons together (~200ms) to unveil — confirm a
-   QR appears, scan it with any phone, and check the decoded URL matches
-   `docs/PROTOCOL.md`'s `lnurlw://<host>?k1=...&amount=...` shape for that
-   note. Tap once to dismiss and confirm the screen actually clears.
+   QR appears, and scan it with a stock phone camera: it should open the
+   wallet with that note claimable (the payload is an https claim link by
+   default — see `docs/PROTOCOL.md`'s "On-device note browsing", and issue
+   #26 for why it is not `lnurlw://` any more). Tap once to dismiss and
+   confirm the screen actually clears.
 5. **Not yet attempted**: a real OTA update end to end.
    `python3 tools/ota_push.py keygen --out ota-release.seed`, paste the
    printed public key into `src/ota/release_key.c`'s `OTA_RELEASE_PUBKEY`,
