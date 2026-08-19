@@ -75,6 +75,8 @@ the device is refusing to write rather than risk what is already there. Read
 `get_info`'s `storage` field to tell them apart: `full` means spend or delete
 notes; `index_unreadable` means reboot, and specifically do **not** wipe.
 
+`unsupported` also covers `identify` on a build with no device identity.
+
 `response_too_large` means the reply did not fit the transport's response
 buffer. Today only `list_notes` can produce it (every other command's reply is
 a fixed set of fields). Treat it as "ask for less": `list_notes` takes
@@ -168,6 +170,43 @@ a field reset over the wire — on a board whose console is disabled this is the
 only channel: `last_reset_reason` (`poweron`, `panic`, `sw`, …), `boot_count`,
 `last_boot_unexpected` (bool), and `last_cmd_in_flight` (the command in flight
 at the crash, if any).
+
+### `identify`
+
+Challenge-response over a per-device key, so a client can tell one vault from
+another ([issue #69](https://github.com/dni/lnurl-vault/issues/69)).
+
+```json
+{"cmd":"identify","nonce":"<16-32 bytes of hex, chosen by the client>"}
+→ {"ok":true,"pubkey":"<64-hex ed25519 public key>","sig":"<128-hex signature>"}
+```
+
+The signature is over `"lnurlvault-id-v1" || 0x00 || nonce`, domain-separated
+the same way OTA images are, so an identity challenge can never be replayed as
+a firmware approval.
+
+**The client picks the nonce, every time.** A fixed one turns this into a
+recording anything can replay. The device refuses a nonce shorter than 16
+bytes (too little to stop precomputation) or longer than 32 (a challenge must
+not become an oracle for signing something else), with `bad_request`.
+
+What it proves: the thing answering now holds the same key as the thing that
+answered before. That is enough for trust-on-first-use — pin the `pubkey` on
+first pair and warn loudly if it ever changes.
+
+What it does **not** prove: anything about what the device is, or who has it.
+It is not a defence against someone holding the vault. Physical possession is
+still the model.
+
+The key is **not** a note secret: it never signs a spend and never leaves the
+device. `wipe` destroys it along with everything else, so a wiped vault is
+deliberately a *different* vault to any client that had pinned it — the right
+answer for a device that has been sold or handed on.
+
+`unsupported` means this build has no identity, or the device has one it could
+not store. A device that cannot remember its key does not serve it, because a
+client pinning a key that changes at every boot would be warned about a swap
+every single time.
 
 ### `list_notes`
 

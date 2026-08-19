@@ -3,6 +3,8 @@
 #include <string.h>
 
 #include "dispatcher.h"
+#include "hex.h"
+#include "identity.h"
 #include "json.h"
 #include "unity_lite.h"
 #include "vault.h"
@@ -44,6 +46,80 @@ static bool capability_stub(capability_report_t *out) {
     }
     *out = g_caps;
     return true;
+}
+
+/* identify: challenge-response over the device key (#69). */
+static bool g_identity_available = true;
+static const uint8_t IDENTITY_SEED[IDENTITY_SEED_LEN] = {
+    0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x99, 0xaa, 0xbb,
+    0xcc, 0xdd, 0xee, 0xff, 0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06,
+    0x07, 0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f, 0x10};
+
+static bool identity_seed_stub(uint8_t seed[IDENTITY_SEED_LEN]) {
+    if (!g_identity_available) return false;
+    memcpy(seed, IDENTITY_SEED, IDENTITY_SEED_LEN);
+    return true;
+}
+
+static void test_identify_answers_a_challenge(void) {
+    char out[512];
+    char err[32];
+    char pubkey_hex[IDENTITY_PUBKEY_LEN * 2 + 1];
+    char sig_hex[IDENTITY_SIG_LEN * 2 + 1];
+    bool ok;
+
+    dispatcher_deps_t deps = {
+        .rng = rng_basic, .confirm_export = confirm_stub, .identity_seed = identity_seed_stub};
+    dispatcher_init(&deps);
+    g_identity_available = true;
+
+    const char *nonce_hex = "a0a1a2a3a4a5a6a7a8a9aaabacadaeaf";
+    char cmd[128];
+    snprintf(cmd, sizeof(cmd), "{\"cmd\":\"identify\",\"nonce\":\"%s\"}", nonce_hex);
+    dispatcher_handle(cmd, out, sizeof(out));
+    UL_CHECK(json_get_bool(out, "ok", &ok) && ok, "identify answers");
+    UL_CHECK(json_get_str(out, "pubkey", pubkey_hex, sizeof(pubkey_hex)) &&
+                  strlen(pubkey_hex) == IDENTITY_PUBKEY_LEN * 2,
+              "with a 32-byte public key");
+    UL_CHECK(json_get_str(out, "sig", sig_hex, sizeof(sig_hex)) &&
+                  strlen(sig_hex) == IDENTITY_SIG_LEN * 2,
+              "and a 64-byte signature");
+
+    /* The answer must verify with the host's own check, not the device's. */
+    uint8_t pubkey[IDENTITY_PUBKEY_LEN], sig[IDENTITY_SIG_LEN], nonce[16];
+    UL_CHECK(hex_decode(pubkey_hex, strlen(pubkey_hex), pubkey, sizeof(pubkey)), "pubkey decodes");
+    UL_CHECK(hex_decode(sig_hex, strlen(sig_hex), sig, sizeof(sig)), "sig decodes");
+    UL_CHECK(hex_decode(nonce_hex, strlen(nonce_hex), nonce, sizeof(nonce)), "nonce decodes");
+    UL_CHECK(identity_verify(pubkey, nonce, sizeof(nonce), sig),
+              "and the signature verifies against the reported key");
+
+    /* The device never discloses its seed, only what it derives. */
+    UL_CHECK(strstr(out, "1122334455") == NULL, "the seed is never on the wire");
+
+    /* A nonce the host cannot have chosen freely is refused, not signed. */
+    dispatcher_handle("{\"cmd\":\"identify\",\"nonce\":\"abcd\"}", out, sizeof(out));
+    UL_CHECK(json_get_bool(out, "ok", &ok) && !ok, "a short nonce is refused");
+    UL_CHECK(json_get_str(out, "error", err, sizeof(err)) && strcmp(err, "bad_request") == 0,
+              "as bad_request");
+
+    dispatcher_handle("{\"cmd\":\"identify\",\"nonce\":\"zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz\"}",
+                       out, sizeof(out));
+    UL_CHECK(json_get_bool(out, "ok", &ok) && !ok, "a non-hex nonce is refused");
+
+    /* No key provisioned: unsupported, never a signature from a blank seed. */
+    g_identity_available = false;
+    dispatcher_handle(cmd, out, sizeof(out));
+    UL_CHECK(json_get_bool(out, "ok", &ok) && !ok, "a device with no key refuses");
+    UL_CHECK(json_get_str(out, "error", err, sizeof(err)) && strcmp(err, "unsupported") == 0,
+              "as unsupported");
+
+    dispatcher_deps_t none = {.rng = rng_basic, .confirm_export = confirm_stub};
+    dispatcher_init(&none);
+    dispatcher_handle(cmd, out, sizeof(out));
+    UL_CHECK(json_get_bool(out, "ok", &ok) && !ok, "and a build without the hook refuses too");
+
+    dispatcher_deps_t plain = {.rng = rng_basic, .confirm_export = confirm_stub};
+    dispatcher_init(&plain);
 }
 
 static void test_get_info_reports_capabilities(void) {
@@ -296,4 +372,5 @@ void test_dispatcher_run(void) {
 
     test_get_info_reports_input_health();
     test_get_info_reports_capabilities();
+    test_identify_answers_a_challenge();
 }

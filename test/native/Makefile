@@ -33,6 +33,7 @@ CFLAGS = -std=c11 -Wall -Wextra -Werror -I../../src/vault -I../../src/proto -I..
 SRC = ../../src/vault/sha256.c \
       ../../src/vault/hex.c \
       ../../src/vault/vault.c \
+      ../../src/vault/identity.c \
       ../../src/proto/json.c \
       ../../src/proto/base64.c \
       ../../src/proto/dispatcher.c \
@@ -62,6 +63,7 @@ SRC = ../../src/vault/sha256.c \
       test_line_proto.c \
       test_approval.c \
       test_input_health.c \
+      test_identity.c \
       test_qr_capacity.c \
       test_wipe.c \
       test_gated_actions.c \

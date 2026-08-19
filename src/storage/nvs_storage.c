@@ -251,6 +251,40 @@ static bool nvs_delete_note(const char *id, void *ctx) {
     return nvs_commit(g_handle) == ESP_OK;
 }
 
+#define IDENTITY_KEY "identity"
+#define IDENTITY_SEED_BYTES 32
+
+bool vault_nvs_identity_load(uint8_t seed[32]) {
+    if (!g_open) {
+        return false;
+    }
+    size_t size = IDENTITY_SEED_BYTES;
+    esp_err_t err = nvs_get_blob(g_handle, IDENTITY_KEY, seed, &size);
+    if (err != ESP_OK) {
+        return false;
+    }
+    /* A short read would leave the tail of the caller's buffer uninitialised
+     * and the device signing with a key nobody can reproduce. */
+    return size == IDENTITY_SEED_BYTES;
+}
+
+bool vault_nvs_identity_save(const uint8_t seed[32]) {
+    if (!g_open) {
+        return false;
+    }
+    esp_err_t err = nvs_set_blob(g_handle, IDENTITY_KEY, seed, IDENTITY_SEED_BYTES);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "identity: store failed: %s", esp_err_to_name(err));
+        return false;
+    }
+    err = nvs_commit(g_handle);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "identity: commit failed: %s", esp_err_to_name(err));
+        return false;
+    }
+    return true;
+}
+
 bool vault_nvs_storage_init(void) {
     esp_err_t err = nvs_open(NAMESPACE, NVS_READWRITE, &g_handle);
     if (err != ESP_OK) {

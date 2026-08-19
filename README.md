@@ -684,6 +684,13 @@ step's `find` patterns are the first thing to check.
 - **OTA exists but is untested on hardware and unusable until a release key
   is generated** — see the "OTA firmware updates" section above for what's
   built, what's cross-checked, and what still needs a real device.
+- **Device identity** (`identify`, issue #69) gives a host something to pin:
+  a per-device ed25519 key, generated on first boot and kept in NVS, answering
+  a challenge the host chooses. It proves the vault answering now holds the
+  same key as last time, which is what trust-on-first-use needs — and nothing
+  about who is holding it. A `wipe` destroys it, so a wiped vault is
+  deliberately a different vault to anything that pinned it. Not bench-run;
+  see `docs/HARDWARE-TEST-CHECKLIST.md` section 18.
 - BLE pairing/bonding is unauthenticated in this v1 (any nearby device can
   connect and issue commands, though it still can't extract a secret
   without a physical gesture on the vault itself). Consider BLE

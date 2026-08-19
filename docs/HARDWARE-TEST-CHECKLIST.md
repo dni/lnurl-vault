@@ -431,3 +431,51 @@ then boots and reports the tag as its `fw_version`.
 > **Still not bench-run:** flashing `merged-firmware.bin` onto a blank board
 > via the web installer, and an actual OTA transfer of `firmware.bin` to a
 > device. The signature is proven acceptable; nothing has yet accepted it.
+
+## 17. End to end with the wallet — NOT YET BENCH-RUN
+
+The gap nothing else covers. `lnurl-wallet`'s `deviceOrchestration.ts`
+implements every LUD-25 operation against a paired vault, and every one of
+them is verified only against mocks. The two-phase commit the whole design
+rests on — device stages a secret and discloses only its hash, mint burns
+against that hash, device commits — has never run with a real mint and a real
+board in the loop.
+
+Run a local `lnurl-mint`, point a dev build of the wallet at it, pair over USB,
+and walk the chain. One row per operation, and each needs a physical approval
+on the device:
+
+| Operation | Expect |
+|---|---|
+| mint | a note in the browser, then `import_secret` + immediate rotate onto the device |
+| rotate | old note `SPENT`, new note `CONFIRMED`, same value |
+| split | two outputs confirmed, every input spent |
+| merge | one output worth the sum, every input spent |
+| melt | invoice paid, note `SPENT` |
+| receive | an imported note rotated before it is trusted |
+
+Pass: the plaintext secret leaves the vault only on a press, `list_notes`
+agrees with the wallet after each step, and nothing is left `PENDING`.
+
+Do this on the **classic T-Display**, which is the board whose confirm gate is
+known to work. Section 7a is why.
+
+**NOT YET BENCH-RUN.**
+
+## 18. Device identity — NOT YET BENCH-RUN
+
+`identify` (issue #69) is what lets a wallet notice a swapped vault. Three
+things need a board, and none of them are provable in a native test:
+
+| Check | Expect |
+|---|---|
+| Two challenges, same boot | different signatures, **same** `pubkey` |
+| Power-cycle, then challenge again | the same `pubkey` as before. A key that changes at every boot warns about a swap every time and trains people to dismiss it |
+| A second board | a different `pubkey`. Two devices sharing one identity would be worse than having none |
+| After an approved `wipe` | a different `pubkey`, deliberately: a wiped vault is a different vault to any wallet that pinned it |
+| First boot on a blank device | a key is generated and stored, and `identify` answers rather than reporting `unsupported` |
+
+Also worth one check with the wallet: pair, then present the other board, and
+confirm the wallet says it is not the vault it paired with.
+
+**NOT YET BENCH-RUN.**

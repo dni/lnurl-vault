@@ -5,6 +5,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include "identity.h"
 #include "vault.h"
 
 /* Transport-agnostic command router: both transport/serial_cdc.c and
@@ -200,6 +201,17 @@ typedef struct {
 
 typedef bool (*capability_report_fn)(capability_report_t *out);
 
+/* Optional: this device's identity seed, for the `identify` command (#69).
+ *
+ * Nothing in the protocol has been pinnable: fw_version and board are class
+ * identifiers every unit of a build shares, so a swapped vault is
+ * indistinguishable from the one paired yesterday. A challenge-response over
+ * a per-device key is what makes trust-on-first-use possible.
+ *
+ * NULL => `identify` answers unsupported. See src/vault/identity.h for what
+ * the key does and does not prove. */
+typedef bool (*identity_seed_fn)(uint8_t seed[IDENTITY_SEED_LEN]);
+
 typedef struct {
     vault_rng_fn rng;
     export_confirm_fn confirm_export;
@@ -230,6 +242,7 @@ typedef struct {
     action_confirm_fn confirm_action;
     input_report_fn input_report;
     capability_report_fn capabilities;
+    identity_seed_fn identity_seed;
 } dispatcher_deps_t;
 
 void dispatcher_init(const dispatcher_deps_t *deps);

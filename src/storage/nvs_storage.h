@@ -65,4 +65,13 @@ bool vault_nvs_storage_init(void);
  * vault_nvs_storage_init() returns true. */
 const vault_storage_t *vault_nvs_storage(void);
 
+/* This device's identity seed (#69, src/vault/identity.h). Lives in the same
+ * namespace as the notes, so `wipe` destroys it with everything else -- a
+ * wiped vault becomes a different vault to any wallet that pinned it, which
+ * is right for a device that has been handed on.
+ *
+ * Load returns false when there is none yet, or it could not be read. */
+bool vault_nvs_identity_load(uint8_t seed[32]);
+bool vault_nvs_identity_save(const uint8_t seed[32]);
+
 #endif

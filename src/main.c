@@ -9,6 +9,7 @@
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdlib.h>
+#include <string.h>
 
 #include "ble_gatt.h"
 #include "board.h"
@@ -23,7 +24,9 @@
 #include "esp_random.h"
 #include "esp_system.h"
 #include "esp_timer.h"
+#include "identity.h"
 #include "input_health.h"
+#include "monocypher.h"
 #include "nvs_storage.h"
 #include "ota.h"
 #include "release_key.h"
@@ -90,6 +93,45 @@ static bool capability_report(capability_report_t *out) {
     out->serial = true;
     out->ble = true;
     return true;
+}
+
+/* This device's identity key (#69). Generated once, kept in NVS, never
+ * disclosed -- only what it derives. */
+static uint8_t g_identity_seed[IDENTITY_SEED_LEN];
+static bool g_identity_ready;
+
+static bool identity_seed(uint8_t out[IDENTITY_SEED_LEN]) {
+    if (!g_identity_ready) {
+        return false;
+    }
+    memcpy(out, g_identity_seed, IDENTITY_SEED_LEN);
+    return true;
+}
+
+/* Must run after ble_gatt_start(), which is what satisfies the RNG's
+ * documented full-entropy precondition -- see rng_self_test(). */
+static void identity_boot(void) {
+    if (vault_nvs_identity_load(g_identity_seed) && !identity_seed_is_blank(g_identity_seed)) {
+        g_identity_ready = true;
+        return;
+    }
+    if (!rng_fill(g_identity_seed, sizeof(g_identity_seed)) ||
+        identity_seed_is_blank(g_identity_seed)) {
+        ESP_LOGE(TAG, "identity: could not generate a key; identify will report unsupported");
+        crypto_wipe(g_identity_seed, sizeof(g_identity_seed));
+        return;
+    }
+    /* Refuse to serve an identity that cannot be remembered. A host that
+     * pinned a key the device forgets at the next boot would warn about a
+     * swapped vault every time it reconnected, which trains people to
+     * dismiss exactly the warning this exists to raise. */
+    if (!vault_nvs_identity_save(g_identity_seed)) {
+        ESP_LOGE(TAG, "identity: generated a key but could not store it; not serving it");
+        crypto_wipe(g_identity_seed, sizeof(g_identity_seed));
+        return;
+    }
+    g_identity_ready = true;
+    ESP_LOGI(TAG, "identity: generated and stored a new device key");
 }
 
 /* Cheap sanity check, not a statistical test suite: catches a
@@ -243,6 +285,7 @@ void app_main(void) {
         .confirm_action = confirm_action_on_device,
         .input_report = input_report,
         .capabilities = capability_report,
+        .identity_seed = identity_seed,
     };
     dispatcher_init(&deps);
 
@@ -256,6 +299,11 @@ void app_main(void) {
      * precondition) before touching the RNG at all. */
     ble_gatt_start();
     rng_self_test();
+
+    /* After ble_gatt_start()/rng_self_test() above, and after storage is up:
+     * the key is generated from the same RNG the notes use and has to be
+     * stored before it is served. */
+    identity_boot();
 
     if (storage_ok) {
         vault_init(vault_nvs_storage(), now_seconds);
