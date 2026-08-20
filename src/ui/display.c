@@ -207,8 +207,9 @@ void display_text(int x, int y, const char *text, int scale, uint16_t fg, uint16
     }
 }
 
-void display_note_detail(display_state_t state, const char *amount_num,
-                          const char *amount_unit, const char *label, const char *id) {
+void display_note_detail(display_state_t state, const char *action, const char *amount_num,
+                          const char *amount_unit, const char *label, const char *id,
+                          const char *hint) {
     if (!display_ready()) {
         return;
     }
@@ -228,22 +229,20 @@ void display_note_detail(display_state_t state, const char *amount_num,
     const int avail = g_width - 2 * margin;
     /* Keep out of the progress bar's band -- see display_progress(). */
     const int usable_h = g_height - (g_height / 8) - (g_height / 12) - margin;
+    const int small_h = FONT5X7_HEIGHT * FONT5X7_MIN_READABLE_SCALE;
+    /* One gap, used both when reserving space below and when advancing past a
+     * line. It used to be 4 in the reservation and 5 after the amount, and
+     * that one pixel of disagreement was enough: four lines at the readable
+     * minimum put the last one at y=103 against a usable_h of 102, so the
+     * hold hint was computed, reserved for, and then silently dropped. On a
+     * 135px panel there is no slack to absorb a mismatch like that. */
+    const int gap = 3;
 
     int y = margin;
 
-    /* The digits get the FULL width, at the largest scale that fits. An
-     * earlier version reserved room for the unit on the same line, which cost
-     * 90 of 228 pixels and held a seven-digit amount down to the same 21-pixel
-     * height a person had already told us was too small to read. The unit goes
-     * on the next line with the label instead: it is a word, and the digits are
-     * the thing a mistake costs money on. */
-    if (amount_num && amount_num[0]) {
-        const int scale = font5x7_fit_scale(amount_num, avail, DISPLAY_MAX_TEXT_SCALE);
-        display_text(margin, y, amount_num, scale, ink, bg);
-        y += FONT5X7_HEIGHT * scale + 5;
-    }
-
-    /* Unit and label share a line: "sats  rent". */
+    /* Unit and label share a line: "sats  rent". Built before anything is
+     * drawn, because the amount's scale depends on how much room the lines
+     * BELOW it still need -- see the reservation below. */
     char second[40];
     second[0] = '\0';
     if (amount_unit && amount_unit[0]) {
@@ -269,13 +268,77 @@ void display_note_detail(display_state_t state, const char *amount_num,
         memcpy(second + used, label, n);
         second[used + n] = '\0';
     }
-    if (second[0] && y + FONT5X7_HEIGHT * FONT5X7_MIN_READABLE_SCALE <= usable_h) {
-        const int scale = font5x7_fit_scale(second, avail, FONT5X7_MIN_READABLE_SCALE + 1);
-        display_text(margin, y, second, scale, ink, bg);
-        y += FONT5X7_HEIGHT * scale + 4;
+
+    /* What is being asked, first and at the readable minimum. Without it the
+     * screen showed an amount and left the owner to infer the verb -- and the
+     * verb is the difference between handing over one note's secret and
+     * erasing every note on the device. Both used to look identical here. */
+    if (action && action[0] && y + small_h <= usable_h) {
+        display_text(margin, y, action, FONT5X7_MIN_READABLE_SCALE, ink, bg);
+        y += small_h + gap;
     }
-    if (id && id[0] && y + FONT5X7_HEIGHT * FONT5X7_MIN_READABLE_SCALE <= usable_h) {
+
+    /* Reserve what the lines after the amount still need, so the digits
+     * cannot grow into space the hold hint depends on. A hint that gets
+     * silently dropped for being one row short is exactly the failure this
+     * card is meant to fix. */
+    int reserved = 0;
+    if (second[0]) {
+        reserved += small_h + gap;
+    }
+    if (id && id[0]) {
+        reserved += small_h + gap;
+    }
+    if (hint && hint[0]) {
+        reserved += small_h + gap;
+    }
+
+    /* The digits get the FULL width, at the largest scale that fits what is
+     * left. An earlier version reserved room for the unit on the same line,
+     * which cost 90 of 228 pixels and held a seven-digit amount down to the
+     * same 21-pixel height a person had already told us was too small to
+     * read. The unit goes on the next line with the label instead: it is a
+     * word, and the digits are the thing a mistake costs money on. */
+    if (amount_num && amount_num[0]) {
+        int room_h = usable_h - y - reserved;
+        int max_scale = room_h / FONT5X7_HEIGHT;
+        if (max_scale > DISPLAY_MAX_TEXT_SCALE) {
+            max_scale = DISPLAY_MAX_TEXT_SCALE;
+        }
+        /* font5x7_fit_scale never returns below FONT5X7_MIN_READABLE_SCALE --
+         * it clamps a smaller max back up. So asking it for a scale the
+         * budget cannot afford does not get a smaller amount, it gets a
+         * full-height one that pushes the hint off the bottom, which is the
+         * exact bug this reservation exists to prevent. Only draw it if a
+         * readable line genuinely fits. */
+        if (room_h >= small_h) {
+            const int scale = font5x7_fit_scale(amount_num, avail, max_scale);
+            display_text(margin, y, amount_num, scale, ink, bg);
+            y += FONT5X7_HEIGHT * scale + gap;
+        }
+    }
+
+    if (second[0] && y + small_h <= usable_h) {
+        const int scale = font5x7_fit_scale(second, avail, FONT5X7_MIN_READABLE_SCALE + 1);
+        /* Cut it to what the width actually holds. font5x7_fit_scale cannot
+         * shrink below the readable minimum, so a long label otherwise runs
+         * off the panel and is clipped mid-glyph -- "card-check" rendered as
+         * "card-ch" with the h sliced down the middle, which reads as a
+         * different label rather than as a truncated one. */
+        const int fits = avail / (FONT5X7_ADVANCE * scale);
+        if (fits > 0 && (int)strlen(second) > fits) {
+            second[fits] = '\0';
+        }
+        display_text(margin, y, second, scale, ink, bg);
+        y += FONT5X7_HEIGHT * scale + gap;
+    }
+    if (id && id[0] && y + small_h <= usable_h) {
         display_text(margin, y, id, FONT5X7_MIN_READABLE_SCALE, ink, bg);
+        y += small_h + gap;
+    }
+    /* Last, nearest the bar it describes. */
+    if (hint && hint[0] && y + small_h <= usable_h) {
+        display_text(margin, y, hint, FONT5X7_MIN_READABLE_SCALE, ink, bg);
     }
 }
 

@@ -479,3 +479,70 @@ Also worth one check with the wallet: pair, then present the other board, and
 confirm the wallet says it is not the vault it paired with.
 
 **NOT YET BENCH-RUN.**
+
+## 19. The confirm card — PARTIALLY BENCH-RUN
+
+What the screen says while it is asking. Every row here needs a person to
+look at a panel, so none of it is reachable from `bench.py`.
+
+The card used to show an amount, a label and a note id, and nothing about
+either the verb or the gesture. Both gaps were found the same way, on a
+bench run rather than by reading the code:
+
+- **No verb.** An owner was asked to approve "21000 sats" with no statement
+  of what was about to happen to it. `export_secret` and `wipe` — disclose
+  one note, or erase every note on the device — presented as the same flat
+  amber card, since the wipe prompt had no note to show and so drew no text
+  at all. `ui_task_request_action_confirm` had taken an `action` string since
+  before this and discarded it.
+- **No gesture.** Approving is a two-second hold of button 1
+  (`APPROVAL_HOLD_US`), deliberately, since a tap "is one accidental brush of
+  a pocket button away". Nothing on screen said so. The observed behaviour of
+  a person who taps is to conclude the device is not listening and stop — which
+  is what happened, repeatedly, before anyone thought to re-read `approval.h`.
+
+| Check | Expect |
+|---|---|
+| `export_secret` | `SHOW SECRET` above the amount, `HOLD BTN1 2s` below it |
+| A gated destructive command | its own verb — `MARK SPENT`, `DISCARD`, `RENAME`, `DELETE` — not the disclosure card |
+| `wipe` | `WIPE ALL`, on a card that is no longer bare colour |
+| OTA | `NEW FIRMWARE`, likewise |
+| Holding button 1 | the bar fills over 2s and the card resolves green |
+| Tapping button 1 | the bar visibly starts and drops back, rather than nothing happening |
+| Browsing a note | unchanged: no verb, no hint, note id still shown |
+| A seven-digit amount | still readable; the digits shrink to make room, no line falls off the bottom |
+
+The note id is deliberately **not** on the confirm card any more. Eight hex
+characters identify a note to a wallet, not to the person holding the device,
+and the row it occupied buys the gesture hint instead. It is still on the
+browse card, where choosing a specific note is the whole point.
+
+Both panels need checking: the 240x135 classic is the tighter fit, and the
+verbs are capped at 12 characters because that is what fits across it at
+`FONT5X7_MIN_READABLE_SCALE`. A longer verb clips rather than shrinking.
+
+> **Bench record — 2026-08-20, fw `0.0.7-dirty`.** Classic T-Display,
+> photographed. `export_secret` renders four lines and the bar:
+> `SHOW SECRET` / `2100` / `msat  card-c` / `HOLD BTN1 2s`. A gated
+> destructive command renders `RENAME` in the same place, so the verbs do
+> differentiate. Holding button 1 approves; the `RENAME` card was approved by
+> hold during the same session.
+>
+> **The hint did not fit on the first attempt**, and the first build of this
+> card shipped without it — the one line the whole change existed to add. Four
+> lines at the readable minimum put it at y=103 against a `usable_h` of 102,
+> because the reservation budgeted a 4px gap per line while the amount
+> advanced by 5. One pixel. It was found by photographing the panel, not by
+> reading the code, and not by the build, which was perfectly happy. There is
+> no slack on a 135px panel to absorb a mismatch like that, so the gap is now
+> a single named constant used by both the reservation and the advance.
+>
+> The label also used to clip mid-glyph (`card-check` drew as `card-ch` with
+> the h sliced down the middle, which reads as a different label rather than a
+> shortened one). It is now cut to what the width holds.
+>
+> **Still unverified:** the bar visibly filling and dropping back on a tap
+> rather than a hold; the `WIPE ALL` and `NEW FIRMWARE` cards, neither of
+> which has been put on a panel; a seven-digit amount; and **the whole of this
+> on the S3**, whose larger panel takes a different branch of the fitting
+> logic (the amount grows to scale 5-6 there rather than staying at 3).

@@ -50,11 +50,18 @@ typedef struct {
     uint32_t timeout_ms;
     QueueHandle_t response_q;
     bool has_detail;
+    char action[24];
     char amount[NOTE_AMOUNT_BUF];
     char unit[8];
     char label[24];
     char id[VAULT_ID_BUF + 8];
 } remote_confirm_request_t;
+
+/* The gesture, said out loud on the card. approval.h makes approving a
+ * two-second hold of button 1; nothing on screen used to mention either the
+ * hold or the button, which left tapping -- and concluding the device was
+ * dead -- as the obvious thing to try. */
+#define CONFIRM_HINT "HOLD BTN1 2s"
 
 static QueueHandle_t g_request_q;
 
@@ -155,7 +162,9 @@ static void show_browse_note(int browse_index, int position) {
     note_format_amount_parts(meta.amount_msat, amount, sizeof(amount), unit, sizeof(unit));
     note_format_label(meta.label, label, sizeof(label));
     snprintf(id, sizeof(id), "%s  %d", meta.id, position);
-    display_note_detail(DISPLAY_STATE_BROWSE, amount, unit, label, id);
+    /* No verb and no gesture hint: browsing is not a prompt, and the chord
+     * that unveils from here is not the confirm hold. */
+    display_note_detail(DISPLAY_STATE_BROWSE, NULL, amount, unit, label, id, NULL);
 }
 
 static void wipe(char *buf, size_t len) {
@@ -252,14 +261,21 @@ static confirm_result_t service_remote_confirm(const remote_confirm_request_t *r
     if (!display_ready()) {
         return CONFIRM_UNAVAILABLE;
     }
-    if (req->has_detail) {
-        display_note_detail(DISPLAY_STATE_CONFIRM_PENDING, req->amount, req->unit, req->label,
-                            req->id);
-    } else {
-        /* No detail to show (an OTA image, or a wipe) -- the flat state colour
-         * is all there is, same as before. */
-        display_set_state(DISPLAY_STATE_CONFIRM_PENDING);
-    }
+    /* The note id is deliberately not on this card. Eight hex characters
+     * identify a note to the wallet, not to the person holding the device,
+     * and the row it occupied is worth more spent on the gesture: an owner
+     * who cannot approve at all is not helped by knowing which note they
+     * failed to approve. It is still on the browse card, where there is room
+     * and where picking a specific note is the whole point.
+     *
+     * A request with no note behind it (an OTA image, a wipe) still gets the
+     * verb and the hint -- those cards used to be a flat colour and nothing
+     * else, which is how "erase every note" and "reveal one secret" came to
+     * look the same. */
+    display_note_detail(DISPLAY_STATE_CONFIRM_PENDING, req->action,
+                        req->has_detail ? req->amount : NULL,
+                        req->has_detail ? req->unit : NULL,
+                        req->has_detail ? req->label : NULL, NULL, CONFIRM_HINT);
     display_progress(0);
 
     approval_t ap;
@@ -442,13 +458,15 @@ void ui_task_start(void) {
  * second broke main. Caught by building the two together rather than by
  * either one's own CI, which is a thing worth doing and not a thing to rely
  * on. Keeping the old name costs one line and removes the hazard. */
-static confirm_result_t request_confirm_detailed(uint32_t timeout_ms, const note_meta_t *note);
+static confirm_result_t request_confirm_detailed(uint32_t timeout_ms, const note_meta_t *note,
+                                                  const char *action);
 
-static confirm_result_t request_confirm(uint32_t timeout_ms) {
-    return request_confirm_detailed(timeout_ms, NULL);
+static confirm_result_t request_confirm(uint32_t timeout_ms, const char *action) {
+    return request_confirm_detailed(timeout_ms, NULL, action);
 }
 
-static confirm_result_t request_confirm_detailed(uint32_t timeout_ms, const note_meta_t *note) {
+static confirm_result_t request_confirm_detailed(uint32_t timeout_ms, const note_meta_t *note,
+                                                  const char *action) {
     /* Refuse rather than crash if a command reaches here before ui_task_init(),
      * or if the per-request queue can't be allocated. */
     if (!g_request_q) {
@@ -459,6 +477,25 @@ static confirm_result_t request_confirm_detailed(uint32_t timeout_ms, const note
         return CONFIRM_UNAVAILABLE;
     }
     remote_confirm_request_t req = {.timeout_ms = timeout_ms, .response_q = resp_q};
+    if (action && action[0]) {
+        /* The gated destructive commands arrive as their wire names --
+         * "mark_spent", "discard" -- because that is what dispatcher.c has to
+         * hand. Uppercased with underscores opened out, rather than mapped
+         * through a table here: a table would be one more thing to keep in
+         * step with dispatcher.c, and would silently show the wrong verb for
+         * any command added without remembering to update it. */
+        size_t n = 0;
+        for (; action[n] && n + 1 < sizeof(req.action); n++) {
+            char c = action[n];
+            if (c == '_') {
+                c = ' ';
+            } else if (c >= 'a' && c <= 'z') {
+                c = (char)(c - 'a' + 'A');
+            }
+            req.action[n] = c;
+        }
+        req.action[n] = '\0';
+    }
     if (note) {
         req.has_detail = true;
         note_format_amount_parts(note->amount_msat, req.amount, sizeof(req.amount), req.unit,
@@ -476,25 +513,27 @@ static confirm_result_t request_confirm_detailed(uint32_t timeout_ms, const note
 confirm_result_t ui_task_request_remote_confirm(const note_meta_t *note, uint32_t timeout_ms) {
     /* The note IS shown now -- issue #9. Approving a disclosure without being
      * told which note or for how much made the physical gate a formality. */
-    return request_confirm_detailed(timeout_ms, note);
+    /* Kept to 12 characters, which is what fits across the narrower of the two
+     * panels at the readable minimum scale (240px less margins, 6px advance,
+     * scale 3). Longer verbs get clipped, not shrunk -- see font5x7.h. */
+    return request_confirm_detailed(timeout_ms, note, "SHOW SECRET");
 }
 
 confirm_result_t ui_task_request_ota_confirm(uint32_t timeout_ms) {
-    return request_confirm(timeout_ms);
+    return request_confirm(timeout_ms, "NEW FIRMWARE");
 }
 
 confirm_result_t ui_task_request_action_confirm(const char *action, const note_meta_t *note,
                                                  uint32_t timeout_ms) {
-    /* The action name is not shown on screen yet -- the confirm screen has no
-     * text of its own until #9 lands, and until then this is the same generic
-     * prompt export_secret uses. It is plumbed through now rather than later
-     * so that when the screen can say it, nothing else has to change. */
-    (void)action;
-    return request_confirm(timeout_ms);
+    /* The action name IS shown now. It was plumbed this far and then dropped
+     * on the floor, which meant every gated destructive command -- mark_spent,
+     * discard, delete, rename -- put up the same card export_secret does. */
+    return request_confirm_detailed(timeout_ms, note, action);
 }
 
 confirm_result_t ui_task_request_wipe_confirm(uint32_t timeout_ms) {
-    /* No note to name: a wipe is about all of them. The flat state colour is
-     * all this screen has, same as the OTA prompt. */
-    return request_confirm(timeout_ms);
+    /* No note to name: a wipe is about all of them, which is exactly why the
+     * verb has to be on screen. This card and a single note's disclosure used
+     * to be the same flat amber. */
+    return request_confirm(timeout_ms, "WIPE ALL");
 }
