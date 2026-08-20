@@ -28,8 +28,12 @@
 #include "hostgfx.h"
 #include "unity_lite.h"
 
-/* display_note_detail draws every line in black on the state colour. */
-#define INK 0x0000
+/* Text is not always black: display.c picks ink per state, because black on
+ * the dark grey idle background is close to invisible. Ask it rather than
+ * assuming -- a test that hardcoded 0x0000 here passed happily against a
+ * browse card drawing white on purple, counting zero pixels both times. */
+#define INK display_state_ink(DISPLAY_STATE_CONFIRM_PENDING)
+#define BROWSE_INK display_state_ink(DISPLAY_STATE_BROWSE)
 
 /* Both real panels, in the orientation src/board/ hands up: the classic
  * T-Display and the T-Display-S3. A card has to work on the narrow one. */
@@ -131,12 +135,12 @@ static void test_the_browse_card_shows_which_note(void) {
     for (int i = 0; i < PANELS; i++) {
         panel(i);
         display_note_detail(DISPLAY_STATE_BROWSE, NULL, "21 000", "sats", "rent", "-", NULL);
-        const long shortest = hostgfx_ink_pixels(INK);
+        const long shortest = hostgfx_ink_pixels(BROWSE_INK);
 
         panel(i);
         display_note_detail(DISPLAY_STATE_BROWSE, NULL, "21 000", "sats", "rent", "f822a462  3",
                             NULL);
-        const long full = hostgfx_ink_pixels(INK);
+        const long full = hostgfx_ink_pixels(BROWSE_INK);
 
         UL_CHECK(full > shortest, "the note id and position are drawn");
     }
@@ -206,6 +210,111 @@ static void test_the_whole_panel_gets_painted(void) {
     }
 }
 
+
+/* --- messages: outcomes, boot, idle --------------------------------------- */
+
+/* Rough perceptual brightness of an RGB565 colour, 0..255. Enough to answer
+ * "can this text be read on that background", which is the question a card
+ * drawing black on #383838 got wrong. */
+static int luma565(uint16_t c) {
+    const int r = (int)(((c >> 11) & 0x1Fu) << 3);
+    const int g = (int)(((c >> 5) & 0x3Fu) << 2);
+    const int b = (int)((c & 0x1Fu) << 3);
+    return (r * 77 + g * 150 + b * 29) >> 8;
+}
+
+static const display_state_t STATES[] = {
+    DISPLAY_STATE_IDLE,     DISPLAY_STATE_BROWSE,   DISPLAY_STATE_CONFIRM_PENDING,
+    DISPLAY_STATE_APPROVED, DISPLAY_STATE_DECLINED, DISPLAY_STATE_EXPIRED,
+};
+#define STATE_COUNT (sizeof(STATES) / sizeof(STATES[0]))
+
+static void test_every_state_draws_ink_you_can_read(void) {
+    /* The bug this pins: every card drew black regardless of what it drew on,
+     * which is fine on amber and green and close to invisible on the dark grey
+     * the device rests on -- a screen that had no text on it when that colour
+     * was chosen, and now does. */
+    for (size_t i = 0; i < STATE_COUNT; i++) {
+        const int bg = luma565(display_state_color(STATES[i]));
+        const int ink = luma565(display_state_ink(STATES[i]));
+        const int delta = bg > ink ? bg - ink : ink - bg;
+        UL_CHECK(delta >= 90, "ink contrasts with the background it is drawn on");
+    }
+}
+
+static void test_a_message_draws_every_line_it_is_given(void) {
+    for (int i = 0; i < PANELS; i++) {
+        const uint16_t ink = display_state_ink(DISPLAY_STATE_DECLINED);
+
+        panel(i);
+        display_message(DISPLAY_STATE_DECLINED, "DECLINED", NULL, NULL);
+        const long one = hostgfx_ink_pixels(ink);
+
+        panel(i);
+        display_message(DISPLAY_STATE_DECLINED, "DECLINED", "SHOW SECRET", NULL);
+        const long two = hostgfx_ink_pixels(ink);
+
+        panel(i);
+        display_message(DISPLAY_STATE_DECLINED, "DECLINED", "SHOW SECRET", "NOTHING DONE");
+        const long three = hostgfx_ink_pixels(ink);
+
+        UL_CHECK(one > 0, "the title is drawn");
+        UL_CHECK(two > one, "the second line is drawn");
+        UL_CHECK(three > two, "and so is the third");
+    }
+}
+
+static void test_a_message_is_centred(void) {
+    /* Both margins equal, to within the blank column each glyph cell carries
+     * on its right. Nothing here knows what the margin is -- only that the two
+     * sides match, which is what "centred" means and what a layout drifting
+     * off one edge stops being. */
+    for (int i = 0; i < PANELS; i++) {
+        const uint16_t ink = display_state_ink(DISPLAY_STATE_APPROVED);
+        panel(i);
+        display_message(DISPLAY_STATE_APPROVED, "APPROVED", "SHOW SECRET", NULL);
+        const int left = hostgfx_first_ink_col(ink);
+        const int right = hostgfx_last_ink_col(ink);
+        UL_CHECK(left > 0 && right > left, "the message is on screen");
+        const int rgap = PANEL_W[i] - 1 - right;
+        const int skew = left > rgap ? left - rgap : rgap - left;
+        UL_CHECK(skew <= FONT5X7_MIN_READABLE_SCALE * 2,
+                 "the block is centred, not hanging off one side");
+
+        const int top = hostgfx_first_ink_row(ink);
+        const int bottom = hostgfx_last_ink_row(ink);
+        const int bgap = PANEL_H[i] - 1 - bottom;
+        const int vskew = top > bgap ? top - bgap : bgap - top;
+        UL_CHECK(vskew <= FONT5X7_HEIGHT * FONT5X7_MIN_READABLE_SCALE,
+                 "and vertically too, rather than hanging off the top");
+    }
+}
+
+static void test_a_message_paints_the_whole_panel(void) {
+    for (int i = 0; i < PANELS; i++) {
+        panel(i);
+        display_message(DISPLAY_STATE_EXPIRED, "NO ANSWER", "WIPE ALL", "NOTHING DONE");
+        UL_CHECK(hostgfx_ink_pixels(HOSTGFX_UNPAINTED) == 0,
+                 "a message leaves no unpainted pixel");
+        UL_CHECK(hostgfx_offscreen_pixels() == 0, "and draws nothing off the panel");
+    }
+}
+
+static void test_a_message_too_wide_for_the_panel_still_draws(void) {
+    /* Titles come from this codebase, but the verb under them comes off the
+     * wire via dispatcher.c. A line wider than the panel must clip at the
+     * edge, not vanish -- draw_centred computes a negative x for it, and
+     * display_text refuses to draw at a negative x at all. */
+    for (int i = 0; i < PANELS; i++) {
+        const uint16_t ink = display_state_ink(DISPLAY_STATE_EXPIRED);
+        panel(i);
+        display_message(DISPLAY_STATE_EXPIRED, "NO ANSWER",
+                        "A VERB FAR LONGER THAN ANY PANEL HERE", NULL);
+        UL_CHECK(hostgfx_ink_pixels(ink) > 0, "an over-long line is clipped, not dropped");
+        UL_CHECK(hostgfx_offscreen_pixels() == 0, "and still nothing lands off the panel");
+    }
+}
+
 void test_card_render_run(void) {
     printf("-- card render --\n");
     test_the_gesture_hint_reaches_the_glass();
@@ -216,4 +325,9 @@ void test_card_render_run(void) {
     test_no_line_runs_past_the_panel_edge();
     test_the_card_never_draws_below_the_readable_minimum();
     test_the_whole_panel_gets_painted();
+    test_every_state_draws_ink_you_can_read();
+    test_a_message_draws_every_line_it_is_given();
+    test_a_message_is_centred();
+    test_a_message_paints_the_whole_panel();
+    test_a_message_too_wide_for_the_panel_still_draws();
 }

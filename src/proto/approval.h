@@ -120,4 +120,15 @@ approval_state_t approval_poll(approval_t *a, bool approve_pressed, bool cancel_
  * contact, or it reads as the device losing the press. */
 uint16_t approval_progress_permille(const approval_t *a, int64_t now_us);
 
+/* True while a button that was already down when the prompt began has not yet
+ * been seen released. Nothing that button does counts until then.
+ *
+ * Exposed so the screen can say so. The rule itself is right, but from the
+ * owner's side it is indistinguishable from a device that is ignoring them:
+ * they are holding the button, the bar is not filling, and the natural
+ * response is to press harder and more often -- which is what happened, at
+ * the exact screen where extra presses are least wanted. A prompt that says
+ * "let go first" turns a dead-looking device into an instruction. */
+bool approval_waiting_for_release(const approval_t *a);
+
 #endif

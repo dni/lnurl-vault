@@ -65,14 +65,23 @@ static void note_card(display_state_t state, const char *action, uint64_t msat,
 }
 
 #define HINT "HOLD BTN1 2s"
+#define RELEASE "LET GO FIRST"
 
 static void render_board(const char *board, int w, int h) {
     g_board = board;
     printf("%s (%dx%d)\n", board, w, h);
 
     fresh(w, h);
-    display_set_state(DISPLAY_STATE_IDLE);
+    display_message(DISPLAY_STATE_IDLE, "LNURL VAULT", "v0.0.7", board);
+    shot("00-boot");
+
+    fresh(w, h);
+    display_message(DISPLAY_STATE_IDLE, "3 NOTES", "TAP TO VIEW", NULL);
     shot("01-idle");
+
+    fresh(w, h);
+    display_message(DISPLAY_STATE_IDLE, "NO NOTES", "PAIR TO ADD", NULL);
+    shot("01b-idle-empty");
 
     fresh(w, h);
     note_card(DISPLAY_STATE_BROWSE, NULL, 21000, "rent", "f822a462  3", NULL);
@@ -105,16 +114,25 @@ static void render_board(const char *board, int w, int h) {
     shot("07-confirm-new-firmware");
 
     fresh(w, h);
-    display_set_state(DISPLAY_STATE_APPROVED);
+    note_card(DISPLAY_STATE_CONFIRM_PENDING, "SHOW SECRET", 21000, "rent", NULL, RELEASE);
+    display_progress(0);
+    shot("07b-confirm-button-already-held");
+
+    fresh(w, h);
+    display_message(DISPLAY_STATE_APPROVED, "APPROVED", "SHOW SECRET", NULL);
     shot("08-approved");
 
     fresh(w, h);
-    display_set_state(DISPLAY_STATE_DECLINED);
+    display_message(DISPLAY_STATE_DECLINED, "DECLINED", "SHOW SECRET", "NOTHING DONE");
     shot("09-declined");
 
     fresh(w, h);
-    display_set_state(DISPLAY_STATE_EXPIRED);
+    display_message(DISPLAY_STATE_EXPIRED, "NO ANSWER", "WIPE ALL", "NOTHING DONE");
     shot("10-expired");
+
+    fresh(w, h);
+    display_message(DISPLAY_STATE_DECLINED, "FAILED", "NOT SHOWN", NULL);
+    shot("10b-unveil-failed");
 
     /* The awkward ones. A seven-figure note, a label longer than the panel,
      * a label that is all unprintable bytes, and the smallest amount the

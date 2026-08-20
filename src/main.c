@@ -34,6 +34,10 @@
 #include "vault.h"
 #include "vault_lock.h"
 
+#ifndef LNURLVAULT_FW_VERSION
+#define LNURLVAULT_FW_VERSION "0.0.0-native"
+#endif
+
 static const char *TAG = "main";
 
 static bool rng_fill(uint8_t *out, size_t len) {
@@ -253,6 +257,14 @@ void app_main(void) {
 
     buttons_init();
     display_init();
+    /* Says what this is and which build, from the first moment the panel can
+     * draw. It stays up through storage bring-up and the transports, until
+     * ui_task replaces it with the idle screen -- no delay is added for it.
+     *
+     * It earns its place on the bench: a flash that landed and a flash that
+     * silently did not are otherwise the same dark screen, and "which build is
+     * on this board" has been guessed at more than once. */
+    display_message(DISPLAY_STATE_IDLE, "LNURL VAULT", "v" LNURLVAULT_FW_VERSION, BOARD_NAME);
     vault_lock_init();
     cmd_lock_init();
 

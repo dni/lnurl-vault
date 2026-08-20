@@ -2,22 +2,27 @@
  * controller-RAM offset -- belongs to src/board/, so nothing here knows or
  * cares which board it is running on or how the glass is wired.
  *
- * v1 deliberately does NOT render note text (id/amount/label) on screen. See
- * README.md's "Known limitations" for why, and note that this is the single
- * biggest remaining gap in the security model: a confirm prompt that cannot
- * name the note it is asking about is a "press to continue", not a
- * confirmation. Adding real text is the natural next step now that a panel
- * can actually be brought up and checked on a bench.
+ * Three kinds of screen live here. A note card (display_note_detail) is a
+ * dense set of fields fitted into a panel that barely holds them: the verb,
+ * the amount, the unit and label, and the gesture. A message
+ * (display_message) is two or three short lines with the screen to
+ * themselves: an outcome, what the device is at boot, what it holds at rest.
+ * A bar (display_progress) is the hold filling up.
  *
- * Until then this still gives a real signal -- a distinct full-screen colour
- * per state, and a blinked-out position count while browsing -- and the
- * gating itself (confirm/cancel/timeout) is fully functional regardless of
- * what is drawn. */
+ * The colours are named in palette.h, and the ink is chosen per state rather
+ * than assumed black -- see display_state_ink().
+ *
+ * None of this needs a board to look at: test/native/hostgfx stands in for
+ * ESP-IDF underneath this file, so `make preview` renders every screen below
+ * to a PNG at both real panel geometries, and test_card_render.c asserts
+ * about the pixels. That exists because every display fault this project has
+ * shipped was a layout fault found by a person squinting at hardware. */
 #include "display.h"
 
 #include <string.h>
 
 #include "font5x7.h"
+#include "palette.h"
 
 #include "board.h"
 #include "esp_heap_caps.h"
@@ -99,23 +104,41 @@ static int card_usable_h(void) {
 
 
 
-static uint16_t color_for_state(display_state_t state) {
+uint16_t display_state_color(display_state_t state) {
     switch (state) {
         case DISPLAY_STATE_IDLE:
-            return 0x39C7; /* muted grey-blue, RGB565 */
+            return PALETTE_IDLE;
         case DISPLAY_STATE_BROWSE:
-            return 0x781F; /* purple */
+            return PALETTE_BROWSE;
         case DISPLAY_STATE_CONFIRM_PENDING:
-            return 0xFEA0; /* amber */
+            return PALETTE_PENDING;
         case DISPLAY_STATE_APPROVED:
-            return 0x07E0; /* green */
+            return PALETTE_APPROVED;
         case DISPLAY_STATE_DECLINED:
-            return 0xF800; /* red */
+            return PALETTE_DECLINED;
         case DISPLAY_STATE_EXPIRED:
-            return 0x8410; /* mid grey: visibly not the amber of a live
-                            * prompt, and visibly not the red of a refusal */
+            return PALETTE_EXPIRED;
         default:
-            return 0x0000;
+            return PALETTE_INK_DARK;
+    }
+}
+
+/* Which ink reads on that colour.
+ *
+ * Every card used to draw black whatever it was drawing on, which was true
+ * enough while only amber and green ever carried text. It is not true of the
+ * dark grey idle background or of pure red: black on #383838 is close to
+ * invisible, and that is now the screen the device rests on all day and the
+ * card it shows when it refuses. Picked per state rather than per call site so
+ * a new screen cannot get it wrong. */
+uint16_t display_state_ink(display_state_t state) {
+    switch (state) {
+        case DISPLAY_STATE_IDLE:
+        case DISPLAY_STATE_BROWSE:
+        case DISPLAY_STATE_DECLINED:
+            return PALETTE_INK_LIGHT;
+        default:
+            return PALETTE_INK_DARK;
     }
 }
 
@@ -188,7 +211,7 @@ static void fill_screen(uint16_t color) {
 
 void display_set_state(display_state_t state) {
     g_current_state = state;
-    fill_screen(color_for_state(state));
+    fill_screen(display_state_color(state));
 }
 
 void display_text(int x, int y, const char *text, int scale, uint16_t fg, uint16_t bg) {
@@ -245,8 +268,8 @@ void display_note_detail(display_state_t state, const char *action, const char *
         return;
     }
     g_current_state = state;
-    const uint16_t bg = color_for_state(state);
-    const uint16_t ink = 0x0000;
+    const uint16_t bg = display_state_color(state);
+    const uint16_t ink = display_state_ink(state);
     fill_screen(bg);
 
     /* Every line is drawn at the largest scale that fits the panel, rather
@@ -357,6 +380,79 @@ void display_note_detail(display_state_t state, const char *action, const char *
     }
 }
 
+/* Centres `text` horizontally, or starts it at the margin if it is wider than
+ * the panel -- display_text clips at the edge, and a negative x it would
+ * refuse to draw at all. */
+static void draw_centred(int y, const char *text, int scale, uint16_t ink, uint16_t bg) {
+    const int w = font5x7_text_width(text, scale);
+    int x = (g_width - w) / 2;
+    if (x < CARD_MARGIN) {
+        x = CARD_MARGIN;
+    }
+    display_text(x, y, text, scale, ink, bg);
+}
+
+void display_message(display_state_t state, const char *title, const char *line1,
+                     const char *line2) {
+    if (!display_ready()) {
+        return;
+    }
+    g_current_state = state;
+    const uint16_t bg = display_state_color(state);
+    const uint16_t ink = display_state_ink(state);
+    fill_screen(bg);
+
+    const int margin = CARD_MARGIN;
+    const int avail = g_width - 2 * margin;
+    const int small_h = FONT5X7_HEIGHT * FONT5X7_MIN_READABLE_SCALE;
+    /* Roomier than a note card's gap. A card is a dense list of fields packed
+     * into a panel that barely holds them; a message is two or three short
+     * lines with the screen to themselves, and at the card's 3px they read as
+     * one solid block of pixels rather than as separate statements. */
+    const int gap = small_h / 3;
+    /* No progress bar on a message, so unlike a note card this one owns the
+     * whole panel. */
+    const int usable_h = g_height - 2 * margin;
+
+    const int extra = ((line1 && line1[0]) ? small_h + gap : 0) +
+                      ((line2 && line2[0]) ? small_h + gap : 0);
+
+    int title_scale = 0;
+    int block_h = extra > 0 ? extra - gap : 0;
+    if (title && title[0]) {
+        int room = usable_h - extra;
+        int max_scale = room / FONT5X7_HEIGHT;
+        if (max_scale > DISPLAY_MAX_TEXT_SCALE) {
+            max_scale = DISPLAY_MAX_TEXT_SCALE;
+        }
+        title_scale = font5x7_fit_scale(title, avail, max_scale);
+        block_h += FONT5X7_HEIGHT * title_scale + (extra > 0 ? gap : 0);
+    }
+    if (block_h <= 0) {
+        return;
+    }
+
+    /* Centred vertically as a block. A message is the whole screen -- an
+     * outcome, or what the device is at rest -- and hanging it off the top
+     * leaves it looking like a card that failed to finish drawing. */
+    int y = (g_height - block_h) / 2;
+    if (y < margin) {
+        y = margin;
+    }
+
+    if (title_scale > 0) {
+        draw_centred(y, title, title_scale, ink, bg);
+        y += FONT5X7_HEIGHT * title_scale + gap;
+    }
+    if (line1 && line1[0]) {
+        draw_centred(y, line1, FONT5X7_MIN_READABLE_SCALE, ink, bg);
+        y += small_h + gap;
+    }
+    if (line2 && line2[0]) {
+        draw_centred(y, line2, FONT5X7_MIN_READABLE_SCALE, ink, bg);
+    }
+}
+
 void display_progress(uint16_t permille) {
     if (!display_ready()) {
         return;
@@ -383,9 +479,9 @@ void display_progress(uint16_t permille) {
     /* Track, then fill. Repainting the whole track each call is what makes
      * this safe to call at any rate and in any order, including going
      * backwards if a hold restarts. */
-    display_fill_rect(margin, y, track_w, bar_h, 0x0000);
+    display_fill_rect(margin, y, track_w, bar_h, PALETTE_INK_DARK);
     if (filled > 0) {
-        display_fill_rect(margin, y, filled, bar_h, 0xFFFF);
+        display_fill_rect(margin, y, filled, bar_h, PALETTE_PAPER);
     }
 }
 
@@ -397,9 +493,9 @@ void display_flash_count(int count) {
         count = 20; /* don't turn a large note collection into a light show */
     }
     for (int i = 0; i < count; i++) {
-        fill_screen(0xFFFF); /* white */
+        fill_screen(PALETTE_PAPER); /* white */
         vTaskDelay(pdMS_TO_TICKS(150));
-        fill_screen(color_for_state(g_current_state));
+        fill_screen(display_state_color(g_current_state));
         vTaskDelay(pdMS_TO_TICKS(150));
     }
 }

@@ -63,6 +63,11 @@ long hostgfx_ink_pixels(uint16_t ink);
 int hostgfx_first_ink_row(uint16_t ink);
 int hostgfx_last_ink_row(uint16_t ink);
 
+/* Leftmost column containing an `ink` pixel, or -1. With the rightmost, this
+ * is how a test asks whether a block of text is actually centred without
+ * knowing anything about margins or glyph widths. */
+int hostgfx_first_ink_col(uint16_t ink);
+
 /* Rightmost column containing an `ink` pixel, or -1. Text on this device is
  * clipped at the panel edge rather than wrapped, so "how close did that line
  * get to running out of screen" is a question worth being able to ask. */

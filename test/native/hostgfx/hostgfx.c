@@ -173,6 +173,17 @@ int hostgfx_last_ink_row(uint16_t ink) {
     return -1;
 }
 
+int hostgfx_first_ink_col(uint16_t ink) {
+    for (int x = 0; x < g_w; x++) {
+        for (int y = 0; y < g_h; y++) {
+            if (g_fb[y][x] == ink) {
+                return x;
+            }
+        }
+    }
+    return -1;
+}
+
 int hostgfx_last_ink_col(uint16_t ink) {
     for (int x = g_w - 1; x >= 0; x--) {
         for (int y = 0; y < g_h; y++) {

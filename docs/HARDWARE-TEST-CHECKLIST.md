@@ -578,3 +578,55 @@ verbs are capped at 12 characters because that is what fits across it at
 >
 > **Wants a bench run:** the slimmer bar on real glass, both panels — the
 > geometry is only checked against a framebuffer.
+
+## 20. What the screen says the rest of the time — NOT YET BENCH-RUN
+
+Section 19 is the card that asks. This is everything else, and until now all
+of it was a flat colour: boot, rest, and the answer.
+
+An outcome was a green, red or grey rectangle held for 800ms. Those are only
+meaningful to somebody who already knows the scheme, and the one that matters
+most — a prompt that timed out — is a grey nobody has ever been taught. The
+idle screen was a dark rectangle, which is the screen a person looks at for
+hours and which says nothing about whether the device is alive, paired, or
+holding anything; the observed response to it was pressing buttons to find
+out, on a device where a press starts browsing bearer secrets.
+
+| Check | Expect |
+|---|---|
+| Power on | `LNURL VAULT`, the firmware version, and the board name, before anything else draws |
+| At rest, notes on the device | `3 NOTES` (or `1 NOTE`) over `TAP TO VIEW`, white on dark grey |
+| At rest, empty vault | `NO NOTES` over `PAIR TO ADD` |
+| Approve a disclosure | `APPROVED` over `SHOW SECRET`, green |
+| Cancel with button 2 | `DECLINED` / `SHOW SECRET` / `NOTHING DONE`, white on red |
+| Let a prompt time out | `NO ANSWER` / the verb / `NOTHING DONE`, on grey |
+| Outcome timing | the wallet gets its answer FIRST; the card stays up ~1.8s afterwards |
+| Hold button 1 before the prompt appears | the card says `LET GO FIRST`; releasing switches it to `HOLD BTN1 2s` |
+| Unveil a note that cannot be shown | `FAILED` over `NOT SHOWN`, not a bare red flash |
+| Idle after browsing times out | back to the note count, not a blank screen |
+
+The last two rows are the ones worth being awkward about. The `LET GO FIRST`
+path needs a button held down at the moment the host sends the command, which
+takes two people, or a scripted `export_secret` and a finger already on the
+button. The unveil failure needs a note deleted over the wire between
+selecting it and chording — or, more easily, a URL too long for the QR
+versions this panel can draw.
+
+The idle screen shows how many notes and **not** what they are worth. A vault
+sitting on a desk announcing its balance to the room is a different device
+from one that makes you ask; the amounts are one deliberate press away.
+
+Every one of these screens can be looked at without a board:
+
+```sh
+cd test/native && make preview
+```
+
+That is not a substitute for the bench. A framebuffer cannot tell you whether
+white on `#7800F8` is readable in daylight, or whether 1.8 seconds is long
+enough to read three lines while your finger is still coming off a button. It
+is a substitute for guessing.
+
+> **Not yet bench-run.** Every row above comes from the preview renderer and
+> the pixel assertions in `test/native/test_card_render.c`. None of it has
+> been on glass.

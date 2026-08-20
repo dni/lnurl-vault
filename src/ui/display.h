@@ -38,6 +38,16 @@ int display_height(void);
 
 void display_set_state(display_state_t state);
 
+/* The background and text colours a given state draws in.
+ *
+ * Exposed so that anything needing to draw onto a state's background -- or to
+ * check what was drawn there -- gets the same answer display.c does rather
+ * than keeping a second copy of the mapping. The ink is not a constant: black
+ * reads on amber and green and is close to invisible on the dark grey idle
+ * background, which is now a screen with text on it. See src/ui/palette.h. */
+uint16_t display_state_color(display_state_t state);
+uint16_t display_state_ink(display_state_t state);
+
 /* Fills an axis-aligned rectangle. Out-of-bounds rectangles are dropped
  * rather than clipped: a caller computing a negative origin has a bug, and
  * silently drawing something slightly wrong on a device that shows bearer
@@ -90,6 +100,26 @@ void display_text(int x, int y, const char *text, int scale, uint16_t fg, uint16
 void display_note_detail(display_state_t state, const char *action, const char *amount_num,
                           const char *amount_unit, const char *label, const char *id,
                           const char *hint);
+
+/* A full-screen message: a large title, and up to two smaller lines under
+ * it, centred as a block on `state`'s colour.
+ *
+ * This is what the device says when it is not asking a question -- an outcome
+ * (`APPROVED`, `DECLINED`, `NO ANSWER`), what it is at boot, and what it holds
+ * while it rests.
+ *
+ * All of those used to be a flat colour and nothing else. Green and red and
+ * grey are only meaningful to someone who already knows the scheme, and the
+ * idle screen is the one a person looks at for hours: a bare dark rectangle
+ * says nothing about whether the device is working, whether it is paired, or
+ * whether it holds anything. The observed consequence was somebody pressing
+ * buttons at a blank screen to find out -- on a device where a press starts
+ * browsing bearer secrets.
+ *
+ * The title takes the largest scale that fits both the width and whatever the
+ * lines below it need. Any argument may be NULL and that line is skipped. */
+void display_message(display_state_t state, const char *title, const char *line1,
+                     const char *line2);
 
 /* Draws the approval hold as a filling bar, 0..1000 parts per thousand (see
  * approval.h). Idempotent and cheap enough to call every poll tick: it

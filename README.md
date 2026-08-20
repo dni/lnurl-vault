@@ -676,6 +676,22 @@ step's `find` patterns are the first thing to check.
   miscount. The font is a hand-transcribed 5x7 bitmap; it renders and scans on
   hardware (see `docs/HARDWARE-TEST-CHECKLIST.md`), and moving to LVGL for
   richer text remains a possible future step.
+- **The rest of the screens now say something too.** An outcome is
+  `APPROVED` / `DECLINED` / `NO ANSWER` in words, naming what it was about,
+  rather than a flat green, red or grey rectangle that only means anything to
+  someone who already knows the scheme. Boot says what the device is and which
+  build. At rest it says how many notes it holds and that a tap will show
+  them — deliberately not what they are worth, since a vault that announces
+  its balance to the room is a different device from one that makes you ask.
+  And when a button was already down as the prompt appeared, the card says
+  `LET GO FIRST` instead of a gesture that cannot work yet (`approval.h`: a
+  held button answers nothing until it has been seen released, which from the
+  owner's side is indistinguishable from being ignored).
+- **No countdown on the confirm prompt.** The window is 30 seconds and
+  nothing on screen shows it draining. There is no room for it on the 240x135
+  panel without taking a row from something that matters more, and the
+  `NO ANSWER` card covers the confusion that actually mattered — a prompt that
+  vanished with no explanation.
 - **The QR encoder is a required external dependency**, not included in
   this repo — see "Build & flash" above. Nothing in `src/ui/qr_display.c`
   will compile until it's vendored (confirmed both PlatformIO `lib_deps`
