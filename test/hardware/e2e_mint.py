@@ -85,7 +85,16 @@ class Mint:
         self.base = base.rstrip("/")
         self.fake_cln = fake_cln.rstrip("/") if fake_cln else None
         self.http = httpx.Client(timeout=30.0)
-        self.host = self.base.split("//", 1)[-1]
+        # What the device stores as a note's `host`, and rebuilds its QR from:
+        # the withdraw endpoint including its path, not a bare hostname. See
+        # docs/PROTOCOL.md -- "mint.example/w", not "mint.example". A bare host
+        # produces lnurlw://mint.example?k1=..., which points at the mint's
+        # landing page and is not a note anybody can claim.
+        #
+        # /w because that is the endpoint this harness itself GETs below, and
+        # what both reference mints serve. A mint that puts withdraw elsewhere
+        # would need this read off its payRequest's withdrawLink instead.
+        self.host = f"{self.base.split('//', 1)[-1]}/w"
 
     def note(self, k1):
         """LUD-03 withdrawRequest for a note -- its value and its callback.
