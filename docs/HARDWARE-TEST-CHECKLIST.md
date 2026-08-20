@@ -270,8 +270,7 @@ the QR density ladder (`-DLNURLVAULT_QR_SELFTEST`) is what separates them.
 Pass now also means the code **opens something**, not just that it decodes.
 The payload is an https claim link by default (`docs/PROTOCOL.md`), so scan it
 with a stock iPhone camera and a stock Android camera and check each lands in
-the wallet with the note claimable. **NOT YET BENCH-RUN** — the format changed
-after the record below and no phone has seen the new one.
+the wallet with the note claimable.
 
 > **Bench record — 2026-08-17.** Classic T-Display. Codes render and a phone
 > camera decodes them. **But** nothing opened them: the URL was a
@@ -285,6 +284,43 @@ after the record below and no phone has seen the new one.
 > press per code, so while it runs `ui_task` does not exist and no approval
 > can be serviced at all. Leaving that flag set was enough to make
 > `export_secret` fail on hardware.
+
+> **Bench record — 2026-08-20, real sats, fw `0.0.7-6-g6cda81e`.** Classic
+> T-Display. **The offline handoff worked end to end for the first time.** A
+> 50,000 msat note from moneyer.dev, held on a secret only this board had
+> seen, was browsed to, unveiled with the chord, scanned off the panel with a
+> phone camera, and claimed into a wallet on that phone. No cable, no pairing,
+> nothing plugged into the device. The sats are on the phone.
+>
+> It had never worked before, and could not have, for reasons in three
+> separate repositories — all found by trying it rather than by reading
+> anything:
+>
+> 1. **lnurl-wallet** stored a note's mint as a bare hostname
+>    (`serverOf(callback)`), dropping the withdraw path. So the QR encoded
+>    `lnurlw://mint.example?k1=...`, which resolves to the mint's landing page.
+>    Fixed in dni/lnurl-wallet#26.
+> 2. **This harness** reproduced the same bug, having copied the wallet rather
+>    than the protocol — so even the real-sats note in section 17 carried an
+>    unclaimable endpoint.
+> 3. **notecase** threw `Invalid URL` on the schemeless `u` the vault writes,
+>    into a `catch` that remembered nothing. A scan showed no error at all.
+>    Fixed in forgesworn/notecase#3.
+>
+> `PROTOCOL.md`'s own examples had shown the bare form throughout, which is
+> the likeliest reason the wallet was written that way. Also fixed here.
+>
+> **What this run exposes, and does not fix:** `unveil()` does not mark the
+> note spent, so the board still lists the handed-over note as `CONFIRMED`
+> and now overstates its holdings by exactly the note it gave away. Defensible
+> — the device cannot know whether anybody scanned the screen, and marking it
+> spent on display would be wrong for a QR nobody took — but the same note can
+> be unveiled again and handed to a second person, who would find it already
+> spent. Whether that wants an explicit "I handed this over" step is an open
+> design question, not a bug, and this is the first run where it is more than
+> theoretical.
+>
+> Only an iPhone camera was used. **Android is still NOT BENCH-RUN.**
 
 ## 11. Buttons
 
