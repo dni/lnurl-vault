@@ -63,17 +63,13 @@ typedef struct {
  * dead -- as the obvious thing to try. */
 #define CONFIRM_HINT "HOLD BTN1 2s"
 
-/* Shown instead, while a button that was already down when the prompt
- * appeared has not been seen released. Nothing it does counts until then
- * (approval.h), and from the owner's side that is indistinguishable from a
- * device ignoring them: finger on the button, bar not filling, so press
- * harder and more often. */
+/* While a button already down when the prompt appeared has not been seen
+ * released -- nothing it does counts until then (approval.h), and the owner
+ * sees only a bar that will not fill. */
 #define RELEASE_HINT "LET GO FIRST"
 
-/* How long an outcome card stays up after the command has been answered.
- * Deliberately AFTER the response rather than in front of it -- the card is
- * for the person holding the device, and making the wallet wait for it helped
- * nobody. */
+/* After the response, not in front of it: the card is for the person holding
+ * the device, and making the wallet wait for it helped nobody. */
 #define OUTCOME_HOLD_MS 1800
 
 static QueueHandle_t g_request_q;
@@ -180,9 +176,8 @@ static void show_browse_note(int browse_index, int position) {
     display_note_detail(DISPLAY_STATE_BROWSE, NULL, amount, unit, label, id, NULL);
 }
 
-/* How many notes are actually spendable right now. PENDING ones have no
- * settled value yet and cannot be browsed or exported, so they are not what
- * the resting screen is counting. */
+/* PENDING notes have no settled value and cannot be browsed or exported, so
+ * they are not what the resting screen counts. */
 static size_t confirmed_count(void) {
     size_t confirmed = 0;
     vault_lock_acquire();
@@ -197,17 +192,12 @@ static size_t confirmed_count(void) {
     return confirmed;
 }
 
-/* What the device says when nothing is happening -- which is almost always.
+/* The screen the device sits on all day. It was a flat dark rectangle, which
+ * says nothing about whether it is alive, paired or holding anything, and got
+ * pressed at to find out.
  *
- * It used to be a flat dark rectangle. That is the screen a person looks at
- * for hours, and it says nothing about whether the device is alive, paired, or
- * holding anything: the observed response to it was pressing buttons to find
- * out, on a device where a press starts browsing bearer secrets.
- *
- * It shows how many notes, and NOT what they are worth. A vault sitting on a
- * desk announcing its balance to the room is a different device from one that
- * makes you ask; the amounts are one deliberate button press away, and that is
- * where they belong. */
+ * How many notes, NOT what they are worth: a vault announcing its balance to
+ * the room is a different device from one that makes you ask. */
 static void draw_idle(size_t confirmed) {
     char title[24];
     if (confirmed == 0) {
@@ -217,10 +207,8 @@ static void draw_idle(size_t confirmed) {
     } else {
         snprintf(title, sizeof(title), "%u NOTES", (unsigned)confirmed);
     }
-    /* Two lines, not three. What the device is belongs on the boot screen; at
-     * rest the useful facts are how much it is holding and what a press will
-     * do. Both second lines are 12 characters or fewer on purpose -- that is
-     * what fits across the 240px panel at the readable minimum. */
+    /* Both second lines are 12 characters or fewer: that is what fits across
+     * the 240px panel at the readable minimum. */
     display_message(DISPLAY_STATE_IDLE, title, confirmed > 0 ? "TAP TO VIEW" : "PAIR TO ADD",
                     NULL);
 }
@@ -231,14 +219,9 @@ static size_t show_idle(void) {
     return confirmed;
 }
 
-/* How often the resting screen re-checks the count.
- *
- * A flat colour could not go stale; a number can. Notes arrive and are spent
- * over the wire with nobody touching the device, so a screen that only
- * repaints on a button press would sit there stating a count that stopped
- * being true minutes ago -- and the whole point of putting it up is that it
- * can be believed. Once a second, and only repainting when the number
- * actually moved, so an idle device is not blitting a full screen forever. */
+/* A flat colour could not go stale; a number can. Notes arrive and are spent
+ * over the wire with nobody near the device. Repaints only when the count
+ * actually moves, so an idle device is not blitting forever. */
 #define IDLE_RECOUNT_MS 1000
 
 static void wipe(char *buf, size_t len) {
@@ -309,21 +292,13 @@ static void wdt_feed(void) {
     esp_task_wdt_reset();
 }
 
-/* The confirm card, minus the gesture line, which changes while the prompt is
- * up -- see RELEASE_HINT. Factored out so both drawings are the same drawing:
- * the two differing by a field was how the note id came to be on one confirm
- * card and not another.
+/* The gesture line changes while the prompt is up (RELEASE_HINT), so both
+ * drawings go through here rather than diverging by a field.
  *
- * The note id is deliberately not on it. Eight hex characters identify a note
- * to the wallet, not to the person holding the device, and the row it
- * occupied is worth more spent on the gesture: an owner who cannot approve at
- * all is not helped by knowing which note they failed to approve. It is still
- * on the browse card, where there is room and where picking a specific note is
- * the whole point.
- *
- * A request with no note behind it (an OTA image, a wipe) still gets the verb
- * and the hint -- those cards used to be a flat colour and nothing else, which
- * is how "erase every note" and "reveal one secret" came to look the same. */
+ * No note id: eight hex identify a note to the wallet, not to the person
+ * holding the device, and the row buys the gesture instead. It stays on the
+ * browse card, where picking a specific note is the point. A request with no
+ * note behind it (OTA, wipe) still gets the verb and the hint. */
 static void draw_confirm_card(const remote_confirm_request_t *req, const char *hint) {
     display_note_detail(DISPLAY_STATE_CONFIRM_PENDING, req->action,
                         req->has_detail ? req->amount : NULL,
@@ -360,9 +335,8 @@ static confirm_result_t service_remote_confirm(const remote_confirm_request_t *r
     approval_t ap;
     int64_t now = esp_timer_get_time();
     approval_begin(&ap, now, timeout_ms);
-    /* One poll before drawing anything. approval_begin() assumes both buttons
-     * may be down; only a poll can clear that, and drawing first would show
-     * "let go" to every owner whose hands are nowhere near the device. */
+    /* approval_begin() assumes both buttons may be down and only a poll
+     * clears that, so drawing first would tell every owner to let go. */
     approval_state_t state = approval_poll(&ap, buttons_raw_1(), buttons_raw_2(), now);
     bool waiting = approval_waiting_for_release(&ap);
     draw_confirm_card(req, waiting ? RELEASE_HINT : CONFIRM_HINT);
@@ -373,8 +347,8 @@ static confirm_result_t service_remote_confirm(const remote_confirm_request_t *r
         now = esp_timer_get_time();
         state = approval_poll(&ap, buttons_raw_1(), buttons_raw_2(), now);
 
-        /* The moment they let go, the card stops saying so and starts saying
-         * what to do -- which is also the device visibly answering them. */
+        /* Letting go swaps the hint, which is also the device visibly
+         * answering them. */
         const bool now_waiting = approval_waiting_for_release(&ap);
         if (state == APPROVAL_PENDING && now_waiting != waiting) {
             waiting = now_waiting;
@@ -431,10 +405,8 @@ static confirm_result_t service_remote_confirm(const remote_confirm_request_t *r
             tail = "NOTHING DONE";
             break;
     }
-    /* In words, and naming what it was about. Green, red and grey are only
-     * meaningful to somebody who already knows the scheme, and a prompt that
-     * simply vanished taught nobody anything -- least of all that the device
-     * had timed out rather than refused. */
+    /* In words, naming what it was about: a prompt that simply vanished never
+     * said whether the device had timed out or refused. */
     display_message(card, title, req->action[0] ? req->action : NULL, tail);
     return result;
 }
@@ -485,8 +457,7 @@ static void ui_task_fn(void *arg) {
 
         switch (mode) {
             case UI_IDLE:
-                /* Keep the count honest -- notes come and go over the wire
-                 * with nobody near the device. */
+                /* Keep the count honest. */
                 if ((esp_timer_get_time() - idle_checked_us) >
                     (int64_t)IDLE_RECOUNT_MS * 1000) {
                     idle_checked_us = esp_timer_get_time();
@@ -511,10 +482,9 @@ static void ui_task_fn(void *arg) {
                     if (unveil(browse_id)) {
                         mode = UI_QR_SHOWN;
                     } else {
-                        /* The note went away under us, the secret would not
-                         * export, or the URL will not fit a QR this panel can
-                         * draw. Whichever it was, a red flash alone left the
-                         * owner to guess. */
+                        /* Note gone, export refused, or a URL too long for a
+                         * QR this panel can draw -- a red flash alone left the
+                         * owner to guess which. */
                         display_message(DISPLAY_STATE_DECLINED, "FAILED", "NOT SHOWN", NULL);
                         vTaskDelay(pdMS_TO_TICKS(900));
                         show_browse_note(browse_index, confirmed_position(browse_index));

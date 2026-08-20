@@ -1,7 +1,5 @@
-/* See hostgfx.h. This is the ESP-IDF side of the seam: the four functions
- * src/ui/display.c calls into the framework, implemented against a
- * framebuffer, plus a PNG writer so a screen can be looked at rather than
- * only asserted about. */
+/* See hostgfx.h: the four framework functions display.c calls, against a
+ * framebuffer, plus a PNG writer. */
 #include "hostgfx.h"
 
 #include <stdbool.h>
@@ -13,9 +11,8 @@
 #include "esp_heap_caps.h"
 #include "esp_lcd_panel_ops.h"
 
-/* The shim header only forward-declares this, so defining it here is what
- * makes a handle possible at all. Nothing ever reads the contents -- display.c
- * treats the handle as an opaque token and only ever compares it to NULL. */
+/* Forward-declared in the shim header; display.c only ever compares the
+ * handle to NULL. */
 struct esp_lcd_panel_t {
     int unused;
 };
@@ -27,9 +24,7 @@ static int g_w;
 static int g_h;
 static long g_offscreen;
 
-/* Row buffers come from here, not malloc -- see esp_heap_caps.h for why.
- * Sixteen buffers of one panel width each, with room for several geometries
- * before hostgfx_reset() rewinds it. */
+/* Row buffers come from here, not malloc -- see esp_heap_caps.h. */
 static unsigned char g_pool[64 * 1024];
 static size_t g_pool_used;
 
@@ -106,10 +101,8 @@ int esp_lcd_panel_draw_bitmap(esp_lcd_panel_handle_t panel, int x_start, int y_s
     for (int y = y_start; y < y_end; y++) {
         for (int x = x_start; x < x_end; x++) {
             if (x < 0 || y < 0 || x >= g_w || y >= g_h) {
-                /* A real panel silently swallows this. Counted rather than
-                 * clipped-and-forgotten, so a test can insist that nothing is
-                 * ever drawn off the glass -- which is how a line comes to be
-                 * "drawn" and yet invisible. */
+                /* A real panel swallows this silently; counted so a test can
+                 * insist it never happens. */
                 g_offscreen++;
                 continue;
             }
@@ -245,8 +238,7 @@ static int write_chunk(FILE *f, const char type[4], const uint8_t *data, size_t 
     return fwrite(tail, 1, 4, f) == 4 ? 0 : -1;
 }
 
-/* 5-6-5 to 8-8-8, replicating the high bits into the low ones so full-scale
- * stays full-scale (0x1F -> 0xFF, not 0xF8). */
+/* 5-6-5 to 8-8-8, replicating high bits low so 0x1F is 0xFF, not 0xF8. */
 static void rgb565_to_888(uint16_t c, uint8_t out[3]) {
     const uint8_t r = (uint8_t)((c >> 11) & 0x1Fu);
     const uint8_t g = (uint8_t)((c >> 5) & 0x3Fu);
@@ -281,9 +273,8 @@ int hostgfx_write_png(const char *path, int zoom) {
         }
     }
 
-    /* A zlib stream of stored (uncompressed) deflate blocks. Legal, trivially
-     * correct, and it keeps this file free of any dependency -- a preview tool
-     * that needs libpng installed is one nobody runs. */
+    /* Stored (uncompressed) deflate blocks: a legal zlib stream, and no
+     * dependency. */
     const size_t blocks = (raw_len + 65534u) / 65535u;
     const size_t z_len = 2 + blocks * 5 + raw_len + 4;
     uint8_t *z = malloc(z_len);

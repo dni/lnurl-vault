@@ -1,23 +1,11 @@
-/* Renders every screen this firmware can draw, at both real panel
- * geometries, as PNGs you can look at on a laptop.
+/* Every screen this firmware can draw, at both panel geometries, as PNGs.
  *
  *     make preview                    -> PNGs in ./preview/
  *     make preview PREVIEW_OUT=/tmp/shots
  *
- * Drawn by src/ui/display.c itself against a framebuffer -- not by a second
- * implementation that would drift from it (see hostgfx/hostgfx.h). What comes
- * out is what the glass gets, at the same width, the same height and the same
- * font.
- *
- * The reason this exists: three separate display faults shipped in this
- * project, and every one was found by a person squinting at a board, one of
- * them only from a photograph. A confirm card is a security control -- it is
- * the whole content of "physically approve this" -- and there was no way to
- * see one without flashing a device.
- *
- * Amounts go through note_display.c so the digit grouping and the unit are
- * the real ones, not a plausible-looking string typed in here.
- */
+ * Drawn by src/ui/display.c itself (see hostgfx/hostgfx.h), so what comes out
+ * is what the glass gets. Amounts go through note_display.c rather than being
+ * typed in here, so the grouping and unit are the real ones. */
 #include <stdio.h>
 #include <string.h>
 #include <sys/stat.h>
@@ -45,15 +33,14 @@ static void shot(const char *name) {
     }
 }
 
-/* Every screen starts from a fresh panel, exactly as the device does at boot,
- * so nothing a previous card left behind can make this one look better than
- * it is. */
+/* Fresh panel per screen, so nothing a previous card left behind can make
+ * this one look better than it is. */
 static void fresh(int w, int h) {
     hostgfx_reset(w, h);
     display_init();
 }
 
-/* A note as the device holds it, formatted the way ui_task.c formats it. */
+/* Formatted the way ui_task.c formats it. */
 static void note_card(display_state_t state, const char *action, uint64_t msat,
                       const char *label, const char *id, const char *hint) {
     char amount[NOTE_AMOUNT_BUF];
@@ -134,10 +121,8 @@ static void render_board(const char *board, int w, int h) {
     display_message(DISPLAY_STATE_DECLINED, "FAILED", "NOT SHOWN", NULL);
     shot("10b-unveil-failed");
 
-    /* The awkward ones. A seven-figure note, a label longer than the panel,
-     * a label that is all unprintable bytes, and the smallest amount the
-     * protocol allows -- the cases where a layout stops being pretty and
-     * starts being wrong. */
+    /* The awkward ones: where a layout stops being pretty and starts being
+     * wrong. */
     fresh(w, h);
     note_card(DISPLAY_STATE_CONFIRM_PENDING, "SHOW SECRET", 2100000000, "cold store", NULL, HINT);
     display_progress(0);
@@ -167,7 +152,7 @@ int main(int argc, char **argv) {
         /* Existing is fine; anything else shows up as a write failure below. */
     }
 
-    /* Both panels src/board/ supports, in the orientation it hands up. */
+    /* Both panels src/board/ supports. */
     render_board("t-display", 240, 135);
     render_board("t-display-s3", 320, 170);
 

@@ -678,15 +678,11 @@ step's `find` patterns are the first thing to check.
   richer text remains a possible future step.
 - **The rest of the screens now say something too.** An outcome is
   `APPROVED` / `DECLINED` / `NO ANSWER` in words, naming what it was about,
-  rather than a flat green, red or grey rectangle that only means anything to
-  someone who already knows the scheme. Boot says what the device is and which
-  build. At rest it says how many notes it holds and that a tap will show
-  them — deliberately not what they are worth, since a vault that announces
-  its balance to the room is a different device from one that makes you ask.
-  And when a button was already down as the prompt appeared, the card says
-  `LET GO FIRST` instead of a gesture that cannot work yet (`approval.h`: a
-  held button answers nothing until it has been seen released, which from the
-  owner's side is indistinguishable from being ignored).
+  rather than a flat rectangle. Boot says what the device is and which build.
+  At rest it says how many notes it holds and that a tap will show them —
+  deliberately not what they are worth. When a button was already down as the
+  prompt appeared the card says `LET GO FIRST`, since a held button answers
+  nothing until it has been seen released (`approval.h`).
 - **No countdown on the confirm prompt.** The window is 30 seconds and
   nothing on screen shows it draining. There is no room for it on the 240x135
   panel without taking a row from something that matters more, and the
@@ -770,10 +766,8 @@ same harness to assert about pixels (`test_card_render.c`).
 
 This exists because every display fault this project has shipped was a layout
 fault, none was reachable from the build, and each was found by a person
-squinting at a board — one of them only from a photograph. A confirm card is
-a security control: it is the entire content of "physically approve this".
-There should be a way to look at one without flashing a device, and now there
-is. It found a live regression on its first run — see
+squinting at a board — one of them only from a photograph. It found a live
+regression on its first run; see
 [section 19](docs/HARDWARE-TEST-CHECKLIST.md) of the hardware checklist.
 
 **Hardware verification** (needs a flashed board):

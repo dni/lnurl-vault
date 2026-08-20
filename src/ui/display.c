@@ -2,21 +2,13 @@
  * controller-RAM offset -- belongs to src/board/, so nothing here knows or
  * cares which board it is running on or how the glass is wired.
  *
- * Three kinds of screen live here. A note card (display_note_detail) is a
- * dense set of fields fitted into a panel that barely holds them: the verb,
- * the amount, the unit and label, and the gesture. A message
- * (display_message) is two or three short lines with the screen to
- * themselves: an outcome, what the device is at boot, what it holds at rest.
- * A bar (display_progress) is the hold filling up.
+ * Three kinds of screen: a note card (dense fields, display_note_detail), a
+ * message (two or three centred lines, display_message), and the hold bar.
+ * Colours are named in palette.h and the ink is per state, not always black.
  *
- * The colours are named in palette.h, and the ink is chosen per state rather
- * than assumed black -- see display_state_ink().
- *
- * None of this needs a board to look at: test/native/hostgfx stands in for
- * ESP-IDF underneath this file, so `make preview` renders every screen below
- * to a PNG at both real panel geometries, and test_card_render.c asserts
- * about the pixels. That exists because every display fault this project has
- * shipped was a layout fault found by a person squinting at hardware. */
+ * test/native/hostgfx stands in for ESP-IDF underneath this file, so
+ * `make preview` renders every screen to a PNG without a board and
+ * test_card_render.c asserts about the pixels. */
 #include "display.h"
 
 #include <string.h>
@@ -71,21 +63,11 @@ static uint16_t *next_row(void) {
 
 static display_state_t g_current_state = DISPLAY_STATE_IDLE;
 
-/* Where the card ends and the progress bar begins.
- *
- * Derived in ONE place and used by both, because two functions each working
- * out "where the bar is" from the panel height is exactly how a line came to
- * be computed, reserved for, and then drawn one pixel into a band that was
- * not its own.
- *
- * The bar used to take an eighth of the panel plus a twelfth of it again as
- * bottom margin -- 27 of the classic T-Display's 135 rows, a fifth of the
- * screen, for a progress indicator. That left 102 rows for a card that has
- * four things to say, and four readable lines plus their gaps do not fit in
- * 102 without holding the amount to the 21-pixel height a person on real
- * hardware could not read. Slimming the bar is what makes the whole card fit:
- * a 180-pixel-wide bar reads perfectly well at 8 rows.
- */
+/* Where the card ends and the bar begins, in one place: two functions each
+ * deriving it from the panel height is how a line got drawn one pixel into a
+ * band that wasn't its own. The bar was h/8 plus h/12 of margin -- a fifth of
+ * the panel -- which left 102 rows, and four readable lines don't fit in 102
+ * without holding the amount to an unreadable 21px. */
 #define CARD_MARGIN 6
 
 static int progress_bar_h(void) {
@@ -123,14 +105,9 @@ uint16_t display_state_color(display_state_t state) {
     }
 }
 
-/* Which ink reads on that colour.
- *
- * Every card used to draw black whatever it was drawing on, which was true
- * enough while only amber and green ever carried text. It is not true of the
- * dark grey idle background or of pure red: black on #383838 is close to
- * invisible, and that is now the screen the device rests on all day and the
- * card it shows when it refuses. Picked per state rather than per call site so
- * a new screen cannot get it wrong. */
+/* Black was fine while only amber and green carried text. It is close to
+ * invisible on the dark grey the device now rests on. Per state, not per call
+ * site, so a new screen can't get it wrong. */
 uint16_t display_state_ink(display_state_t state) {
     switch (state) {
         case DISPLAY_STATE_IDLE:
@@ -319,25 +296,17 @@ void display_note_detail(display_state_t state, const char *action, const char *
         second[used + n] = '\0';
     }
 
-    /* What is being asked, first and at the readable minimum. Without it the
-     * screen showed an amount and left the owner to infer the verb -- and the
-     * verb is the difference between handing over one note's secret and
-     * erasing every note on the device. Both used to look identical here. */
+    /* The verb, first: it is the difference between handing over one note's
+     * secret and erasing every note, which used to look identical here. */
     if (action && action[0] && y + small_h <= usable_h) {
         display_text(margin, y, action, FONT5X7_MIN_READABLE_SCALE, ink, bg);
         y += small_h + gap;
     }
 
-    /* The digits get the FULL width, at the largest scale the lines below
-     * still leave room for. An earlier version reserved room for the unit on
-     * the same line, which cost 90 of 228 pixels and held a seven-digit amount
-     * down to the same 21-pixel height a person had already told us was too
-     * small to read. The unit goes on the next line with the label instead: it
-     * is a word, and the digits are the thing a mistake costs money on.
-     *
-     * The budget itself lives in font5x7_card_amount_scale(), where it can be
-     * tested without a board -- including which lines are reserved for, which
-     * is the part that got this wrong last time. */
+    /* Full width for the digits. Reserving room for the unit on the same line
+     * cost 90 of 228 pixels and held a seven-digit amount to an unreadable
+     * 21px; the unit is a word, the digits are what a mistake costs money on.
+     * The budget is in font5x7_card_amount_scale(), where it is testable. */
     if (amount_num && amount_num[0]) {
         const int lines_below = (second[0] ? 1 : 0) + ((hint && hint[0]) ? 1 : 0);
         const int scale = font5x7_card_amount_scale(amount_num, avail, usable_h, y, lines_below);
@@ -365,13 +334,9 @@ void display_note_detail(display_state_t state, const char *action, const char *
         display_text(margin, y, id, FONT5X7_MIN_READABLE_SCALE, ink, bg);
         y += small_h + gap;
     }
-    /* Pinned to the bottom of the card, against the bar it describes, rather
-     * than laid out after whatever came before it. The gesture is the one line
-     * that must never be the one that falls off: a card that does not say the
-     * approval is a two-second HOLD leaves tapping -- and then concluding the
-     * device is dead -- as the obvious thing to try, which is exactly what
-     * happened. Everything above it is allowed to run out of room. This one
-     * has its own row and keeps it. */
+    /* Pinned to the bottom rather than laid out after what precedes it: the
+     * gesture is the one line that must never be the one that falls off.
+     * Everything above may run out of room; this keeps its row. */
     if (hint && hint[0]) {
         const int hint_y = usable_h - small_h;
         if (hint_y >= y - gap && hint_y >= margin) {
@@ -380,9 +345,8 @@ void display_note_detail(display_state_t state, const char *action, const char *
     }
 }
 
-/* Centres `text` horizontally, or starts it at the margin if it is wider than
- * the panel -- display_text clips at the edge, and a negative x it would
- * refuse to draw at all. */
+/* Centred, or at the margin if wider than the panel: display_text refuses a
+ * negative x outright, so an over-long line would vanish rather than clip. */
 static void draw_centred(int y, const char *text, int scale, uint16_t ink, uint16_t bg) {
     const int w = font5x7_text_width(text, scale);
     int x = (g_width - w) / 2;
@@ -405,13 +369,10 @@ void display_message(display_state_t state, const char *title, const char *line1
     const int margin = CARD_MARGIN;
     const int avail = g_width - 2 * margin;
     const int small_h = FONT5X7_HEIGHT * FONT5X7_MIN_READABLE_SCALE;
-    /* Roomier than a note card's gap. A card is a dense list of fields packed
-     * into a panel that barely holds them; a message is two or three short
-     * lines with the screen to themselves, and at the card's 3px they read as
-     * one solid block of pixels rather than as separate statements. */
+    /* Roomier than a card's 3px: two or three lines with the screen to
+     * themselves read as one block at that spacing. */
     const int gap = small_h / 3;
-    /* No progress bar on a message, so unlike a note card this one owns the
-     * whole panel. */
+    /* No bar on a message, so this owns the whole panel. */
     const int usable_h = g_height - 2 * margin;
 
     const int extra = ((line1 && line1[0]) ? small_h + gap : 0) +
@@ -432,9 +393,8 @@ void display_message(display_state_t state, const char *title, const char *line1
         return;
     }
 
-    /* Centred vertically as a block. A message is the whole screen -- an
-     * outcome, or what the device is at rest -- and hanging it off the top
-     * leaves it looking like a card that failed to finish drawing. */
+    /* Centred as a block: hung off the top it reads as a card that failed to
+     * finish drawing. */
     int y = (g_height - block_h) / 2;
     if (y < margin) {
         y = margin;

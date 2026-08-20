@@ -90,11 +90,8 @@ HDR = $(wildcard ../../src/vault/*.h ../../src/proto/*.h ../../src/ui/*.h hostgf
 SAN_BIN = vault_tests_san
 SAN_FLAGS = -fsanitize=address,undefined -fno-sanitize-recover=all -g -O1
 
-# Renders every screen the firmware can draw, at both panel geometries, as
-# PNGs -- the thing that was missing when a hold hint could be computed,
-# reserved for and silently dropped, and the only way anyone noticed was a
-# photograph of a board. Built from the SAME src/ui/display.c the firmware
-# runs; see hostgfx/hostgfx.h.
+# Renders every screen to a PNG, at both panel geometries, from the same
+# src/ui/display.c the firmware runs. See hostgfx/hostgfx.h.
 PREVIEW_BIN = vault_preview
 PREVIEW_SRC = ../../src/ui/display.c ../../src/ui/font5x7.c ../../src/proto/note_display.c \
               hostgfx/hostgfx.c preview.c

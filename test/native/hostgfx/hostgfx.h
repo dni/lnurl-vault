@@ -3,34 +3,18 @@
 
 #include <stdint.h>
 
-/* A panel you can run the firmware's real drawing code against, on a laptop.
+/* A panel to run the firmware's own drawing code against, on a laptop.
  *
- * Every display bug this project has actually shipped was a layout bug, and
- * every one of them was found by a person squinting at a board -- the amount
- * drawn too small to read, the whole screen mirrored, the hold hint computed
- * and then silently dropped one pixel past the bottom. None of those are
- * reachable from a unit test that only checks arithmetic, because the
- * arithmetic was individually defensible each time; what was wrong was what
- * ended up on the glass.
+ * The shim headers beside this one satisfy display.c's four ESP dependencies
+ * (esp_lcd, heap_caps, FreeRTOS, board) and point draw_bitmap at a
+ * framebuffer, so the pixels a test inspects come from the same function that
+ * draws on the device, at the same geometry and font. Stands in for ESP-IDF,
+ * not for display.c -- a second implementation would drift.
  *
- * So this stands in for ESP-IDF underneath src/ui/display.c rather than
- * standing in for display.c: the shim headers beside this one satisfy its
- * four ESP dependencies (esp_lcd, heap_caps, FreeRTOS, board), and
- * esp_lcd_panel_draw_bitmap writes into a framebuffer instead of a DMA queue.
- * The pixels a test inspects are produced by the same function that produces
- * the pixels on the device, at the same geometry, from the same font.
- *
- * Two uses: assertions (test_card_render.c -- "the line I asked for is
- * actually on screen"), and PNGs (preview.c -- looking at a screen without
- * flashing a board, which is what the confirm card should have had all along).
- */
+ * Used by test_card_render.c for assertions and preview.c for PNGs. */
 
-/* What hostgfx_reset() fills the framebuffer with: a colour no screen in this
- * firmware ever draws, so "the firmware never painted here" is distinguishable
- * from "the firmware painted black here". Black is the ink colour on every
- * note card, so a framebuffer cleared to black would make an unpainted panel
- * and a fully-inked one look the same to a test, and would hide a gap in a
- * preview instead of shouting about it. */
+/* A colour no screen ever draws, so "never painted" stays distinguishable
+ * from "painted black" -- black being the ink on every note card. */
 #define HOSTGFX_UNPAINTED 0xF81F /* magenta */
 
 #define HOSTGFX_MAX_W 400
@@ -47,46 +31,34 @@ int hostgfx_height(void);
 /* RGB565 at (x, y); 0 for anything off-panel. */
 uint16_t hostgfx_pixel(int x, int y);
 
-/* How many pixels have been drawn outside the panel since hostgfx_reset().
- * A real panel swallows those silently, which is exactly how a line comes to
- * be drawn and yet invisible; on the host it is countable, so a test can
- * simply insist it stays zero. */
+/* A real panel swallows off-glass drawing silently, which is how a line comes
+ * to be drawn and yet invisible. Here a test can insist it stays zero. */
 long hostgfx_offscreen_pixels(void);
 
-/* Total pixels currently equal to `ink`. Note cards draw text in one colour
- * on a flat background, so this is a proxy for "how much text is on screen" --
- * and the question a dropped line answers wrongly. */
+/* Text is one colour on a flat background, so this counts how much of it is
+ * on screen -- the question a dropped line answers wrongly. */
 long hostgfx_ink_pixels(uint16_t ink);
 
-/* Topmost / bottommost row containing an `ink` pixel, or -1 if there is none.
- * The bottom one is what a line falling off the card changes. */
+/* Topmost / bottommost inked row, or -1. */
 int hostgfx_first_ink_row(uint16_t ink);
 int hostgfx_last_ink_row(uint16_t ink);
 
-/* Leftmost column containing an `ink` pixel, or -1. With the rightmost, this
- * is how a test asks whether a block of text is actually centred without
- * knowing anything about margins or glyph widths. */
+/* Leftmost inked column, or -1. With the rightmost, this is how a test checks
+ * centring without knowing any margins or glyph widths. */
 int hostgfx_first_ink_col(uint16_t ink);
 
-/* Rightmost column containing an `ink` pixel, or -1. Text on this device is
- * clipped at the panel edge rather than wrapped, so "how close did that line
- * get to running out of screen" is a question worth being able to ask. */
+/* Rightmost inked column, or -1. Text clips at the edge rather than wrapping,
+ * so how close a line got to running out of screen is worth asking. */
 int hostgfx_last_ink_col(uint16_t ink);
 
-/* Remembers the framebuffer, so a later hostgfx_first_changed_row() reports
- * the topmost row some subsequent drawing touched. That is how a test locates
- * a band -- the progress bar, say -- without knowing any of display.c's
- * internal geometry: draw, snapshot, draw the other thing, ask what moved. */
+/* Draw, snapshot, draw the other thing, ask what moved: how a test locates a
+ * band without knowing display.c's internal geometry. */
 void hostgfx_snapshot(void);
 int hostgfx_first_changed_row(void);
 
-/* Writes the framebuffer to `path` as a PNG, each pixel drawn as a zoom x
- * zoom block (the panels are small; at 1:1 they are hard to look at). Returns
- * 0 on success, non-zero on any I/O or allocation failure.
- *
- * Deliberately dependency-free -- a stored-deflate zlib stream, which is a
- * legal one -- because a preview tool that needs libpng installed is a
- * preview tool nobody runs. */
+/* PNG at `path`, each pixel a zoom x zoom block. 0 on success.
+ * Stored-deflate, so no libpng: a preview tool with a dependency is one
+ * nobody runs. */
 int hostgfx_write_png(const char *path, int zoom);
 
 #endif

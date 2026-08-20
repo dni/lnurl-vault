@@ -73,37 +73,22 @@ int font5x7_text_width(const char *text, int scale);
  * here. */
 int font5x7_fit_scale(const char *text, int avail_w, int max_scale);
 
-/* The vertical gap between card lines. ONE constant, because it is used both
- * when reserving space for a line and when advancing past one, and those two
- * disagreeing by a single pixel is not a rounding detail: four lines at the
- * readable minimum then land at y=103 against a usable height of 102, and the
- * last line is computed, reserved for, and silently dropped. */
+/* One constant, used both to reserve a line's space and to advance past it.
+ * Those disagreeing by one pixel put the fourth line at y=103 against a usable
+ * 102, so it was computed, reserved for and silently dropped. */
 #define FONT5X7_CARD_GAP 3
 
-/* The scale for a note card's amount line: the largest that fits `avail_w`
- * once the lines BELOW it have been reserved for. 0 when not even a readable
- * line fits, meaning the caller must draw no amount at all rather than an
- * unreadable one.
+/* Largest scale for the amount that still leaves room for `lines_below`
+ * readable-minimum lines under it, starting at `y`. 0 means draw no amount at
+ * all rather than an unreadable one.
  *
- * `y` is where the amount would start (already past the action line, if any).
- * `lines_below` is how many readable-minimum lines still have to fit under it.
+ * Which lines get reserved has been wrong in both directions: reserving for
+ * everything pinned the digits to 21px, which a person on hardware could not
+ * read; reserving for nothing let the unit/label line eat the gesture hint's
+ * row. Priority is the verb, legible digits, the unit and the gesture, then
+ * the rest -- so callers reserve two and let the id drop.
  *
- * Which lines those are is a priority decision and it has been got wrong in
- * both directions. Reserving for everything pinned the digits to the readable
- * minimum on the 240x135 panel -- the exact 21-pixel height a person on real
- * hardware called too small to read. Reserving for nothing let the unit/label
- * line eat the gesture hint's room, so "HOLD BTN1 2s" was budgeted for,
- * computed, and then silently dropped off the bottom of every confirm card
- * that had a label. Both shipped.
- *
- * The order that survives both: the verb, then legible digits, then the unit
- * and the gesture, then everything else. So callers reserve for the unit/label
- * line and the hint, and let the note id drop.
- *
- * Here, and tested, for the same reason fit_scale is: this arithmetic is where
- * the display failures actually live. What it cannot tell you is whether the
- * result reached the glass -- test/native/test_card_render.c does that, by
- * running the real drawing code and counting pixels. */
+ * Whether the result reaches the glass is test_card_render.c's job. */
 int font5x7_card_amount_scale(const char *amount_num, int avail_w, int usable_h,
                               int y, int lines_below);
 

@@ -1,14 +1,7 @@
-/* Host stand-in for ESP-IDF's esp_heap_caps.h. The capability bits mean
- * nothing off-chip; what matters is that display.c's row-buffer allocation
- * succeeds so display_ready() is true.
- *
- * Backed by a static pool in hostgfx.c rather than malloc, and deliberately:
- * display_init() allocates its sixteen row buffers into a module-static array
- * and never frees them, so a second call from a second panel geometry strands
- * the first sixteen. Under CI's ASan that is sixteen reported leaks in code
- * that has no leak on the device -- display_init() runs exactly once there.
- * A pool the test harness rewinds keeps the firmware honest and the harness
- * quiet. */
+/* Host stand-in. Backed by a static pool in hostgfx.c, not malloc:
+ * display_init() never frees its sixteen row buffers, which is right on a
+ * device that calls it once and sixteen ASan leaks in a harness that calls it
+ * per geometry. */
 #ifndef LNURLVAULT_HOSTGFX_ESP_HEAP_CAPS_H
 #define LNURLVAULT_HOSTGFX_ESP_HEAP_CAPS_H
 

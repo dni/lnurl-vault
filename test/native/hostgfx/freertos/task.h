@@ -1,8 +1,6 @@
-/* Host stand-in for FreeRTOS task.h.
- *
- * vTaskDelay is a no-op rather than a sleep: display_flash_count() would
- * otherwise make the test suite sit there for six seconds, and what is being
- * checked is what lands in the framebuffer, not how long it stayed there. */
+/* Host stand-in. vTaskDelay is a no-op: display_flash_count() would otherwise
+ * cost the suite six seconds, and what is checked is what lands in the
+ * framebuffer, not how long it stayed. */
 #ifndef LNURLVAULT_HOSTGFX_TASK_H
 #define LNURLVAULT_HOSTGFX_TASK_H
 

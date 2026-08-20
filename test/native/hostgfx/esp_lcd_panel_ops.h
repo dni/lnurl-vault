@@ -1,6 +1,5 @@
-/* Host stand-in for ESP-IDF's esp_lcd_panel_ops.h. Implemented in hostgfx.c
- * against a plain framebuffer, so src/ui/display.c compiles and RUNS on the
- * host unmodified -- see hostgfx.h. */
+/* Host stand-in, implemented in hostgfx.c against a framebuffer so display.c
+ * compiles and runs unmodified. */
 #ifndef LNURLVAULT_HOSTGFX_ESP_LCD_PANEL_OPS_H
 #define LNURLVAULT_HOSTGFX_ESP_LCD_PANEL_OPS_H
 

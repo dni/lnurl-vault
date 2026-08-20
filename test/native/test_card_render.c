@@ -1,25 +1,13 @@
 /* What actually lands on the glass.
  *
- * Every other display test in this suite checks arithmetic -- what scale a
- * line should get, how much room the lines below it need. That arithmetic was
- * individually defensible on each of the three occasions the screen was
- * nonetheless wrong, and the wrongness was only ever found by a person
- * looking at a board: digits too small to read, the whole panel mirrored, and
- * a hold hint that was measured, budgeted for, and then silently dropped one
- * pixel past the bottom edge because the reserving code and the advancing
- * code used gaps that differed by one.
+ * The other display tests check arithmetic, which was individually defensible
+ * on all three occasions the screen was nonetheless wrong. These run
+ * src/ui/display.c itself against a framebuffer (test/native/hostgfx) and ask
+ * about pixels, so a line that is computed but not drawn fails here.
  *
- * These tests run src/ui/display.c itself -- the real drawing, the real font,
- * the real panel geometries -- against a framebuffer (test/native/hostgfx),
- * and ask about pixels. A line that is computed but not drawn fails here.
- *
- * The assertions are deliberately relational rather than absolute. Nothing
- * here hardcodes a margin, a gap or a y-coordinate: those are display.c's
- * business and a test that repeats them just repeats its bugs too. Instead
- * each check varies ONE input and insists the pixels change accordingly --
- * a longer hint must put more ink on screen than a shorter one, and cannot do
- * that if the hint is not drawn at all.
- */
+ * Assertions are relational, never absolute: nothing hardcodes a margin, a gap
+ * or a y-coordinate, because a test that repeats display.c's arithmetic
+ * repeats its bugs too. Each varies one input and insists the pixels move. */
 #include <stdio.h>
 #include <string.h>
 
@@ -28,15 +16,12 @@
 #include "hostgfx.h"
 #include "unity_lite.h"
 
-/* Text is not always black: display.c picks ink per state, because black on
- * the dark grey idle background is close to invisible. Ask it rather than
- * assuming -- a test that hardcoded 0x0000 here passed happily against a
- * browse card drawing white on purple, counting zero pixels both times. */
+/* Ink is per state, not always black. Hardcoding 0x0000 here passed happily
+ * against a browse card drawing white on purple: zero pixels both times. */
 #define INK display_state_ink(DISPLAY_STATE_CONFIRM_PENDING)
 #define BROWSE_INK display_state_ink(DISPLAY_STATE_BROWSE)
 
-/* Both real panels, in the orientation src/board/ hands up: the classic
- * T-Display and the T-Display-S3. A card has to work on the narrow one. */
+/* Both real panels. A card has to work on the narrow one. */
 static const int PANEL_W[2] = {240, 320};
 static const int PANEL_H[2] = {135, 170};
 #define PANELS 2
@@ -46,18 +31,16 @@ static void panel(int i) {
     display_init();
 }
 
-/* A representative confirm card: the verb, an amount that needs every digit,
- * a unit, a label, and the gesture. `hint` is the variable under test. */
+/* `hint` is the variable under test; everything else is held fixed. */
 static void confirm_card(const char *hint) {
     display_note_detail(DISPLAY_STATE_CONFIRM_PENDING, "SHOW SECRET", "21 000", "sats", "rent",
                         NULL, hint);
 }
 
 static void test_the_gesture_hint_reaches_the_glass(void) {
-    /* The regression this file exists for. Both cards reserve room for a
-     * hint, so the amount, the unit and the label are laid out identically in
-     * each -- the ONLY thing that can differ in the pixel count is the hint's
-     * own glyphs. Equal counts mean the hint was not drawn. */
+    /* Both cards reserve a hint, so everything else lays out identically and
+     * only the hint's own glyphs can differ. Equal counts mean it was not
+     * drawn. */
     for (int i = 0; i < PANELS; i++) {
         panel(i);
         confirm_card("-");
@@ -73,10 +56,8 @@ static void test_the_gesture_hint_reaches_the_glass(void) {
 }
 
 static void test_the_gesture_hint_clears_the_progress_bar(void) {
-    /* The hint is the lowest line on the card and the bar is drawn over the
-     * band beneath it. Where that band starts is display.c's business, so ask
-     * rather than assume: snapshot the card, draw the bar, and see which row
-     * moved first. */
+    /* Where the bar starts is display.c's business: snapshot the card, draw
+     * the bar, see which row moved first. */
     for (int i = 0; i < PANELS; i++) {
         panel(i);
         confirm_card("HOLD BTN1 2s");
@@ -92,10 +73,8 @@ static void test_the_gesture_hint_clears_the_progress_bar(void) {
 }
 
 static void test_the_verb_reaches_the_glass(void) {
-    /* Same trick on the action line. It is drawn at a fixed scale and a fixed
-     * position whatever it says, so length is the only free variable. Without
-     * this line a wipe of every note and the disclosure of one note's secret
-     * present identically. */
+    /* Fixed scale and position whatever it says, so length is the only free
+     * variable. Without it a wipe and a disclosure present identically. */
     for (int i = 0; i < PANELS; i++) {
         panel(i);
         display_note_detail(DISPLAY_STATE_CONFIRM_PENDING, "-", "21 000", "sats", "rent", NULL,
@@ -111,8 +90,7 @@ static void test_the_verb_reaches_the_glass(void) {
 }
 
 static void test_a_card_with_no_note_still_says_both(void) {
-    /* WIPE ALL and NEW FIRMWARE have no note behind them. They used to be a
-     * flat colour and nothing else. */
+    /* WIPE ALL and NEW FIRMWARE have no note behind them. */
     for (int i = 0; i < PANELS; i++) {
         panel(i);
         display_note_detail(DISPLAY_STATE_CONFIRM_PENDING, "WIPE ALL", NULL, NULL, NULL, NULL,
@@ -130,8 +108,7 @@ static void test_a_card_with_no_note_still_says_both(void) {
 }
 
 static void test_the_browse_card_shows_which_note(void) {
-    /* Browsing is where the id earns its row: the chord that follows
-     * discloses that note's bearer secret. */
+    /* The chord that follows discloses that note's bearer secret. */
     for (int i = 0; i < PANELS; i++) {
         panel(i);
         display_note_detail(DISPLAY_STATE_BROWSE, NULL, "21 000", "sats", "rent", "-", NULL);
@@ -147,11 +124,9 @@ static void test_the_browse_card_shows_which_note(void) {
 }
 
 static void test_no_line_runs_past_the_panel_edge(void) {
-    /* Labels arrive over the wire and amounts can be seven digits. display.c
-     * clips rather than wraps, so the failure mode is a line that reaches the
-     * last column and is cut mid-glyph -- "card-check" rendered as
-     * "card-chec" plus two columns of an 'k'. Nothing should get within a few
-     * pixels of the edge on either panel. */
+    /* display.c clips rather than wraps, so the failure mode is a line cut
+     * mid-glyph at the last column -- which reads as a different label, not a
+     * shortened one. */
     static const char *const LABELS[] = {
         "rent",
         "a label far longer than any panel can hold, on and on and on",
@@ -171,11 +146,8 @@ static void test_no_line_runs_past_the_panel_edge(void) {
 }
 
 static void test_the_card_never_draws_below_the_readable_minimum(void) {
-    /* Only the amount is drawn, so the ink band IS the digits: its height is
-     * the glyph height times the scale. A person on real hardware rejected
-     * 21 pixels ("the text on the screen is too small for me to read"), which
-     * is the minimum scale -- an ordinary amount should be getting more than
-     * that on both panels. */
+    /* Only the amount is drawn, so the ink band is the digits. 21px was
+     * rejected on real hardware as too small to read. */
     for (int i = 0; i < PANELS; i++) {
         panel(i);
         display_note_detail(DISPLAY_STATE_CONFIRM_PENDING, NULL, "21 000", NULL, NULL, NULL,
@@ -192,11 +164,9 @@ static void test_the_card_never_draws_below_the_readable_minimum(void) {
 }
 
 static void test_the_whole_panel_gets_painted(void) {
-    /* The framebuffer starts as a colour nothing in this firmware draws, so
-     * any of it left over is a region the card never painted. A card that
-     * paints only part of the screen leaves whatever the previous screen had
-     * there -- which on this device can be the last note's amount, or a QR of
-     * a bearer secret. */
+    /* Anything left in the sentinel colour is a region the card never
+     * painted, so it still holds the previous screen -- which here can be a
+     * QR of a bearer secret. */
     for (int i = 0; i < PANELS; i++) {
         panel(i);
         UL_CHECK(hostgfx_ink_pixels(HOSTGFX_UNPAINTED) == 0,
@@ -213,9 +183,8 @@ static void test_the_whole_panel_gets_painted(void) {
 
 /* --- messages: outcomes, boot, idle --------------------------------------- */
 
-/* Rough perceptual brightness of an RGB565 colour, 0..255. Enough to answer
- * "can this text be read on that background", which is the question a card
- * drawing black on #383838 got wrong. */
+/* Rough perceptual brightness, 0..255: enough to ask whether text can be read
+ * on a background, which black on #383838 got wrong. */
 static int luma565(uint16_t c) {
     const int r = (int)(((c >> 11) & 0x1Fu) << 3);
     const int g = (int)(((c >> 5) & 0x3Fu) << 2);
@@ -230,10 +199,8 @@ static const display_state_t STATES[] = {
 #define STATE_COUNT (sizeof(STATES) / sizeof(STATES[0]))
 
 static void test_every_state_draws_ink_you_can_read(void) {
-    /* The bug this pins: every card drew black regardless of what it drew on,
-     * which is fine on amber and green and close to invisible on the dark grey
-     * the device rests on -- a screen that had no text on it when that colour
-     * was chosen, and now does. */
+    /* A contrast floor rather than a colour list, so a state added later
+     * cannot quietly fail it. */
     for (size_t i = 0; i < STATE_COUNT; i++) {
         const int bg = luma565(display_state_color(STATES[i]));
         const int ink = luma565(display_state_ink(STATES[i]));
@@ -265,10 +232,8 @@ static void test_a_message_draws_every_line_it_is_given(void) {
 }
 
 static void test_a_message_is_centred(void) {
-    /* Both margins equal, to within the blank column each glyph cell carries
-     * on its right. Nothing here knows what the margin is -- only that the two
-     * sides match, which is what "centred" means and what a layout drifting
-     * off one edge stops being. */
+    /* Both margins equal, to within the blank column each glyph cell carries.
+     * Nothing here knows what the margin is, only that the sides match. */
     for (int i = 0; i < PANELS; i++) {
         const uint16_t ink = display_state_ink(DISPLAY_STATE_APPROVED);
         panel(i);
@@ -301,10 +266,9 @@ static void test_a_message_paints_the_whole_panel(void) {
 }
 
 static void test_a_message_too_wide_for_the_panel_still_draws(void) {
-    /* Titles come from this codebase, but the verb under them comes off the
-     * wire via dispatcher.c. A line wider than the panel must clip at the
-     * edge, not vanish -- draw_centred computes a negative x for it, and
-     * display_text refuses to draw at a negative x at all. */
+    /* The verb under the title comes off the wire. Wider than the panel must
+     * clip, not vanish: draw_centred would compute a negative x, and
+     * display_text refuses those outright. */
     for (int i = 0; i < PANELS; i++) {
         const uint16_t ink = display_state_ink(DISPLAY_STATE_EXPIRED);
         panel(i);

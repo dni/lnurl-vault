@@ -1,6 +1,4 @@
-/* Host stand-in for ESP-IDF's esp_lcd_types.h -- see hostgfx.h for why these
- * shims exist at all. Only the panel handle is needed: nothing on the host
- * ever dereferences it. */
+/* Host stand-in. Only the handle is needed; nothing dereferences it. */
 #ifndef LNURLVAULT_HOSTGFX_ESP_LCD_TYPES_H
 #define LNURLVAULT_HOSTGFX_ESP_LCD_TYPES_H
 
