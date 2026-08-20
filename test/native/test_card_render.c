@@ -279,6 +279,35 @@ static void test_a_message_too_wide_for_the_panel_still_draws(void) {
     }
 }
 
+static void test_a_message_survives_a_panel_too_small_for_it(void) {
+    /* The T-Dongle-S3 is 80x160 and a dead panel reports 0. Neither may draw
+     * off the edge, leave a gap, or wedge trying to centre something that
+     * does not fit. */
+    static const int TINY[][2] = {{80, 160}, {80, 40}, {40, 30}};
+    for (size_t i = 0; i < sizeof(TINY) / sizeof(TINY[0]); i++) {
+        hostgfx_reset(TINY[i][0], TINY[i][1]);
+        display_init();
+        display_message(DISPLAY_STATE_EXPIRED, "NO ANSWER", "SHOW SECRET", "NOTHING DONE");
+        UL_CHECK(hostgfx_offscreen_pixels() == 0, "nothing drawn off a small panel");
+        UL_CHECK(hostgfx_ink_pixels(HOSTGFX_UNPAINTED) == 0, "and none of it left unpainted");
+    }
+}
+
+static void test_a_message_with_nothing_to_say_still_clears_the_screen(void) {
+    /* Every caller passes at least a title today, but the screen underneath
+     * can be a QR of a bearer secret, so an empty message must not leave it
+     * there. */
+    for (int i = 0; i < PANELS; i++) {
+        panel(i);
+        display_note_detail(DISPLAY_STATE_BROWSE, NULL, "21 000", "sats", "rent", "f822a462",
+                            NULL);
+        display_message(DISPLAY_STATE_IDLE, NULL, NULL, NULL);
+        UL_CHECK(hostgfx_ink_pixels(display_state_ink(DISPLAY_STATE_BROWSE)) == 0,
+                 "the previous screen is gone");
+        UL_CHECK(hostgfx_ink_pixels(HOSTGFX_UNPAINTED) == 0, "and the panel is fully painted");
+    }
+}
+
 void test_card_render_run(void) {
     printf("-- card render --\n");
     test_the_gesture_hint_reaches_the_glass();
@@ -294,4 +323,6 @@ void test_card_render_run(void) {
     test_a_message_is_centred();
     test_a_message_paints_the_whole_panel();
     test_a_message_too_wide_for_the_panel_still_draws();
+    test_a_message_survives_a_panel_too_small_for_it();
+    test_a_message_with_nothing_to_say_still_clears_the_screen();
 }

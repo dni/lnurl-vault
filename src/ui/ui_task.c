@@ -178,9 +178,8 @@ static void show_browse_note(int browse_index, int position) {
 
 /* PENDING notes have no settled value and cannot be browsed or exported, so
  * they are not what the resting screen counts. */
-static size_t confirmed_count(void) {
+static size_t count_confirmed_locked(void) {
     size_t confirmed = 0;
-    vault_lock_acquire();
     const size_t total = vault_count();
     for (size_t i = 0; i < total; i++) {
         note_meta_t meta;
@@ -188,8 +187,26 @@ static size_t confirmed_count(void) {
             confirmed++;
         }
     }
+    return confirmed;
+}
+
+static size_t confirmed_count(void) {
+    vault_lock_acquire();
+    const size_t confirmed = count_confirmed_locked();
     vault_lock_release();
     return confirmed;
+}
+
+/* False if the vault is busy. The idle count is advisory and this runs once a
+ * second, so skipping a pass costs nothing -- whereas blocking would put
+ * ui_task behind a lock with no timeout for a number nobody is waiting on. */
+static bool try_confirmed_count(size_t *out) {
+    if (!vault_lock_try_acquire()) {
+        return false;
+    }
+    *out = count_confirmed_locked();
+    vault_lock_release();
+    return true;
 }
 
 /* The screen the device sits on all day. It was a flat dark rectangle, which
@@ -460,11 +477,13 @@ static void ui_task_fn(void *arg) {
                 /* Keep the count honest. */
                 if ((esp_timer_get_time() - idle_checked_us) >
                     (int64_t)IDLE_RECOUNT_MS * 1000) {
-                    idle_checked_us = esp_timer_get_time();
-                    const size_t now_confirmed = confirmed_count();
-                    if (now_confirmed != idle_shown) {
-                        idle_shown = now_confirmed;
-                        draw_idle(idle_shown);
+                    size_t now_confirmed = 0;
+                    if (try_confirmed_count(&now_confirmed)) {
+                        idle_checked_us = esp_timer_get_time();
+                        if (now_confirmed != idle_shown) {
+                            idle_shown = now_confirmed;
+                            draw_idle(idle_shown);
+                        }
                     }
                 }
                 if (ev == BTN_EVENT_1_TAP || ev == BTN_EVENT_2_TAP) {
