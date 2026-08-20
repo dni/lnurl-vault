@@ -284,8 +284,21 @@ Generates two fresh secrets sharing the same parent lineage, for **split**.
 Commits a `PENDING` note to `CONFIRMED` once the mint replied
 `{"status":"OK"}`.
 
+**`host` is the withdraw endpoint's base URL, path included** —
+`mint.example/w`, not `mint.example`. Despite the field's name it is not a
+hostname: the device stores it verbatim and rebuilds note URLs from it, so a
+bare host produces `lnurlw://mint.example?k1=...`, which points at the mint's
+root and is not a note. LUD-25 puts it plainly — "lnurlw://mint.example/w?k1=
+<P>&amount=<msat> *is* the bearer note" — and a mint that serves withdraw
+anywhere but `/` cannot be addressed without the path. Scheme and query are
+not included; the device adds those.
+
+This was worth spelling out: a client passing its display-side "server"
+helper here produced notes whose on-screen QR could not be claimed by
+anything, and nothing caught it until one was scanned off a real panel.
+
 ```json
-{"cmd":"confirm","id":"e5f6a7b8","amount_msat":21000,"host":"mint.example","sig":"optional hex"}
+{"cmd":"confirm","id":"e5f6a7b8","amount_msat":21000,"host":"mint.example/w","sig":"optional hex"}
 → {"ok":true}
 ```
 
@@ -325,7 +338,7 @@ received from someone else, or a fresh Lightning payment preimage from
 minting a new note.
 
 ```json
-{"cmd":"import_secret","k1":"<64-hex secret>","host":"mint.example","amount_msat":21000,"label":"optional"}
+{"cmd":"import_secret","k1":"<64-hex secret>","host":"mint.example/w","amount_msat":21000,"label":"optional"}
 → {"ok":true,"id":"c9d0e1f2"}
 ```
 
