@@ -304,6 +304,13 @@ Reveals a `CONFIRMED` note's raw secret as hex — **gated by a physical
 confirm/cancel on the device** (30s timeout). This is the only command that
 ever discloses a plaintext secret.
 
+The gesture is a **two-second hold of button 1**, not a tap, and button 2
+cancels. Worth surfacing in a client's own UI: a person who taps sees the
+on-screen bar fail to fill and reasonably concludes the device is not
+listening, then keeps tapping — at the one screen where that is least wanted.
+The device's own card says `HOLD BTN1 2s`, but a client that puts a modal in
+front of the user should say it too.
+
 ```json
 {"cmd":"export_secret","id":"e5f6a7b8"}
 → {"ok":true,"k1":"<64-hex secret>"}

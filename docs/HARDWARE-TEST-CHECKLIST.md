@@ -432,22 +432,42 @@ then boots and reports the tag as its `fw_version`.
 > via the web installer, and an actual OTA transfer of `firmware.bin` to a
 > device. The signature is proven acceptable; nothing has yet accepted it.
 
-## 17. End to end with the wallet — NOT YET BENCH-RUN
+## 17. End to end with a real mint
 
 The gap nothing else covers. `lnurl-wallet`'s `deviceOrchestration.ts`
 implements every LUD-25 operation against a paired vault, and every one of
 them is verified only against mocks. The two-phase commit the whole design
 rests on — device stages a secret and discloses only its hash, mint burns
-against that hash, device commits — has never run with a real mint and a real
+against that hash, device commits — had never run with a real mint and a real
 board in the loop.
 
-Run a local `lnurl-mint`, point a dev build of the wallet at it, pair over USB,
-and walk the chain. One row per operation, and each needs a physical approval
-on the device:
+`test/hardware/e2e_mint.py` now drives that chain directly, doing what the
+browser would, so it can be run without a wallet build in the loop:
+
+```
+python3 test/hardware/fake_cln.py --port 9737 &
+LNURL_MINT_ENV_FILE=/dev/null DATABASE_PATH=/tmp/refmint.db \
+  FUNDINGSOURCE_BACKEND=cln FUNDINGSOURCE_URL=http://127.0.0.1:9737 \
+  FUNDINGSOURCE_RUNE=fake BASE_URL=http://127.0.0.1:8111 \
+  BASE_FEE_MSAT=0 MIN_MINT_MSAT=0 \
+  uvicorn lnurl_mint.server:app --port 8111 &
+
+python3 test/hardware/e2e_mint.py --port /dev/ttyUSB0 \
+    --mint http://127.0.0.1:8111 --fake-cln http://127.0.0.1:9737
+```
+
+`fake_cln.py` exists because `lnurl-mint` will not mint or melt without a
+funding source and supports only real cln and real lnd. It serves the seven
+RPCs that mint actually calls. A mint whose invoices nothing can pay cannot
+demonstrate a mint or a melt, which is most of this section.
+
+The chain is one continuous lineage from a single note, because that is the
+only arrangement where each step's output is proven spendable: every
+operation consumes what the one before it produced.
 
 | Operation | Expect |
 |---|---|
-| mint | a note in the browser, then `import_secret` + immediate rotate onto the device |
+| mint | a note from a paid `payRequest`, then `import_secret` + immediate rotate onto the device |
 | rotate | old note `SPENT`, new note `CONFIRMED`, same value |
 | split | two outputs confirmed, every input spent |
 | merge | one output worth the sum, every input spent |
@@ -455,12 +475,51 @@ on the device:
 | receive | an imported note rotated before it is trusted |
 
 Pass: the plaintext secret leaves the vault only on a press, `list_notes`
-agrees with the wallet after each step, and nothing is left `PENDING`.
+agrees with the mint after each step, and nothing is left `PENDING`.
 
 Do this on the **classic T-Display**, which is the board whose confirm gate is
 known to work. Section 7a is why.
 
-**NOT YET BENCH-RUN.**
+> **Bench record — 2026-08-20, fw `0.0.7` / `0.0.7-dirty`.** Classic
+> T-Display, `/dev/cu.usbserial-5B310132921`. The two-phase commit ran with a
+> real mint and a real board for the first time, against **two independent
+> mints**, and the full chain is green on both.
+>
+> **dni's `lnurl-mint`** (branch `tests/bearer-threat-suite`, server code
+> identical to main) backed by `fake_cln.py`: **mint** (paid a `payRequest`,
+> took the preimage over LUD-21 `verify`), **import_secret**, **rotate after
+> import**, **split** (21000 → 7000 + 14000, input spent), **merge** (both
+> inputs spent, one output worth 21000 — value conserved), **rotate**,
+> **melt** (invoice paid, note `SPENT`).
+>
+> **moneyer** `--dev` on `:3737`, from its startup seed note: 8 passed, 0
+> failed — **import_secret**, **rotate after import**, **split**, **merge**
+> (value conserved), **rotate**, **melt**. Its `mint` row is skipped rather
+> than passed: its fake funding source mints deliberately unpayable invoices,
+> so no fresh note can settle. Starting from a secret held outside the device
+> and rotating it immediately is the **receive** row, so that is covered here
+> even though `mint` is not.
+>
+> On both mints the device's `list_notes` lineage agreed with the mint at
+> every step and nothing was left `PENDING`.
+>
+> The whole session cost far more approvals than it should have, for a reason
+> worth recording: the approval is a **two-second hold**, nobody driving it
+> knew that, and the screen did not say. Nine or so prompts died as timeouts
+> that were read as a dead device. See section 19.
+
+**A second mint.** `--mint http://127.0.0.1:3737 --seed-note <k1>` runs the
+same chain against [moneyer](https://github.com/forgesworn/moneyer). It needs
+`--seed-note` because its `--dev` funding source mints deliberately unpayable
+invoices, so nothing can settle a fresh one; the 21 sat note it prints at
+startup is the way in, and it is one note per start — a chain that ends in a
+melt needs moneyer restarted before the next run.
+
+**On the approvals.** Every `export_secret` is a **two-second hold of button
+1**, not a tap (`approval.h`). This cost most of a bench session to learn the
+hard way, from the wrong end: a tap leaves the progress bar empty and the
+device looks like it is not listening. The confirm card now says
+`HOLD BTN1 2s` on it for exactly that reason — see section 19.
 
 ## 18. Device identity — NOT YET BENCH-RUN
 
