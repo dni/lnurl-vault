@@ -508,6 +508,33 @@ known to work. Section 7a is why.
 > knew that, and the screen did not say. Nine or so prompts died as timeouts
 > that were read as a dead device. See section 19.
 
+> **Bench record — 2026-08-20, real sats, fw `0.0.7-1-gf4ac981-dirty`.**
+> Classic T-Display against **moneyer.dev**, a real mint on the public
+> internet backed by a real node — no fake funding source anywhere in this
+> run. The whole round trip, with money:
+>
+> 1. A 55,055 msat invoice from `moneyer.dev` paid from Wallet of Satoshi.
+>    The mint fee (5,000 msat + 1,000 ppm) left a **50,000 msat note**.
+> 2. The preimage taken over LUD-21 `verify` — the payer's wallet never
+>    revealed it, which is the whole reason `verify` exists — and
+>    `import_secret`ed onto the device.
+> 3. **Rotated**, burning the mint-known preimage. `/w?k1=<preimage>` then
+>    answered `Note already spent.`, so the burn is confirmed mint-side, and
+>    the note now lives on a secret only this device has ever held.
+> 4. **Melted** to a Wallet of Satoshi invoice for exactly 50,000 msat.
+>    moneyer routed a real payment; **50 sats arrived in WoS**. Both notes
+>    `spent` on the device, `pending_count` 0.
+>
+> Two things this run established that no local test could. The **melt
+> settle discipline works against a real node**: `OK` came back when the note
+> was reserved, and the device did not mark it spent until the mint confirmed
+> the payment had actually landed. And both mints require the melt invoice to
+> be for the note's **exact** value — the routing fee comes from the mint's
+> own budget, funded by the mint fee, not out of the note. An invoice for the
+> note minus headroom is refused by both.
+>
+> Cost of the exercise: ~6 sats, all of it mint fee and routing.
+
 **A second mint.** `--mint http://127.0.0.1:3737 --seed-note <k1>` runs the
 same chain against [moneyer](https://github.com/forgesworn/moneyer). It needs
 `--seed-note` because its `--dev` funding source mints deliberately unpayable

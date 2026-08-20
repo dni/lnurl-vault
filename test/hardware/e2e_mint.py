@@ -32,6 +32,20 @@ Two ways in, because not every mint can settle its own invoices:
 --fake-cln points at that fake node's control API, so a melt has an invoice
 it can genuinely pay. Without it the melt row is skipped rather than
 reported as passing: a mint that cannot pay is not evidence of anything.
+
+--melt-invoice melts to a BOLT-11 from somewhere else entirely -- a phone
+wallet, a custodial account -- which is the only way to find out whether a
+real mint can actually route a payout back off its own island:
+
+    python3 test/hardware/e2e_mint.py --port /dev/ttyUSB0 \
+        --mint https://moneyer.dev --resume-note-id <id> --steps melt \
+        --melt-invoice lnbc500n1...
+
+Both mints require that invoice to be for the note's EXACT value, not less.
+The routing fee is not taken out of the note: the mint covers it from the
+fee it charged when the note was minted (moneyer's meltFeeLimitMsat is
+max(0.5%, 5000 msat, mintFee)). An invoice for "the note minus a bit of
+headroom" is refused by both.
 """
 
 import argparse
@@ -334,7 +348,7 @@ def merge(b, vault, mint, note_ids, label):
     return new_id if ok else None
 
 
-def melt(b, vault, mint, note_id, label):
+def melt(b, vault, mint, note_id, label, invoice=None):
     """Redeem to a BOLT-11. No new secret: nothing is minted, so there is
     nothing to stage -- but the note is only marked spent once the mint
     reports the payment settled."""
@@ -343,12 +357,19 @@ def melt(b, vault, mint, note_id, label):
         b.check(label, False, f"{note_id} not on device")
         return False
 
-    # The invoice must be for the note's exact value: lnurl-mint rejects
-    # anything else outright ("Invoice must be for exactly N msat"), and
-    # takes the routing fee from its own side rather than from the note.
-    invoice = mint.payable_invoice(held["amount_msat"])
+    if invoice:
+        # A real invoice from somewhere else -- a phone wallet, an exchange.
+        # Its amount has to leave the mint room to route: the difference
+        # between the note and the invoice IS the fee budget, and a mint with
+        # too little of it refuses rather than paying out of its own pocket.
+        pass
+    else:
+        # The invoice must be for the note's exact value: lnurl-mint rejects
+        # anything else outright ("Invoice must be for exactly N msat"), and
+        # takes the routing fee from its own side rather than from the note.
+        invoice = mint.payable_invoice(held["amount_msat"])
     if not invoice:
-        b.skip(label, "no payable invoice (needs --fake-cln)")
+        b.skip(label, "no payable invoice (needs --fake-cln or --melt-invoice)")
         return None
 
     k1 = vault.export_secret(note_id, f"melt {note_id}")
@@ -386,6 +407,11 @@ def main():
     ap.add_argument("--mint", required=True, help="base URL of the mint")
     ap.add_argument("--seed-note", help="k1 of a note you already hold, instead of minting")
     ap.add_argument("--fake-cln", help="control API of test/hardware/fake_cln.py, for the melt row")
+    ap.add_argument(
+        "--melt-invoice",
+        help="melt to this BOLT-11 instead of one generated against the fake node -- "
+        "the real case, where the payee is somebody else's wallet entirely",
+    )
     ap.add_argument("--amount-msat", type=int, default=21000, help="value to mint, if minting")
     ap.add_argument(
         "--resume-note-id",
@@ -488,7 +514,7 @@ def main():
                 current = rotate(b, vault, mint, current, "rotate")
             elif step == "melt":
                 print("\n-- melt --")
-                melt(b, vault, mint, current, "melt")
+                melt(b, vault, mint, current, "melt", args.melt_invoice)
                 current = None
             if current is None and step != "melt":
                 print(f"\nstopped after {step}; nothing to carry forward")
