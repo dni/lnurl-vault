@@ -73,4 +73,30 @@ int font5x7_text_width(const char *text, int scale);
  * here. */
 int font5x7_fit_scale(const char *text, int avail_w, int max_scale);
 
+/* The vertical gap between card lines. ONE constant, because it is used both
+ * when reserving space for a line and when advancing past one, and those two
+ * disagreeing by a single pixel is not a rounding detail: four lines at the
+ * readable minimum then land at y=103 against a usable height of 102, and the
+ * last line is computed, reserved for, and silently dropped. */
+#define FONT5X7_CARD_GAP 3
+
+/* The scale for a note card's amount line: the largest that fits `avail_w`
+ * once the lines BELOW it have been reserved for. 0 when not even a readable
+ * line fits, meaning the caller must draw no amount at all rather than an
+ * unreadable one.
+ *
+ * `y` is where the amount would start (already past the action line, if any).
+ * Only the hint is reserved for. The unit/label and id lines keep their own
+ * draw-if-it-fits guards at the call site: reserving for them as well taxes
+ * the amount by two more rows, which on the 240x135 panel pins every confirm
+ * card's digits to the readable minimum - the exact 21-pixel height this
+ * header and display.h both record as unreadable on real hardware. A label is
+ * worth less than legible digits.
+ *
+ * Here, and tested, for the same reason fit_scale is: this arithmetic is where
+ * the display failures actually live, and none of it can be checked on a
+ * board. */
+int font5x7_card_amount_scale(const char *amount_num, int avail_w, int usable_h,
+                              int y, int has_hint);
+
 #endif

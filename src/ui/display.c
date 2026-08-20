@@ -230,13 +230,9 @@ void display_note_detail(display_state_t state, const char *action, const char *
     /* Keep out of the progress bar's band -- see display_progress(). */
     const int usable_h = g_height - (g_height / 8) - (g_height / 12) - margin;
     const int small_h = FONT5X7_HEIGHT * FONT5X7_MIN_READABLE_SCALE;
-    /* One gap, used both when reserving space below and when advancing past a
-     * line. It used to be 4 in the reservation and 5 after the amount, and
-     * that one pixel of disagreement was enough: four lines at the readable
-     * minimum put the last one at y=103 against a usable_h of 102, so the
-     * hold hint was computed, reserved for, and then silently dropped. On a
-     * 135px panel there is no slack to absorb a mismatch like that. */
-    const int gap = 3;
+    /* One gap for reserving and for advancing alike -- see FONT5X7_CARD_GAP,
+     * which is where the reason it must be a single constant is written down. */
+    const int gap = FONT5X7_CARD_GAP;
 
     int y = margin;
 
@@ -278,41 +274,20 @@ void display_note_detail(display_state_t state, const char *action, const char *
         y += small_h + gap;
     }
 
-    /* Reserve what the lines after the amount still need, so the digits
-     * cannot grow into space the hold hint depends on. A hint that gets
-     * silently dropped for being one row short is exactly the failure this
-     * card is meant to fix. */
-    int reserved = 0;
-    if (second[0]) {
-        reserved += small_h + gap;
-    }
-    if (id && id[0]) {
-        reserved += small_h + gap;
-    }
-    if (hint && hint[0]) {
-        reserved += small_h + gap;
-    }
-
-    /* The digits get the FULL width, at the largest scale that fits what is
-     * left. An earlier version reserved room for the unit on the same line,
-     * which cost 90 of 228 pixels and held a seven-digit amount down to the
-     * same 21-pixel height a person had already told us was too small to
-     * read. The unit goes on the next line with the label instead: it is a
-     * word, and the digits are the thing a mistake costs money on. */
+    /* The digits get the FULL width, at the largest scale the lines below
+     * still leave room for. An earlier version reserved room for the unit on
+     * the same line, which cost 90 of 228 pixels and held a seven-digit amount
+     * down to the same 21-pixel height a person had already told us was too
+     * small to read. The unit goes on the next line with the label instead: it
+     * is a word, and the digits are the thing a mistake costs money on.
+     *
+     * The budget itself lives in font5x7_card_amount_scale(), where it can be
+     * tested without a board -- including which lines are reserved for, which
+     * is the part that got this wrong last time. */
     if (amount_num && amount_num[0]) {
-        int room_h = usable_h - y - reserved;
-        int max_scale = room_h / FONT5X7_HEIGHT;
-        if (max_scale > DISPLAY_MAX_TEXT_SCALE) {
-            max_scale = DISPLAY_MAX_TEXT_SCALE;
-        }
-        /* font5x7_fit_scale never returns below FONT5X7_MIN_READABLE_SCALE --
-         * it clamps a smaller max back up. So asking it for a scale the
-         * budget cannot afford does not get a smaller amount, it gets a
-         * full-height one that pushes the hint off the bottom, which is the
-         * exact bug this reservation exists to prevent. Only draw it if a
-         * readable line genuinely fits. */
-        if (room_h >= small_h) {
-            const int scale = font5x7_fit_scale(amount_num, avail, max_scale);
+        const int scale = font5x7_card_amount_scale(amount_num, avail, usable_h, y,
+                                                     hint && hint[0]);
+        if (scale > 0) {
             display_text(margin, y, amount_num, scale, ink, bg);
             y += FONT5X7_HEIGHT * scale + gap;
         }

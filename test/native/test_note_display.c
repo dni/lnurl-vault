@@ -348,6 +348,73 @@ static void test_the_amount_gets_a_big_scale_on_a_real_panel(void) {
     UL_CHECK(font5x7_text_width("100 000", s) <= avail, "and genuinely fits");
 }
 
+/* The confirm card on the real panel: 240x135, 6px margins, and a usable
+ * height of 102 once display_progress()'s band is kept clear. The action line
+ * sits above the amount, so the amount starts at 6 + 21 + gap.
+ *
+ * This is the geometry the hold hint was dropped on, and then the geometry the
+ * fix for that overcorrected on: reserving for the unit/label and id lines as
+ * well left the digits 24 pixels, which is scale 3 for every amount there is.
+ * Both failures are one arithmetic slip in the same six lines, and neither is
+ * visible without a board unless it is pinned here. */
+#define CARD_AVAIL (240 - 12)
+#define CARD_USABLE 102
+#define CARD_SMALL_H (FONT5X7_HEIGHT * FONT5X7_MIN_READABLE_SCALE)
+#define CARD_AMOUNT_Y (6 + CARD_SMALL_H + FONT5X7_CARD_GAP)
+
+static void test_confirm_card_amount_stays_readable(void) {
+    /* Every one of these rendered at the 21px minimum when the unit/label and
+     * id lines were reserved for too. The short ones have room to spare. */
+    UL_CHECK(font5x7_card_amount_scale("21", CARD_AVAIL, CARD_USABLE, CARD_AMOUNT_Y, 1)
+                 > FONT5X7_MIN_READABLE_SCALE,
+             "a two-digit amount on a confirm card is bigger than the minimum");
+    UL_CHECK(font5x7_card_amount_scale("100 000", CARD_AVAIL, CARD_USABLE, CARD_AMOUNT_Y, 1)
+                 > FONT5X7_MIN_READABLE_SCALE,
+             "and so is a six-digit one -- this is the case that regressed");
+    UL_CHECK(font5x7_card_amount_scale("1 000 000", CARD_AVAIL, CARD_USABLE, CARD_AMOUNT_Y, 1)
+                 > FONT5X7_MIN_READABLE_SCALE,
+             "and a seven-digit one, the size the whole card was rebuilt over");
+}
+
+static void test_confirm_card_still_leaves_the_hint_room(void) {
+    /* The other side of the same trade: whatever the digits take, a readable
+     * hint line must still fit under them. This is the failure the reservation
+     * exists for, and it must not come back while fixing the overcorrection. */
+    const char *amounts[] = {"21", "2 100", "100 000", "1 000 000", "21 000 000"};
+    for (unsigned i = 0; i < sizeof(amounts) / sizeof(*amounts); i++) {
+        const int scale =
+            font5x7_card_amount_scale(amounts[i], CARD_AVAIL, CARD_USABLE, CARD_AMOUNT_Y, 1);
+        UL_CHECK(scale > 0, "the amount is drawn at all");
+        const int after = CARD_AMOUNT_Y + FONT5X7_HEIGHT * scale + FONT5X7_CARD_GAP;
+        UL_CHECK(after + CARD_SMALL_H <= CARD_USABLE,
+                 "a readable hint still fits under the amount");
+        UL_CHECK(font5x7_text_width(amounts[i], scale) <= CARD_AVAIL,
+                 "and the amount itself fits the width");
+    }
+}
+
+static void test_card_amount_scale_refuses_to_draw_the_unreadable(void) {
+    /* When the budget cannot afford even a minimum line, the answer is 0 -- do
+     * not draw. font5x7_fit_scale clamps a too-small max back UP to the
+     * readable minimum, so asking it directly here would return a full-height
+     * amount and push the hint off the bottom: the original bug exactly. */
+    UL_CHECK(font5x7_card_amount_scale("21", CARD_AVAIL, 40, CARD_AMOUNT_Y, 1) == 0,
+             "no amount at all beats an unreadable one");
+    UL_CHECK(font5x7_card_amount_scale(NULL, CARD_AVAIL, CARD_USABLE, CARD_AMOUNT_Y, 1) == 0,
+             "and a missing amount draws nothing");
+    UL_CHECK(font5x7_card_amount_scale("", CARD_AVAIL, CARD_USABLE, CARD_AMOUNT_Y, 1) == 0,
+             "an empty one too");
+}
+
+static void test_a_card_with_no_hint_gives_the_digits_the_room(void) {
+    /* The browse card passes no hint, so nothing is reserved and the digits get
+     * everything the width allows. It must not be taxed for a line it does not
+     * draw. */
+    UL_CHECK(font5x7_card_amount_scale("100 000", CARD_AVAIL, CARD_USABLE, 6, 0) >=
+                 font5x7_card_amount_scale("100 000", CARD_AVAIL, CARD_USABLE, CARD_AMOUNT_Y, 1),
+             "a card with no hint is never worse off than one with");
+}
+
 void test_note_display_run(void) {
     printf("-- note_display --\n");
     test_whole_sats();
@@ -368,4 +435,8 @@ void test_note_display_run(void) {
     test_fit_scale_returns_the_largest_that_fits();
     test_fit_scale_never_goes_below_readable();
     test_the_amount_gets_a_big_scale_on_a_real_panel();
+    test_confirm_card_amount_stays_readable();
+    test_confirm_card_still_leaves_the_hint_room();
+    test_card_amount_scale_refuses_to_draw_the_unreadable();
+    test_a_card_with_no_hint_gives_the_digits_the_room();
 }
