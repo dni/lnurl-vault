@@ -787,8 +787,8 @@ regression on its first run; see
    (including a message deliberately larger than one MTU, to exercise
    reassembly), and confirm the notified response reassembles correctly.
 4. Exercise on-device browsing with at least two `CONFIRMED` notes: tap to
-   enter browse mode (watch it blink out position 1), tap again (blinks
-   position 2), hold both buttons together (~200ms) to unveil — confirm a
+   enter browse mode (the card names the note and its position), tap again
+   for the next one, hold both buttons together (~200ms) to unveil — confirm a
    QR appears, and scan it with a stock phone camera: it should open the
    wallet with that note claimable (the payload is an https claim link by
    default — see `docs/PROTOCOL.md`'s "On-device note browsing", and issue

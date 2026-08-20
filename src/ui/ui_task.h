@@ -10,11 +10,10 @@
  * purposes that must never fight over them concurrently:
  *
  *  1. Local, offline note browsing: tap either button to cycle through
- *     CONFIRMED notes (display_flash_count() blinks out the 1-based
- *     position so far, since there's no on-screen text yet — see
- *     README.md's "Known limitations"), hold both together for ~200ms
- *     ("the chord") to unveil the selected note's lnurlw:// URL as a QR
- *     code. See docs/PROTOCOL.md's "On-device note browsing" section.
+ *     CONFIRMED notes, each drawn with its amount, label, id and position,
+ *     then hold both together for ~200ms ("the chord") to unveil the
+ *     selected note as a QR. See docs/PROTOCOL.md's "On-device note
+ *     browsing" section.
  *  2. Servicing remote export_secret confirm requests from dispatcher.c,
  *     via ui_task_request_remote_confirm() below — the same physical
  *     confirm/cancel gate main.c wired up before this feature existed.
