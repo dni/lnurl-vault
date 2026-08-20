@@ -29,7 +29,7 @@ CC ?= gcc
 # which is exactly how it reached main.
 CJSON_CFLAGS := $(shell pkg-config --cflags libcjson)
 CJSON_LIBS := $(shell pkg-config --libs libcjson)
-CFLAGS = -std=c11 -Wall -Wextra -Werror -I../../src/vault -I../../src/proto -I../../src/ota -I../../src/ui -I. $(CJSON_CFLAGS)
+CFLAGS = -std=c11 -Wall -Wextra -Werror -I../../src/vault -I../../src/proto -I../../src/ota -I../../src/ui -I../../src/board -Ihostgfx -I. $(CJSON_CFLAGS)
 SRC = ../../src/vault/sha256.c \
       ../../src/vault/hex.c \
       ../../src/vault/vault.c \
@@ -42,6 +42,8 @@ SRC = ../../src/vault/sha256.c \
       ../../src/proto/ble_frame.c \
       ../../src/proto/note_display.c \
       ../../src/ui/font5x7.c \
+      ../../src/ui/display.c \
+      hostgfx/hostgfx.c \
       ../../src/proto/line_proto.c \
       ../../src/proto/approval.c \
       ../../src/proto/input_health.c \
@@ -77,7 +79,7 @@ BIN = vault_tests
 
 # Headers are prerequisites too: without them, editing a .h leaves a stale
 # binary in place and the next `make test` silently reports the old result.
-HDR = $(wildcard ../../src/vault/*.h ../../src/proto/*.h *.h)
+HDR = $(wildcard ../../src/vault/*.h ../../src/proto/*.h ../../src/ui/*.h hostgfx/*.h hostgfx/freertos/*.h *.h)
 
 # Address + Undefined Behaviour sanitizers over the same suite. Near-free and
 # high-yield in a codebase built on fixed buffers and memcpy; CI runs this as a
@@ -87,7 +89,17 @@ HDR = $(wildcard ../../src/vault/*.h ../../src/proto/*.h *.h)
 SAN_BIN = vault_tests_san
 SAN_FLAGS = -fsanitize=address,undefined -fno-sanitize-recover=all -g -O1
 
-.PHONY: test test-sanitize clean
+# Renders every screen the firmware can draw, at both panel geometries, as
+# PNGs -- the thing that was missing when a hold hint could be computed,
+# reserved for and silently dropped, and the only way anyone noticed was a
+# photograph of a board. Built from the SAME src/ui/display.c the firmware
+# runs; see hostgfx/hostgfx.h.
+PREVIEW_BIN = vault_preview
+PREVIEW_SRC = ../../src/ui/display.c ../../src/ui/font5x7.c ../../src/proto/note_display.c \
+              hostgfx/hostgfx.c preview.c
+PREVIEW_OUT ?= preview
+
+.PHONY: test test-sanitize preview clean
 test: $(BIN)
 	./$(BIN)
 
@@ -98,5 +110,12 @@ test-sanitize: $(SRC) $(HDR)
 	$(CC) $(CFLAGS) $(SAN_FLAGS) -o $(SAN_BIN) $(SRC) $(CJSON_LIBS)
 	./$(SAN_BIN)
 
+preview: $(PREVIEW_BIN)
+	./$(PREVIEW_BIN) $(PREVIEW_OUT)
+
+$(PREVIEW_BIN): $(PREVIEW_SRC) $(HDR)
+	$(CC) $(CFLAGS) -o $(PREVIEW_BIN) $(PREVIEW_SRC)
+
 clean:
-	rm -f $(BIN) $(SAN_BIN)
+	rm -f $(BIN) $(SAN_BIN) $(PREVIEW_BIN)
+	rm -rf $(PREVIEW_OUT)

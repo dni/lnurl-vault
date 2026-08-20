@@ -297,7 +297,7 @@ relevant file's own header comment as a starting point if it does.
 `src/vault/` and `src/proto/` (the note state machine, SHA-256, hex, base64,
 JSON reader/writer, command dispatcher, button gesture state machine, and
 `lnurlw://` URL builder) are pure portable C with no ESP-IDF dependency at
-all, and are additionally exercised by `test/native/` — **767/767
+all, and are additionally exercised by `test/native/` — **933/933
 assertions pass** — independent of the ESP32 build. This is the security-
 and protocol-critical logic, including the debounce/tap/chord logic gating
 every plaintext-secret disclosure and the OTA signature-verification/
@@ -712,7 +712,7 @@ needs the system cJSON library — `pacman -S cjson` or
 cd test/native && make test
 ```
 
-This actually runs in this environment — 767 assertions across SHA-256
+This actually runs in this environment — 933 assertions across SHA-256
 known-answer vectors, JSON reader/writer round-trips (including escaping and
 the overflow-detection path), the full vault state machine (legal and
 illegal state transitions, split/merge parent lineage, the id-collision
@@ -729,7 +729,28 @@ all-zero placeholder key all fail closed), and the full `ota_begin`/
 "flash" (happy path, bad signature, declined/timed-out approval, a
 wrong-offset chunk that doesn't kill the session, no-active-session errors,
 an early finish, a corrupted transfer caught at the finish-time re-verify,
-and recovery via a fresh `ota_begin` after an abort).
+and recovery via a fresh `ota_begin` after an abort)).
+
+**Screen previews** (no board, no PlatformIO):
+
+```sh
+cd test/native && make preview      # PNGs in test/native/preview/
+```
+
+Renders every card the firmware can draw — idle, browse, each confirm verb,
+the outcome states, and the awkward cases (a seven-figure amount, a label
+longer than the panel, a sub-sat note) — at both real panel geometries, as
+PNGs you can open.
+
+They are drawn by `src/ui/display.c` itself against a framebuffer, not by a
+second implementation that would drift from it: `test/native/hostgfx/`
+stands in for the four ESP-IDF pieces that file uses, so what comes out is
+what the glass gets, at the same width, height and font. This exists because every display fault this project has shipped was a layout
+fault, none was reachable from the build, and each was found by a person
+squinting at a board — one of them only from a photograph. A confirm card is
+a security control: it is the entire content of "physically approve this".
+There should be a way to look at one without flashing a device, and now there
+is.
 
 **Hardware verification** (needs a flashed board):
 
