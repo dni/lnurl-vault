@@ -66,6 +66,37 @@ static uint16_t *next_row(void) {
 
 static display_state_t g_current_state = DISPLAY_STATE_IDLE;
 
+/* Where the card ends and the progress bar begins.
+ *
+ * Derived in ONE place and used by both, because two functions each working
+ * out "where the bar is" from the panel height is exactly how a line came to
+ * be computed, reserved for, and then drawn one pixel into a band that was
+ * not its own.
+ *
+ * The bar used to take an eighth of the panel plus a twelfth of it again as
+ * bottom margin -- 27 of the classic T-Display's 135 rows, a fifth of the
+ * screen, for a progress indicator. That left 102 rows for a card that has
+ * four things to say, and four readable lines plus their gaps do not fit in
+ * 102 without holding the amount to the 21-pixel height a person on real
+ * hardware could not read. Slimming the bar is what makes the whole card fit:
+ * a 180-pixel-wide bar reads perfectly well at 8 rows.
+ */
+#define CARD_MARGIN 6
+
+static int progress_bar_h(void) {
+    const int h = g_height / 16;
+    return h < 6 ? 6 : h;
+}
+
+static int progress_bar_top(void) {
+    return g_height - CARD_MARGIN - progress_bar_h();
+}
+
+/* One past the last row a card may draw on. */
+static int card_usable_h(void) {
+    return progress_bar_top() - FONT5X7_CARD_GAP;
+}
+
 
 
 static uint16_t color_for_state(display_state_t state) {
@@ -225,10 +256,10 @@ void display_note_detail(display_state_t state, const char *action, const char *
      * means a short amount gets big automatically, which is the common case.
      *
      * The lower band is left clear for display_progress(). */
-    const int margin = 6;
+    const int margin = CARD_MARGIN;
     const int avail = g_width - 2 * margin;
-    /* Keep out of the progress bar's band -- see display_progress(). */
-    const int usable_h = g_height - (g_height / 8) - (g_height / 12) - margin;
+    /* Keep out of the progress bar's band -- see card_usable_h(). */
+    const int usable_h = card_usable_h();
     const int small_h = FONT5X7_HEIGHT * FONT5X7_MIN_READABLE_SCALE;
     /* One gap for reserving and for advancing alike -- see FONT5X7_CARD_GAP,
      * which is where the reason it must be a single constant is written down. */
@@ -285,8 +316,8 @@ void display_note_detail(display_state_t state, const char *action, const char *
      * tested without a board -- including which lines are reserved for, which
      * is the part that got this wrong last time. */
     if (amount_num && amount_num[0]) {
-        const int scale = font5x7_card_amount_scale(amount_num, avail, usable_h, y,
-                                                     hint && hint[0]);
+        const int lines_below = (second[0] ? 1 : 0) + ((hint && hint[0]) ? 1 : 0);
+        const int scale = font5x7_card_amount_scale(amount_num, avail, usable_h, y, lines_below);
         if (scale > 0) {
             display_text(margin, y, amount_num, scale, ink, bg);
             y += FONT5X7_HEIGHT * scale + gap;
@@ -311,9 +342,18 @@ void display_note_detail(display_state_t state, const char *action, const char *
         display_text(margin, y, id, FONT5X7_MIN_READABLE_SCALE, ink, bg);
         y += small_h + gap;
     }
-    /* Last, nearest the bar it describes. */
-    if (hint && hint[0] && y + small_h <= usable_h) {
-        display_text(margin, y, hint, FONT5X7_MIN_READABLE_SCALE, ink, bg);
+    /* Pinned to the bottom of the card, against the bar it describes, rather
+     * than laid out after whatever came before it. The gesture is the one line
+     * that must never be the one that falls off: a card that does not say the
+     * approval is a two-second HOLD leaves tapping -- and then concluding the
+     * device is dead -- as the obvious thing to try, which is exactly what
+     * happened. Everything above it is allowed to run out of room. This one
+     * has its own row and keeps it. */
+    if (hint && hint[0]) {
+        const int hint_y = usable_h - small_h;
+        if (hint_y >= y - gap && hint_y >= margin) {
+            display_text(margin, hint_y, hint, FONT5X7_MIN_READABLE_SCALE, ink, bg);
+        }
     }
 }
 
@@ -332,8 +372,8 @@ void display_progress(uint16_t permille) {
      * that the owner can read what they are approving while they hold. */
     int margin = g_width / 8;
     int track_w = g_width - 2 * margin;
-    int bar_h = g_height / 8;
-    int y = g_height - bar_h - (g_height / 12);
+    int bar_h = progress_bar_h();
+    int y = progress_bar_top();
     if (track_w <= 2 || bar_h <= 2) {
         return; /* a panel too small to draw a meaningful bar on */
     }

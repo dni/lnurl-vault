@@ -62,6 +62,7 @@ SRC = ../../src/vault/sha256.c \
       test_note_url.c \
       test_ble_frame.c \
       test_note_display.c \
+      test_card_render.c \
       test_line_proto.c \
       test_approval.c \
       test_input_health.c \

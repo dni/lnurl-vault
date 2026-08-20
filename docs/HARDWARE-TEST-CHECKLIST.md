@@ -546,3 +546,35 @@ verbs are capped at 12 characters because that is what fits across it at
 > which has been put on a panel; a seven-digit amount; and **the whole of this
 > on the S3**, whose larger panel takes a different branch of the fitting
 > logic (the amount grows to scale 5-6 there rather than staying at 3).
+>
+> **That record is stale, and the commit after it broke the card again.**
+> Reserving room for the unit/label and id lines was what made all four fit
+> above, and it did so by holding the digits to 21 pixels — the height a
+> person on this same bench had already called too small to read. Removing the
+> reservation gave the digits their room back and handed the hint's row to the
+> unit/label line, so `HOLD BTN1 2s` was once more computed, budgeted for and
+> never drawn: on the 240x135 panel, on every card that has a label, which is
+> every real one. The S3 was unaffected, which is why nothing on the bench
+> caught it either.
+>
+> Nobody found this on a board. It was found by `make preview` (see
+> [Verification](../README.md#verification)) on the very first run, and the
+> assertion that now holds it down is in `test/native/test_card_render.c` —
+> which draws with the firmware's own `display.c` at the real panel geometry
+> and counts pixels, rather than re-deriving the arithmetic and agreeing with
+> it. Three display faults have now shipped in this project; all three were
+> layout, none was reachable from the build, and this is the first one caught
+> before anyone had to look at hardware.
+>
+> The underlying problem was that 102 usable rows do not hold four readable
+> lines and their gaps, so the two fixes traded the same pixels back and
+> forth. The bar was taking a fifth of the panel — an eighth of the height,
+> plus a twelfth again as bottom margin. It is now `h/16` (8 rows on the
+> classic, 10 on the S3), which is still an obvious bar at 180px wide, and the
+> card has 118 rows to work with. All four lines fit at once, with the digits
+> at scale 4-5 rather than 3. The hint is also pinned to the bottom of the
+> card now rather than laid out after whatever precedes it: it is the one line
+> that must never be the one that falls off.
+>
+> **Wants a bench run:** the slimmer bar on real glass, both panels — the
+> geometry is only checked against a framebuffer.

@@ -348,46 +348,57 @@ static void test_the_amount_gets_a_big_scale_on_a_real_panel(void) {
     UL_CHECK(font5x7_text_width("100 000", s) <= avail, "and genuinely fits");
 }
 
-/* The confirm card on the real panel: 240x135, 6px margins, and a usable
- * height of 102 once display_progress()'s band is kept clear. The action line
- * sits above the amount, so the amount starts at 6 + 21 + gap.
+/* The confirm card on the narrow panel: 240x135, 6px margins, and a usable
+ * height of 118 once display_progress()'s band is kept clear -- see
+ * display.c's card_usable_h(), which is 135 less the margin, less an 8-row
+ * bar, less the gap above it. The action line sits above the amount, so the
+ * amount starts at 6 + 21 + gap.
  *
- * This is the geometry the hold hint was dropped on, and then the geometry the
- * fix for that overcorrected on: reserving for the unit/label and id lines as
- * well left the digits 24 pixels, which is scale 3 for every amount there is.
- * Both failures are one arithmetic slip in the same six lines, and neither is
- * visible without a board unless it is pinned here. */
+ * That band used to be 33 rows rather than 17, leaving 102, and 102 is not
+ * enough for four readable lines and their gaps. Every failure below came out
+ * of trying to fit them in anyway: first the hold hint was dropped, then the
+ * fix for that reserved for the unit/label and id lines too and left the
+ * digits 24 pixels, which is scale 3 for every amount there is. Neither is
+ * visible without a board unless it is pinned here -- and neither could be
+ * SEEN at all until test/native/hostgfx existed. */
 #define CARD_AVAIL (240 - 12)
-#define CARD_USABLE 102
+#define CARD_USABLE 118
 #define CARD_SMALL_H (FONT5X7_HEIGHT * FONT5X7_MIN_READABLE_SCALE)
 #define CARD_AMOUNT_Y (6 + CARD_SMALL_H + FONT5X7_CARD_GAP)
 
+/* What a real confirm card reserves under the amount: the unit/label line and
+ * the gesture hint. The note id is not reserved for -- it is droppable, and it
+ * is not on the confirm card anyway. */
+#define CARD_LINES_BELOW 2
+
 static void test_confirm_card_amount_stays_readable(void) {
     /* Every one of these rendered at the 21px minimum when the unit/label and
-     * id lines were reserved for too. The short ones have room to spare. */
-    UL_CHECK(font5x7_card_amount_scale("21", CARD_AVAIL, CARD_USABLE, CARD_AMOUNT_Y, 1)
-                 > FONT5X7_MIN_READABLE_SCALE,
+     * id lines were reserved for out of a 102-row card. With the bar slimmed
+     * they clear it comfortably, WITH both lines below still reserved. */
+    UL_CHECK(font5x7_card_amount_scale("21", CARD_AVAIL, CARD_USABLE, CARD_AMOUNT_Y,
+                                       CARD_LINES_BELOW) > FONT5X7_MIN_READABLE_SCALE,
              "a two-digit amount on a confirm card is bigger than the minimum");
-    UL_CHECK(font5x7_card_amount_scale("100 000", CARD_AVAIL, CARD_USABLE, CARD_AMOUNT_Y, 1)
-                 > FONT5X7_MIN_READABLE_SCALE,
+    UL_CHECK(font5x7_card_amount_scale("100 000", CARD_AVAIL, CARD_USABLE, CARD_AMOUNT_Y,
+                                       CARD_LINES_BELOW) > FONT5X7_MIN_READABLE_SCALE,
              "and so is a six-digit one -- this is the case that regressed");
-    UL_CHECK(font5x7_card_amount_scale("1 000 000", CARD_AVAIL, CARD_USABLE, CARD_AMOUNT_Y, 1)
-                 > FONT5X7_MIN_READABLE_SCALE,
+    UL_CHECK(font5x7_card_amount_scale("1 000 000", CARD_AVAIL, CARD_USABLE, CARD_AMOUNT_Y,
+                                       CARD_LINES_BELOW) > FONT5X7_MIN_READABLE_SCALE,
              "and a seven-digit one, the size the whole card was rebuilt over");
 }
 
 static void test_confirm_card_still_leaves_the_hint_room(void) {
-    /* The other side of the same trade: whatever the digits take, a readable
-     * hint line must still fit under them. This is the failure the reservation
-     * exists for, and it must not come back while fixing the overcorrection. */
+    /* The other side of the same trade: whatever the digits take, BOTH lines
+     * below must still fit -- the unit (without which "21" does not say 21 of
+     * what) and the gesture. Reserving for only one of them is what let the
+     * unit/label line eat the hint's row on every card that had a label. */
     const char *amounts[] = {"21", "2 100", "100 000", "1 000 000", "21 000 000"};
     for (unsigned i = 0; i < sizeof(amounts) / sizeof(*amounts); i++) {
-        const int scale =
-            font5x7_card_amount_scale(amounts[i], CARD_AVAIL, CARD_USABLE, CARD_AMOUNT_Y, 1);
+        const int scale = font5x7_card_amount_scale(amounts[i], CARD_AVAIL, CARD_USABLE,
+                                                     CARD_AMOUNT_Y, CARD_LINES_BELOW);
         UL_CHECK(scale > 0, "the amount is drawn at all");
         const int after = CARD_AMOUNT_Y + FONT5X7_HEIGHT * scale + FONT5X7_CARD_GAP;
-        UL_CHECK(after + CARD_SMALL_H <= CARD_USABLE,
-                 "a readable hint still fits under the amount");
+        UL_CHECK(after + CARD_SMALL_H + FONT5X7_CARD_GAP + CARD_SMALL_H <= CARD_USABLE,
+                 "the unit line and a readable hint both still fit under the amount");
         UL_CHECK(font5x7_text_width(amounts[i], scale) <= CARD_AVAIL,
                  "and the amount itself fits the width");
     }
@@ -398,11 +409,14 @@ static void test_card_amount_scale_refuses_to_draw_the_unreadable(void) {
      * not draw. font5x7_fit_scale clamps a too-small max back UP to the
      * readable minimum, so asking it directly here would return a full-height
      * amount and push the hint off the bottom: the original bug exactly. */
-    UL_CHECK(font5x7_card_amount_scale("21", CARD_AVAIL, 40, CARD_AMOUNT_Y, 1) == 0,
+    UL_CHECK(font5x7_card_amount_scale("21", CARD_AVAIL, 40, CARD_AMOUNT_Y, CARD_LINES_BELOW)
+                 == 0,
              "no amount at all beats an unreadable one");
-    UL_CHECK(font5x7_card_amount_scale(NULL, CARD_AVAIL, CARD_USABLE, CARD_AMOUNT_Y, 1) == 0,
+    UL_CHECK(font5x7_card_amount_scale(NULL, CARD_AVAIL, CARD_USABLE, CARD_AMOUNT_Y,
+                                       CARD_LINES_BELOW) == 0,
              "and a missing amount draws nothing");
-    UL_CHECK(font5x7_card_amount_scale("", CARD_AVAIL, CARD_USABLE, CARD_AMOUNT_Y, 1) == 0,
+    UL_CHECK(font5x7_card_amount_scale("", CARD_AVAIL, CARD_USABLE, CARD_AMOUNT_Y,
+                                       CARD_LINES_BELOW) == 0,
              "an empty one too");
 }
 
@@ -411,7 +425,8 @@ static void test_a_card_with_no_hint_gives_the_digits_the_room(void) {
      * everything the width allows. It must not be taxed for a line it does not
      * draw. */
     UL_CHECK(font5x7_card_amount_scale("100 000", CARD_AVAIL, CARD_USABLE, 6, 0) >=
-                 font5x7_card_amount_scale("100 000", CARD_AVAIL, CARD_USABLE, CARD_AMOUNT_Y, 1),
+                 font5x7_card_amount_scale("100 000", CARD_AVAIL, CARD_USABLE, CARD_AMOUNT_Y,
+                                            CARD_LINES_BELOW),
              "a card with no hint is never worse off than one with");
 }
 

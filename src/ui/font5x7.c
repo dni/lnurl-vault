@@ -162,12 +162,15 @@ int font5x7_fit_scale(const char *text, int avail_w, int max_scale) {
 }
 
 int font5x7_card_amount_scale(const char *amount_num, int avail_w, int usable_h,
-                              int y, int has_hint) {
+                              int y, int lines_below) {
     if (!amount_num || !amount_num[0]) {
         return 0;
     }
+    if (lines_below < 0) {
+        lines_below = 0;
+    }
     const int small_h = FONT5X7_HEIGHT * FONT5X7_MIN_READABLE_SCALE;
-    const int reserved = has_hint ? small_h + FONT5X7_CARD_GAP : 0;
+    const int reserved = lines_below * (small_h + FONT5X7_CARD_GAP);
     const int room_h = usable_h - y - reserved;
     if (room_h < small_h) {
         return 0;

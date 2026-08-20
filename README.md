@@ -729,7 +729,11 @@ all-zero placeholder key all fail closed), and the full `ota_begin`/
 "flash" (happy path, bad signature, declined/timed-out approval, a
 wrong-offset chunk that doesn't kill the session, no-active-session errors,
 an early finish, a corrupted transfer caught at the finish-time re-verify,
-and recovery via a fresh `ota_begin` after an abort)).
+and recovery via a fresh `ota_begin` after an abort), and — since the
+screens became testable — what actually reaches the panel: that every line a
+confirm card promises is drawn on both real geometries, that nothing is drawn
+off the glass or into the progress bar's band, and that no line reaches the
+panel edge.
 
 **Screen previews** (no board, no PlatformIO):
 
@@ -745,12 +749,16 @@ PNGs you can open.
 They are drawn by `src/ui/display.c` itself against a framebuffer, not by a
 second implementation that would drift from it: `test/native/hostgfx/`
 stands in for the four ESP-IDF pieces that file uses, so what comes out is
-what the glass gets, at the same width, height and font. This exists because every display fault this project has shipped was a layout
+what the glass gets, at the same width, height and font. `make test` uses the
+same harness to assert about pixels (`test_card_render.c`).
+
+This exists because every display fault this project has shipped was a layout
 fault, none was reachable from the build, and each was found by a person
 squinting at a board — one of them only from a photograph. A confirm card is
 a security control: it is the entire content of "physically approve this".
 There should be a way to look at one without flashing a device, and now there
-is.
+is. It found a live regression on its first run — see
+[section 19](docs/HARDWARE-TEST-CHECKLIST.md) of the hardware checklist.
 
 **Hardware verification** (needs a flashed board):
 

@@ -86,17 +86,25 @@ int font5x7_fit_scale(const char *text, int avail_w, int max_scale);
  * unreadable one.
  *
  * `y` is where the amount would start (already past the action line, if any).
- * Only the hint is reserved for. The unit/label and id lines keep their own
- * draw-if-it-fits guards at the call site: reserving for them as well taxes
- * the amount by two more rows, which on the 240x135 panel pins every confirm
- * card's digits to the readable minimum - the exact 21-pixel height this
- * header and display.h both record as unreadable on real hardware. A label is
- * worth less than legible digits.
+ * `lines_below` is how many readable-minimum lines still have to fit under it.
+ *
+ * Which lines those are is a priority decision and it has been got wrong in
+ * both directions. Reserving for everything pinned the digits to the readable
+ * minimum on the 240x135 panel -- the exact 21-pixel height a person on real
+ * hardware called too small to read. Reserving for nothing let the unit/label
+ * line eat the gesture hint's room, so "HOLD BTN1 2s" was budgeted for,
+ * computed, and then silently dropped off the bottom of every confirm card
+ * that had a label. Both shipped.
+ *
+ * The order that survives both: the verb, then legible digits, then the unit
+ * and the gesture, then everything else. So callers reserve for the unit/label
+ * line and the hint, and let the note id drop.
  *
  * Here, and tested, for the same reason fit_scale is: this arithmetic is where
- * the display failures actually live, and none of it can be checked on a
- * board. */
+ * the display failures actually live. What it cannot tell you is whether the
+ * result reached the glass -- test/native/test_card_render.c does that, by
+ * running the real drawing code and counting pixels. */
 int font5x7_card_amount_scale(const char *amount_num, int avail_w, int usable_h,
-                              int y, int has_hint);
+                              int y, int lines_below);
 
 #endif
