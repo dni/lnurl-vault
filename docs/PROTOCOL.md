@@ -557,10 +557,12 @@ involved in this flow.
 | ~15s with no input while browsing | Back to idle |
 
 Only `CONFIRMED` notes are browsable (a `PENDING` note has no settled value
-yet; `SPENT` notes have nothing left to show). There's no on-screen text yet
-(see README.md's "Known limitations"), so the display blinks the selected
-note's 1-based position among `CONFIRMED` notes instead of printing a
-number.
+yet; `SPENT` notes have nothing left to show). The browse card shows the
+selected note's amount, unit, label and id, plus its 1-based position among
+`CONFIRMED` notes — so unveiling the wrong one takes a deliberate misreading
+rather than a miscount. At rest, before any of that, the screen shows how many
+`CONFIRMED` notes the device holds and that a tap will show them; it does not
+show what they are worth.
 
 **What the QR encodes.** By default a plain `https://` claim link into a
 wallet, `<wallet>/#/claim?u=<host>&k1=<secret>&a=<msat>` — because a stock

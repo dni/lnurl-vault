@@ -120,4 +120,10 @@ approval_state_t approval_poll(approval_t *a, bool approve_pressed, bool cancel_
  * contact, or it reads as the device losing the press. */
 uint16_t approval_progress_permille(const approval_t *a, int64_t now_us);
 
+/* True while a button already down when the prompt began has not been seen
+ * released. Exposed so the screen can say so: from the owner's side the rule
+ * is indistinguishable from a device ignoring them, and the response to that
+ * is to press harder, at the screen where that is least wanted. */
+bool approval_waiting_for_release(const approval_t *a);
+
 #endif

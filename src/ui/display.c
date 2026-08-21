@@ -2,22 +2,19 @@
  * controller-RAM offset -- belongs to src/board/, so nothing here knows or
  * cares which board it is running on or how the glass is wired.
  *
- * v1 deliberately does NOT render note text (id/amount/label) on screen. See
- * README.md's "Known limitations" for why, and note that this is the single
- * biggest remaining gap in the security model: a confirm prompt that cannot
- * name the note it is asking about is a "press to continue", not a
- * confirmation. Adding real text is the natural next step now that a panel
- * can actually be brought up and checked on a bench.
+ * Three kinds of screen: a note card (dense fields, display_note_detail), a
+ * message (two or three centred lines, display_message), and the hold bar.
+ * Colours are named in palette.h and the ink is per state, not always black.
  *
- * Until then this still gives a real signal -- a distinct full-screen colour
- * per state, and a blinked-out position count while browsing -- and the
- * gating itself (confirm/cancel/timeout) is fully functional regardless of
- * what is drawn. */
+ * test/native/hostgfx stands in for ESP-IDF underneath this file, so
+ * `make preview` renders every screen to a PNG without a board and
+ * test_card_render.c asserts about the pixels. */
 #include "display.h"
 
 #include <string.h>
 
 #include "font5x7.h"
+#include "palette.h"
 
 #include "board.h"
 #include "esp_heap_caps.h"
@@ -66,25 +63,59 @@ static uint16_t *next_row(void) {
 
 static display_state_t g_current_state = DISPLAY_STATE_IDLE;
 
+/* Where the card ends and the bar begins, in one place: two functions each
+ * deriving it from the panel height is how a line got drawn one pixel into a
+ * band that wasn't its own. The bar was h/8 plus h/12 of margin -- a fifth of
+ * the panel -- which left 102 rows, and four readable lines don't fit in 102
+ * without holding the amount to an unreadable 21px. */
+#define CARD_MARGIN 6
+
+static int progress_bar_h(void) {
+    const int h = g_height / 16;
+    return h < 6 ? 6 : h;
+}
+
+static int progress_bar_top(void) {
+    return g_height - CARD_MARGIN - progress_bar_h();
+}
+
+/* One past the last row a card may draw on. */
+static int card_usable_h(void) {
+    return progress_bar_top() - FONT5X7_CARD_GAP;
+}
 
 
-static uint16_t color_for_state(display_state_t state) {
+
+uint16_t display_state_color(display_state_t state) {
     switch (state) {
         case DISPLAY_STATE_IDLE:
-            return 0x39C7; /* muted grey-blue, RGB565 */
+            return PALETTE_IDLE;
         case DISPLAY_STATE_BROWSE:
-            return 0x781F; /* purple */
+            return PALETTE_BROWSE;
         case DISPLAY_STATE_CONFIRM_PENDING:
-            return 0xFEA0; /* amber */
+            return PALETTE_PENDING;
         case DISPLAY_STATE_APPROVED:
-            return 0x07E0; /* green */
+            return PALETTE_APPROVED;
         case DISPLAY_STATE_DECLINED:
-            return 0xF800; /* red */
+            return PALETTE_DECLINED;
         case DISPLAY_STATE_EXPIRED:
-            return 0x8410; /* mid grey: visibly not the amber of a live
-                            * prompt, and visibly not the red of a refusal */
+            return PALETTE_EXPIRED;
         default:
-            return 0x0000;
+            return PALETTE_INK_DARK;
+    }
+}
+
+/* Black was fine while only amber and green carried text. It is close to
+ * invisible on the dark grey the device now rests on. Per state, not per call
+ * site, so a new screen can't get it wrong. */
+uint16_t display_state_ink(display_state_t state) {
+    switch (state) {
+        case DISPLAY_STATE_IDLE:
+        case DISPLAY_STATE_BROWSE:
+        case DISPLAY_STATE_DECLINED:
+            return PALETTE_INK_LIGHT;
+        default:
+            return PALETTE_INK_DARK;
     }
 }
 
@@ -157,7 +188,7 @@ static void fill_screen(uint16_t color) {
 
 void display_set_state(display_state_t state) {
     g_current_state = state;
-    fill_screen(color_for_state(state));
+    fill_screen(display_state_color(state));
 }
 
 void display_text(int x, int y, const char *text, int scale, uint16_t fg, uint16_t bg) {
@@ -207,14 +238,15 @@ void display_text(int x, int y, const char *text, int scale, uint16_t fg, uint16
     }
 }
 
-void display_note_detail(display_state_t state, const char *amount_num,
-                          const char *amount_unit, const char *label, const char *id) {
+void display_note_detail(display_state_t state, const char *action, const char *amount_num,
+                          const char *amount_unit, const char *label, const char *id,
+                          const char *hint) {
     if (!display_ready()) {
         return;
     }
     g_current_state = state;
-    const uint16_t bg = color_for_state(state);
-    const uint16_t ink = 0x0000;
+    const uint16_t bg = display_state_color(state);
+    const uint16_t ink = display_state_ink(state);
     fill_screen(bg);
 
     /* Every line is drawn at the largest scale that fits the panel, rather
@@ -224,26 +256,20 @@ void display_note_detail(display_state_t state, const char *amount_num,
      * means a short amount gets big automatically, which is the common case.
      *
      * The lower band is left clear for display_progress(). */
-    const int margin = 6;
+    const int margin = CARD_MARGIN;
     const int avail = g_width - 2 * margin;
-    /* Keep out of the progress bar's band -- see display_progress(). */
-    const int usable_h = g_height - (g_height / 8) - (g_height / 12) - margin;
+    /* Keep out of the progress bar's band -- see card_usable_h(). */
+    const int usable_h = card_usable_h();
+    const int small_h = FONT5X7_HEIGHT * FONT5X7_MIN_READABLE_SCALE;
+    /* One gap for reserving and for advancing alike -- see FONT5X7_CARD_GAP,
+     * which is where the reason it must be a single constant is written down. */
+    const int gap = FONT5X7_CARD_GAP;
 
     int y = margin;
 
-    /* The digits get the FULL width, at the largest scale that fits. An
-     * earlier version reserved room for the unit on the same line, which cost
-     * 90 of 228 pixels and held a seven-digit amount down to the same 21-pixel
-     * height a person had already told us was too small to read. The unit goes
-     * on the next line with the label instead: it is a word, and the digits are
-     * the thing a mistake costs money on. */
-    if (amount_num && amount_num[0]) {
-        const int scale = font5x7_fit_scale(amount_num, avail, DISPLAY_MAX_TEXT_SCALE);
-        display_text(margin, y, amount_num, scale, ink, bg);
-        y += FONT5X7_HEIGHT * scale + 5;
-    }
-
-    /* Unit and label share a line: "sats  rent". */
+    /* Unit and label share a line: "sats  rent". Built before anything is
+     * drawn, because the amount's scale depends on how much room the lines
+     * BELOW it still need -- see the reservation below. */
     char second[40];
     second[0] = '\0';
     if (amount_unit && amount_unit[0]) {
@@ -269,13 +295,121 @@ void display_note_detail(display_state_t state, const char *amount_num,
         memcpy(second + used, label, n);
         second[used + n] = '\0';
     }
-    if (second[0] && y + FONT5X7_HEIGHT * FONT5X7_MIN_READABLE_SCALE <= usable_h) {
-        const int scale = font5x7_fit_scale(second, avail, FONT5X7_MIN_READABLE_SCALE + 1);
-        display_text(margin, y, second, scale, ink, bg);
-        y += FONT5X7_HEIGHT * scale + 4;
+
+    /* The verb, first: it is the difference between handing over one note's
+     * secret and erasing every note, which used to look identical here. */
+    if (action && action[0] && y + small_h <= usable_h) {
+        display_text(margin, y, action, FONT5X7_MIN_READABLE_SCALE, ink, bg);
+        y += small_h + gap;
     }
-    if (id && id[0] && y + FONT5X7_HEIGHT * FONT5X7_MIN_READABLE_SCALE <= usable_h) {
+
+    /* Full width for the digits. Reserving room for the unit on the same line
+     * cost 90 of 228 pixels and held a seven-digit amount to an unreadable
+     * 21px; the unit is a word, the digits are what a mistake costs money on.
+     * The budget is in font5x7_card_amount_scale(), where it is testable. */
+    if (amount_num && amount_num[0]) {
+        const int lines_below = (second[0] ? 1 : 0) + ((hint && hint[0]) ? 1 : 0);
+        const int scale = font5x7_card_amount_scale(amount_num, avail, usable_h, y, lines_below);
+        if (scale > 0) {
+            display_text(margin, y, amount_num, scale, ink, bg);
+            y += FONT5X7_HEIGHT * scale + gap;
+        }
+    }
+
+    if (second[0] && y + small_h <= usable_h) {
+        const int scale = font5x7_fit_scale(second, avail, FONT5X7_MIN_READABLE_SCALE + 1);
+        /* Cut it to what the width actually holds. font5x7_fit_scale cannot
+         * shrink below the readable minimum, so a long label otherwise runs
+         * off the panel and is clipped mid-glyph -- "card-check" rendered as
+         * "card-ch" with the h sliced down the middle, which reads as a
+         * different label rather than as a truncated one. */
+        const int fits = avail / (FONT5X7_ADVANCE * scale);
+        if (fits > 0 && (int)strlen(second) > fits) {
+            second[fits] = '\0';
+        }
+        display_text(margin, y, second, scale, ink, bg);
+        y += FONT5X7_HEIGHT * scale + gap;
+    }
+    if (id && id[0] && y + small_h <= usable_h) {
         display_text(margin, y, id, FONT5X7_MIN_READABLE_SCALE, ink, bg);
+        y += small_h + gap;
+    }
+    /* Pinned to the bottom rather than laid out after what precedes it: the
+     * gesture is the one line that must never be the one that falls off.
+     * Everything above may run out of room; this keeps its row. */
+    if (hint && hint[0]) {
+        const int hint_y = usable_h - small_h;
+        if (hint_y >= y - gap && hint_y >= margin) {
+            display_text(margin, hint_y, hint, FONT5X7_MIN_READABLE_SCALE, ink, bg);
+        }
+    }
+}
+
+/* Centred, or at the margin if wider than the panel: display_text refuses a
+ * negative x outright, so an over-long line would vanish rather than clip. */
+static void draw_centred(int y, const char *text, int scale, uint16_t ink, uint16_t bg) {
+    const int w = font5x7_text_width(text, scale);
+    int x = (g_width - w) / 2;
+    if (x < CARD_MARGIN) {
+        x = CARD_MARGIN;
+    }
+    display_text(x, y, text, scale, ink, bg);
+}
+
+void display_message(display_state_t state, const char *title, const char *line1,
+                     const char *line2) {
+    if (!display_ready()) {
+        return;
+    }
+    g_current_state = state;
+    const uint16_t bg = display_state_color(state);
+    const uint16_t ink = display_state_ink(state);
+    fill_screen(bg);
+
+    const int margin = CARD_MARGIN;
+    const int avail = g_width - 2 * margin;
+    const int small_h = FONT5X7_HEIGHT * FONT5X7_MIN_READABLE_SCALE;
+    /* Roomier than a card's 3px: two or three lines with the screen to
+     * themselves read as one block at that spacing. */
+    const int gap = small_h / 3;
+    /* No bar on a message, so this owns the whole panel. */
+    const int usable_h = g_height - 2 * margin;
+
+    const int extra = ((line1 && line1[0]) ? small_h + gap : 0) +
+                      ((line2 && line2[0]) ? small_h + gap : 0);
+
+    int title_scale = 0;
+    int block_h = extra > 0 ? extra - gap : 0;
+    if (title && title[0]) {
+        int room = usable_h - extra;
+        int max_scale = room / FONT5X7_HEIGHT;
+        if (max_scale > DISPLAY_MAX_TEXT_SCALE) {
+            max_scale = DISPLAY_MAX_TEXT_SCALE;
+        }
+        title_scale = font5x7_fit_scale(title, avail, max_scale);
+        block_h += FONT5X7_HEIGHT * title_scale + (extra > 0 ? gap : 0);
+    }
+    if (block_h <= 0) {
+        return;
+    }
+
+    /* Centred as a block: hung off the top it reads as a card that failed to
+     * finish drawing. */
+    int y = (g_height - block_h) / 2;
+    if (y < margin) {
+        y = margin;
+    }
+
+    if (title_scale > 0) {
+        draw_centred(y, title, title_scale, ink, bg);
+        y += FONT5X7_HEIGHT * title_scale + gap;
+    }
+    if (line1 && line1[0]) {
+        draw_centred(y, line1, FONT5X7_MIN_READABLE_SCALE, ink, bg);
+        y += small_h + gap;
+    }
+    if (line2 && line2[0]) {
+        draw_centred(y, line2, FONT5X7_MIN_READABLE_SCALE, ink, bg);
     }
 }
 
@@ -294,8 +428,8 @@ void display_progress(uint16_t permille) {
      * that the owner can read what they are approving while they hold. */
     int margin = g_width / 8;
     int track_w = g_width - 2 * margin;
-    int bar_h = g_height / 8;
-    int y = g_height - bar_h - (g_height / 12);
+    int bar_h = progress_bar_h();
+    int y = progress_bar_top();
     if (track_w <= 2 || bar_h <= 2) {
         return; /* a panel too small to draw a meaningful bar on */
     }
@@ -305,9 +439,9 @@ void display_progress(uint16_t permille) {
     /* Track, then fill. Repainting the whole track each call is what makes
      * this safe to call at any rate and in any order, including going
      * backwards if a hold restarts. */
-    display_fill_rect(margin, y, track_w, bar_h, 0x0000);
+    display_fill_rect(margin, y, track_w, bar_h, PALETTE_INK_DARK);
     if (filled > 0) {
-        display_fill_rect(margin, y, filled, bar_h, 0xFFFF);
+        display_fill_rect(margin, y, filled, bar_h, PALETTE_PAPER);
     }
 }
 
@@ -319,9 +453,9 @@ void display_flash_count(int count) {
         count = 20; /* don't turn a large note collection into a light show */
     }
     for (int i = 0; i < count; i++) {
-        fill_screen(0xFFFF); /* white */
+        fill_screen(PALETTE_PAPER); /* white */
         vTaskDelay(pdMS_TO_TICKS(150));
-        fill_screen(color_for_state(g_current_state));
+        fill_screen(display_state_color(g_current_state));
         vTaskDelay(pdMS_TO_TICKS(150));
     }
 }

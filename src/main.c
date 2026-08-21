@@ -34,6 +34,10 @@
 #include "vault.h"
 #include "vault_lock.h"
 
+#ifndef LNURLVAULT_FW_VERSION
+#define LNURLVAULT_FW_VERSION "0.0.0-native"
+#endif
+
 static const char *TAG = "main";
 
 static bool rng_fill(uint8_t *out, size_t len) {
@@ -253,6 +257,10 @@ void app_main(void) {
 
     buttons_init();
     display_init();
+    /* Stays up through storage and transport bring-up until ui_task replaces
+     * it; no delay is added for it. A flash that landed and one that silently
+     * did not are otherwise the same dark screen. */
+    display_message(DISPLAY_STATE_IDLE, "LNURL VAULT", "v" LNURLVAULT_FW_VERSION, BOARD_NAME);
     vault_lock_init();
     cmd_lock_init();
 

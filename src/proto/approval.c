@@ -104,6 +104,10 @@ approval_state_t approval_poll(approval_t *a, bool approve_pressed, bool cancel_
     return a->state;
 }
 
+bool approval_waiting_for_release(const approval_t *a) {
+    return a->state == APPROVAL_PENDING && (a->approve_stale || a->cancel_stale);
+}
+
 uint16_t approval_progress_permille(const approval_t *a, int64_t now_us) {
     if (a->state == APPROVAL_GRANTED) {
         return 1000;

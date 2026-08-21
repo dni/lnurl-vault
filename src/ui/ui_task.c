@@ -50,11 +50,27 @@ typedef struct {
     uint32_t timeout_ms;
     QueueHandle_t response_q;
     bool has_detail;
+    char action[24];
     char amount[NOTE_AMOUNT_BUF];
     char unit[8];
     char label[24];
     char id[VAULT_ID_BUF + 8];
 } remote_confirm_request_t;
+
+/* The gesture, said out loud on the card. approval.h makes approving a
+ * two-second hold of button 1; nothing on screen used to mention either the
+ * hold or the button, which left tapping -- and concluding the device was
+ * dead -- as the obvious thing to try. */
+#define CONFIRM_HINT "HOLD BTN1 2s"
+
+/* While a button already down when the prompt appeared has not been seen
+ * released -- nothing it does counts until then (approval.h), and the owner
+ * sees only a bar that will not fill. */
+#define RELEASE_HINT "LET GO FIRST"
+
+/* After the response, not in front of it: the card is for the person holding
+ * the device, and making the wallet wait for it helped nobody. */
+#define OUTCOME_HOLD_MS 1800
 
 static QueueHandle_t g_request_q;
 
@@ -135,7 +151,7 @@ static int confirmed_position(int idx) {
  * so the count the old flash conveyed is not lost. */
 static void show_browse_note(int browse_index, int position) {
     if (browse_index < 0) {
-        display_set_state(DISPLAY_STATE_BROWSE);
+        display_message(DISPLAY_STATE_BROWSE, "NO NOTES", NULL, NULL);
         return;
     }
     note_meta_t meta;
@@ -144,7 +160,7 @@ static void show_browse_note(int browse_index, int position) {
     got = vault_get_meta_at((size_t)browse_index, &meta);
     vault_lock_release();
     if (!got) {
-        display_set_state(DISPLAY_STATE_BROWSE);
+        display_message(DISPLAY_STATE_BROWSE, "NO NOTES", NULL, NULL);
         return;
     }
 
@@ -155,8 +171,75 @@ static void show_browse_note(int browse_index, int position) {
     note_format_amount_parts(meta.amount_msat, amount, sizeof(amount), unit, sizeof(unit));
     note_format_label(meta.label, label, sizeof(label));
     snprintf(id, sizeof(id), "%s  %d", meta.id, position);
-    display_note_detail(DISPLAY_STATE_BROWSE, amount, unit, label, id);
+    /* No verb and no gesture hint: browsing is not a prompt, and the chord
+     * that unveils from here is not the confirm hold. */
+    display_note_detail(DISPLAY_STATE_BROWSE, NULL, amount, unit, label, id, NULL);
 }
+
+/* PENDING notes have no settled value and cannot be browsed or exported, so
+ * they are not what the resting screen counts. */
+static size_t count_confirmed_locked(void) {
+    size_t confirmed = 0;
+    const size_t total = vault_count();
+    for (size_t i = 0; i < total; i++) {
+        note_meta_t meta;
+        if (vault_get_meta_at(i, &meta) && meta.state == NOTE_STATE_CONFIRMED) {
+            confirmed++;
+        }
+    }
+    return confirmed;
+}
+
+static size_t confirmed_count(void) {
+    vault_lock_acquire();
+    const size_t confirmed = count_confirmed_locked();
+    vault_lock_release();
+    return confirmed;
+}
+
+/* False if the vault is busy. The idle count is advisory and this runs once a
+ * second, so skipping a pass costs nothing -- whereas blocking would put
+ * ui_task behind a lock with no timeout for a number nobody is waiting on. */
+static bool try_confirmed_count(size_t *out) {
+    if (!vault_lock_try_acquire()) {
+        return false;
+    }
+    *out = count_confirmed_locked();
+    vault_lock_release();
+    return true;
+}
+
+/* The screen the device sits on all day. It was a flat dark rectangle, which
+ * says nothing about whether it is alive, paired or holding anything, and got
+ * pressed at to find out.
+ *
+ * How many notes, NOT what they are worth: a vault announcing its balance to
+ * the room is a different device from one that makes you ask. */
+static void draw_idle(size_t confirmed) {
+    char title[24];
+    if (confirmed == 0) {
+        snprintf(title, sizeof(title), "NO NOTES");
+    } else if (confirmed == 1) {
+        snprintf(title, sizeof(title), "1 NOTE");
+    } else {
+        snprintf(title, sizeof(title), "%u NOTES", (unsigned)confirmed);
+    }
+    /* Both second lines are 12 characters or fewer: that is what fits across
+     * the 240px panel at the readable minimum. */
+    display_message(DISPLAY_STATE_IDLE, title, confirmed > 0 ? "TAP TO VIEW" : "PAIR TO ADD",
+                    NULL);
+}
+
+static size_t show_idle(void) {
+    const size_t confirmed = confirmed_count();
+    draw_idle(confirmed);
+    return confirmed;
+}
+
+/* A flat colour could not go stale; a number can. Notes arrive and are spent
+ * over the wire with nobody near the device. Repaints only when the count
+ * actually moves, so an idle device is not blitting forever. */
+#define IDLE_RECOUNT_MS 1000
 
 static void wipe(char *buf, size_t len) {
     volatile char *p = (volatile char *)buf;
@@ -226,6 +309,20 @@ static void wdt_feed(void) {
     esp_task_wdt_reset();
 }
 
+/* The gesture line changes while the prompt is up (RELEASE_HINT), so both
+ * drawings go through here rather than diverging by a field.
+ *
+ * No note id: eight hex identify a note to the wallet, not to the person
+ * holding the device, and the row buys the gesture instead. It stays on the
+ * browse card, where picking a specific note is the point. A request with no
+ * note behind it (OTA, wipe) still gets the verb and the hint. */
+static void draw_confirm_card(const remote_confirm_request_t *req, const char *hint) {
+    display_note_detail(DISPLAY_STATE_CONFIRM_PENDING, req->action,
+                        req->has_detail ? req->amount : NULL,
+                        req->has_detail ? req->unit : NULL,
+                        req->has_detail ? req->label : NULL, NULL, hint);
+}
+
 /* The gate in front of every disclosure: a two-second hold on button 1, with
  * the hold drawn on screen as it fills. It used to be a single tap, which is
  * one pocket-brush away from handing out a bearer secret and gave no sign it
@@ -252,25 +349,29 @@ static confirm_result_t service_remote_confirm(const remote_confirm_request_t *r
     if (!display_ready()) {
         return CONFIRM_UNAVAILABLE;
     }
-    if (req->has_detail) {
-        display_note_detail(DISPLAY_STATE_CONFIRM_PENDING, req->amount, req->unit, req->label,
-                            req->id);
-    } else {
-        /* No detail to show (an OTA image, or a wipe) -- the flat state colour
-         * is all there is, same as before. */
-        display_set_state(DISPLAY_STATE_CONFIRM_PENDING);
-    }
-    display_progress(0);
-
     approval_t ap;
     int64_t now = esp_timer_get_time();
     approval_begin(&ap, now, timeout_ms);
+    /* approval_begin() assumes both buttons may be down and only a poll
+     * clears that, so drawing first would tell every owner to let go. */
+    approval_state_t state = approval_poll(&ap, buttons_raw_1(), buttons_raw_2(), now);
+    bool waiting = approval_waiting_for_release(&ap);
+    draw_confirm_card(req, waiting ? RELEASE_HINT : CONFIRM_HINT);
+    display_progress(0);
 
-    approval_state_t state = APPROVAL_PENDING;
     uint16_t drawn = 0;
     while (state == APPROVAL_PENDING) {
         now = esp_timer_get_time();
         state = approval_poll(&ap, buttons_raw_1(), buttons_raw_2(), now);
+
+        /* Letting go swaps the hint, which is also the device visibly
+         * answering them. */
+        const bool now_waiting = approval_waiting_for_release(&ap);
+        if (state == APPROVAL_PENDING && now_waiting != waiting) {
+            waiting = now_waiting;
+            draw_confirm_card(req, waiting ? RELEASE_HINT : CONFIRM_HINT);
+            display_progress(drawn);
+        }
 
         /* Repaint only on a visible step. The bar is a real DMA blit and this
          * loop runs 50 times a second; 40 steps is smooth to the eye and a
@@ -296,14 +397,20 @@ static confirm_result_t service_remote_confirm(const remote_confirm_request_t *r
 
     confirm_result_t result;
     display_state_t card;
+    const char *title;
+    const char *tail;
     switch (state) {
         case APPROVAL_GRANTED:
             result = CONFIRM_YES;
             card = DISPLAY_STATE_APPROVED;
+            title = "APPROVED";
+            tail = NULL;
             break;
         case APPROVAL_DENIED:
             result = CONFIRM_NO;
             card = DISPLAY_STATE_DECLINED;
+            title = "DECLINED";
+            tail = "NOTHING DONE";
             break;
         default:
             /* Its own card, deliberately: a prompt nobody answered must not
@@ -311,10 +418,13 @@ static confirm_result_t service_remote_confirm(const remote_confirm_request_t *r
              * having said no. */
             result = CONFIRM_TIMEOUT;
             card = DISPLAY_STATE_EXPIRED;
+            title = "NO ANSWER";
+            tail = "NOTHING DONE";
             break;
     }
-    display_set_state(card);
-    vTaskDelay(pdMS_TO_TICKS(800));
+    /* In words, naming what it was about: a prompt that simply vanished never
+     * said whether the device had timed out or refused. */
+    display_message(card, title, req->action[0] ? req->action : NULL, tail);
     return result;
 }
 
@@ -333,7 +443,8 @@ static void ui_task_fn(void *arg) {
     char browse_id[VAULT_ID_BUF] = {0}; /* identity of the selected note, for unveil() */
     int64_t browse_last_activity_us = 0;
 
-    display_set_state(DISPLAY_STATE_IDLE);
+    size_t idle_shown = show_idle();
+    int64_t idle_checked_us = esp_timer_get_time();
 
     for (;;) {
         /* A pending remote confirm request always takes priority over
@@ -349,10 +460,17 @@ static void ui_task_fn(void *arg) {
         if (xQueueReceive(g_request_q, &req, 0) == pdTRUE) {
             confirm_result_t result = service_remote_confirm(&req);
             xQueueSend(req.response_q, &result, portMAX_DELAY);
+            /* Answer first, then let the owner read the outcome -- unless
+             * there was no screen to draw it on, in which case holding for a
+             * card nobody can see just makes a degraded vault slower. */
+            if (result != CONFIRM_UNAVAILABLE) {
+                vTaskDelay(pdMS_TO_TICKS(OUTCOME_HOLD_MS));
+            }
             mode = UI_IDLE;
             browse_index = -1;
             browse_id[0] = '\0';
-            display_set_state(DISPLAY_STATE_IDLE);
+            idle_shown = show_idle();
+            idle_checked_us = esp_timer_get_time();
             continue;
         }
 
@@ -360,6 +478,18 @@ static void ui_task_fn(void *arg) {
 
         switch (mode) {
             case UI_IDLE:
+                /* Keep the count honest. */
+                if ((esp_timer_get_time() - idle_checked_us) >
+                    (int64_t)IDLE_RECOUNT_MS * 1000) {
+                    size_t now_confirmed = 0;
+                    if (try_confirmed_count(&now_confirmed)) {
+                        idle_checked_us = esp_timer_get_time();
+                        if (now_confirmed != idle_shown) {
+                            idle_shown = now_confirmed;
+                            draw_idle(idle_shown);
+                        }
+                    }
+                }
                 if (ev == BTN_EVENT_1_TAP || ev == BTN_EVENT_2_TAP) {
                     browse_index = find_confirmed(-1, 1, browse_id);
                     if (browse_index >= 0) {
@@ -375,8 +505,11 @@ static void ui_task_fn(void *arg) {
                     if (unveil(browse_id)) {
                         mode = UI_QR_SHOWN;
                     } else {
-                        display_set_state(DISPLAY_STATE_DECLINED);
-                        vTaskDelay(pdMS_TO_TICKS(500));
+                        /* Note gone, export refused, or a URL too long for a
+                         * QR this panel can draw -- a red flash alone left the
+                         * owner to guess which. */
+                        display_message(DISPLAY_STATE_DECLINED, "FAILED", "NOT SHOWN", NULL);
+                        vTaskDelay(pdMS_TO_TICKS(900));
                         show_browse_note(browse_index, confirmed_position(browse_index));
                     }
                     browse_last_activity_us = esp_timer_get_time();
@@ -392,7 +525,8 @@ static void ui_task_fn(void *arg) {
                            (int64_t)BROWSE_IDLE_TIMEOUT_MS * 1000) {
                     mode = UI_IDLE;
                     browse_id[0] = '\0';
-                    display_set_state(DISPLAY_STATE_IDLE);
+                    idle_shown = show_idle();
+                    idle_checked_us = esp_timer_get_time();
                 }
                 break;
 
@@ -407,7 +541,8 @@ static void ui_task_fn(void *arg) {
                     mode = UI_IDLE;
                     browse_index = -1;
                     browse_id[0] = '\0';
-                    display_set_state(DISPLAY_STATE_IDLE);
+                    idle_shown = show_idle();
+                    idle_checked_us = esp_timer_get_time();
                 }
                 break;
         }
@@ -442,13 +577,15 @@ void ui_task_start(void) {
  * second broke main. Caught by building the two together rather than by
  * either one's own CI, which is a thing worth doing and not a thing to rely
  * on. Keeping the old name costs one line and removes the hazard. */
-static confirm_result_t request_confirm_detailed(uint32_t timeout_ms, const note_meta_t *note);
+static confirm_result_t request_confirm_detailed(uint32_t timeout_ms, const note_meta_t *note,
+                                                  const char *action);
 
-static confirm_result_t request_confirm(uint32_t timeout_ms) {
-    return request_confirm_detailed(timeout_ms, NULL);
+static confirm_result_t request_confirm(uint32_t timeout_ms, const char *action) {
+    return request_confirm_detailed(timeout_ms, NULL, action);
 }
 
-static confirm_result_t request_confirm_detailed(uint32_t timeout_ms, const note_meta_t *note) {
+static confirm_result_t request_confirm_detailed(uint32_t timeout_ms, const note_meta_t *note,
+                                                  const char *action) {
     /* Refuse rather than crash if a command reaches here before ui_task_init(),
      * or if the per-request queue can't be allocated. */
     if (!g_request_q) {
@@ -459,6 +596,25 @@ static confirm_result_t request_confirm_detailed(uint32_t timeout_ms, const note
         return CONFIRM_UNAVAILABLE;
     }
     remote_confirm_request_t req = {.timeout_ms = timeout_ms, .response_q = resp_q};
+    if (action && action[0]) {
+        /* The gated destructive commands arrive as their wire names --
+         * "mark_spent", "discard" -- because that is what dispatcher.c has to
+         * hand. Uppercased with underscores opened out, rather than mapped
+         * through a table here: a table would be one more thing to keep in
+         * step with dispatcher.c, and would silently show the wrong verb for
+         * any command added without remembering to update it. */
+        size_t n = 0;
+        for (; action[n] && n + 1 < sizeof(req.action); n++) {
+            char c = action[n];
+            if (c == '_') {
+                c = ' ';
+            } else if (c >= 'a' && c <= 'z') {
+                c = (char)(c - 'a' + 'A');
+            }
+            req.action[n] = c;
+        }
+        req.action[n] = '\0';
+    }
     if (note) {
         req.has_detail = true;
         note_format_amount_parts(note->amount_msat, req.amount, sizeof(req.amount), req.unit,
@@ -476,25 +632,27 @@ static confirm_result_t request_confirm_detailed(uint32_t timeout_ms, const note
 confirm_result_t ui_task_request_remote_confirm(const note_meta_t *note, uint32_t timeout_ms) {
     /* The note IS shown now -- issue #9. Approving a disclosure without being
      * told which note or for how much made the physical gate a formality. */
-    return request_confirm_detailed(timeout_ms, note);
+    /* Kept to 12 characters, which is what fits across the narrower of the two
+     * panels at the readable minimum scale (240px less margins, 6px advance,
+     * scale 3). Longer verbs get clipped, not shrunk -- see font5x7.h. */
+    return request_confirm_detailed(timeout_ms, note, "SHOW SECRET");
 }
 
 confirm_result_t ui_task_request_ota_confirm(uint32_t timeout_ms) {
-    return request_confirm(timeout_ms);
+    return request_confirm(timeout_ms, "NEW FIRMWARE");
 }
 
 confirm_result_t ui_task_request_action_confirm(const char *action, const note_meta_t *note,
                                                  uint32_t timeout_ms) {
-    /* The action name is not shown on screen yet -- the confirm screen has no
-     * text of its own until #9 lands, and until then this is the same generic
-     * prompt export_secret uses. It is plumbed through now rather than later
-     * so that when the screen can say it, nothing else has to change. */
-    (void)action;
-    return request_confirm(timeout_ms);
+    /* The action name IS shown now. It was plumbed this far and then dropped
+     * on the floor, which meant every gated destructive command -- mark_spent,
+     * discard, delete, rename -- put up the same card export_secret does. */
+    return request_confirm_detailed(timeout_ms, note, action);
 }
 
 confirm_result_t ui_task_request_wipe_confirm(uint32_t timeout_ms) {
-    /* No note to name: a wipe is about all of them. The flat state colour is
-     * all this screen has, same as the OTA prompt. */
-    return request_confirm(timeout_ms);
+    /* No note to name: a wipe is about all of them, which is exactly why the
+     * verb has to be on screen. This card and a single note's disclosure used
+     * to be the same flat amber. */
+    return request_confirm(timeout_ms, "WIPE ALL");
 }

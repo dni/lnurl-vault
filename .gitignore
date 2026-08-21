@@ -19,6 +19,10 @@ sdkconfig.*
 build/
 test/native/vault_tests
 test/native/vault_tests_san
+test/native/vault_preview
+# Rendered screens from `make preview`. Regenerated on demand and large
+# (uncompressed PNG); the tool that draws them is what is worth tracking.
+test/native/preview/
 test/native/*.dSYM/
 *.o
 

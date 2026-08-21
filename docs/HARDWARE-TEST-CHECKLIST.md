@@ -479,3 +479,154 @@ Also worth one check with the wallet: pair, then present the other board, and
 confirm the wallet says it is not the vault it paired with.
 
 **NOT YET BENCH-RUN.**
+
+## 19. The confirm card — PARTIALLY BENCH-RUN
+
+What the screen says while it is asking. Every row here needs a person to
+look at a panel, so none of it is reachable from `bench.py`.
+
+The card used to show an amount, a label and a note id, and nothing about
+either the verb or the gesture. Both gaps were found the same way, on a
+bench run rather than by reading the code:
+
+- **No verb.** An owner was asked to approve "21000 sats" with no statement
+  of what was about to happen to it. `export_secret` and `wipe` — disclose
+  one note, or erase every note on the device — presented as the same flat
+  amber card, since the wipe prompt had no note to show and so drew no text
+  at all. `ui_task_request_action_confirm` had taken an `action` string since
+  before this and discarded it.
+- **No gesture.** Approving is a two-second hold of button 1
+  (`APPROVAL_HOLD_US`), deliberately, since a tap "is one accidental brush of
+  a pocket button away". Nothing on screen said so. The observed behaviour of
+  a person who taps is to conclude the device is not listening and stop — which
+  is what happened, repeatedly, before anyone thought to re-read `approval.h`.
+
+| Check | Expect |
+|---|---|
+| `export_secret` | `SHOW SECRET` above the amount, `HOLD BTN1 2s` below it |
+| A gated destructive command | its own verb — `MARK SPENT`, `DISCARD`, `RENAME`, `DELETE` — not the disclosure card |
+| `wipe` | `WIPE ALL`, on a card that is no longer bare colour |
+| OTA | `NEW FIRMWARE`, likewise |
+| Holding button 1 | the bar fills over 2s and the card resolves green |
+| Tapping button 1 | the bar visibly starts and drops back, rather than nothing happening |
+| Browsing a note | unchanged: no verb, no hint, note id still shown |
+| A seven-digit amount | still readable; the digits shrink to make room, no line falls off the bottom |
+
+The note id is deliberately **not** on the confirm card any more. Eight hex
+characters identify a note to a wallet, not to the person holding the device,
+and the row it occupied buys the gesture hint instead. It is still on the
+browse card, where choosing a specific note is the whole point.
+
+Both panels need checking: the 240x135 classic is the tighter fit, and the
+verbs are capped at 12 characters because that is what fits across it at
+`FONT5X7_MIN_READABLE_SCALE`. A longer verb clips rather than shrinking.
+
+> **Bench record — 2026-08-20, fw `0.0.7-dirty`.** Classic T-Display,
+> photographed. `export_secret` renders four lines and the bar:
+> `SHOW SECRET` / `2100` / `msat  card-c` / `HOLD BTN1 2s`. A gated
+> destructive command renders `RENAME` in the same place, so the verbs do
+> differentiate. Holding button 1 approves; the `RENAME` card was approved by
+> hold during the same session.
+>
+> **The hint did not fit on the first attempt**, and the first build of this
+> card shipped without it — the one line the whole change existed to add. Four
+> lines at the readable minimum put it at y=103 against a `usable_h` of 102,
+> because the reservation budgeted a 4px gap per line while the amount
+> advanced by 5. One pixel. It was found by photographing the panel, not by
+> reading the code, and not by the build, which was perfectly happy. There is
+> no slack on a 135px panel to absorb a mismatch like that, so the gap is now
+> a single named constant used by both the reservation and the advance.
+>
+> The label also used to clip mid-glyph (`card-check` drew as `card-ch` with
+> the h sliced down the middle, which reads as a different label rather than a
+> shortened one). It is now cut to what the width holds.
+>
+> **Still unverified:** the bar visibly filling and dropping back on a tap
+> rather than a hold; the `WIPE ALL` and `NEW FIRMWARE` cards, neither of
+> which has been put on a panel; a seven-digit amount; and **the whole of this
+> on the S3**, whose larger panel takes a different branch of the fitting
+> logic (the amount grows to scale 5-6 there rather than staying at 3).
+>
+> **That record is stale, and the commit after it broke the card again.**
+> Reserving room for the unit/label and id lines was what made all four fit
+> above, and it did so by holding the digits to 21 pixels — the height a
+> person on this same bench had already called too small to read. Removing the
+> reservation gave the digits their room back and handed the hint's row to the
+> unit/label line, so `HOLD BTN1 2s` was once more computed, budgeted for and
+> never drawn: on the 240x135 panel, on every card that has a label, which is
+> every real one. The S3 was unaffected, which is why nothing on the bench
+> caught it either.
+>
+> Nobody found this on a board. It was found by `make preview` (see
+> [Verification](../README.md#verification)) on the very first run, and the
+> assertion that now holds it down is in `test/native/test_card_render.c` —
+> which draws with the firmware's own `display.c` at the real panel geometry
+> and counts pixels, rather than re-deriving the arithmetic and agreeing with
+> it. Three display faults have now shipped in this project; all three were
+> layout, none was reachable from the build, and this is the first one caught
+> before anyone had to look at hardware.
+>
+> The underlying problem was that 102 usable rows do not hold four readable
+> lines and their gaps, so the two fixes traded the same pixels back and
+> forth. The bar was taking a fifth of the panel — an eighth of the height,
+> plus a twelfth again as bottom margin. It is now `h/16` (8 rows on the
+> classic, 10 on the S3), which is still an obvious bar at 180px wide, and the
+> card has 118 rows to work with. All four lines fit at once, with the digits
+> at scale 4-5 rather than 3. The hint is also pinned to the bottom of the
+> card now rather than laid out after whatever precedes it: it is the one line
+> that must never be the one that falls off.
+>
+> **Wants a bench run:** the slimmer bar on real glass, both panels — the
+> geometry is only checked against a framebuffer.
+
+## 20. What the screen says the rest of the time — NOT YET BENCH-RUN
+
+Section 19 is the card that asks. This is everything else, and until now all
+of it was a flat colour: boot, rest, and the answer.
+
+An outcome was a green, red or grey rectangle held for 800ms. Those are only
+meaningful to somebody who already knows the scheme, and the one that matters
+most — a prompt that timed out — is a grey nobody has ever been taught. The
+idle screen was a dark rectangle, which is the screen a person looks at for
+hours and which says nothing about whether the device is alive, paired, or
+holding anything; the observed response to it was pressing buttons to find
+out, on a device where a press starts browsing bearer secrets.
+
+| Check | Expect |
+|---|---|
+| Power on | `LNURL VAULT`, the firmware version, and the board name, before anything else draws |
+| At rest, notes on the device | `3 NOTES` (or `1 NOTE`) over `TAP TO VIEW`, white on dark grey |
+| At rest, empty vault | `NO NOTES` over `PAIR TO ADD` |
+| Approve a disclosure | `APPROVED` over `SHOW SECRET`, green |
+| Cancel with button 2 | `DECLINED` / `SHOW SECRET` / `NOTHING DONE`, white on red |
+| Let a prompt time out | `NO ANSWER` / the verb / `NOTHING DONE`, on grey |
+| Outcome timing | the wallet gets its answer FIRST; the card stays up ~1.8s afterwards |
+| Hold button 1 before the prompt appears | the card says `LET GO FIRST`; releasing switches it to `HOLD BTN1 2s` |
+| Unveil a note that cannot be shown | `FAILED` over `NOT SHOWN`, not a bare red flash |
+| Idle after browsing times out | back to the note count, not a blank screen |
+
+The last two rows are the ones worth being awkward about. The `LET GO FIRST`
+path needs a button held down at the moment the host sends the command, which
+takes two people, or a scripted `export_secret` and a finger already on the
+button. The unveil failure needs a note deleted over the wire between
+selecting it and chording — or, more easily, a URL too long for the QR
+versions this panel can draw.
+
+The idle screen shows how many notes and **not** what they are worth. A vault
+sitting on a desk announcing its balance to the room is a different device
+from one that makes you ask; the amounts are one deliberate press away.
+
+Every one of these screens can be looked at without a board:
+
+```sh
+cd test/native && make preview
+```
+
+That is not a substitute for the bench. A framebuffer cannot tell you whether
+white on `#7800F8` is readable in daylight, or whether 1.8 seconds is long
+enough to read three lines while your finger is still coming off a button. It
+is a substitute for guessing.
+
+> **Not yet bench-run.** Every row above comes from the preview renderer and
+> the pixel assertions in `test/native/test_card_render.c`. None of it has
+> been on glass.
