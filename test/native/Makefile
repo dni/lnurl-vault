@@ -96,6 +96,7 @@ PREVIEW_BIN = vault_preview
 PREVIEW_SRC = ../../src/ui/display.c ../../src/ui/font5x7.c ../../src/proto/note_display.c \
               hostgfx/hostgfx.c preview.c
 PREVIEW_OUT ?= preview
+PREVIEW_ZOOM ?= 3
 
 .PHONY: test test-sanitize preview clean
 test: $(BIN)
@@ -109,7 +110,7 @@ test-sanitize: $(SRC) $(HDR)
 	./$(SAN_BIN)
 
 preview: $(PREVIEW_BIN)
-	./$(PREVIEW_BIN) $(PREVIEW_OUT)
+	./$(PREVIEW_BIN) $(PREVIEW_OUT) $(PREVIEW_ZOOM)
 
 $(PREVIEW_BIN): $(PREVIEW_SRC) $(HDR)
 	$(CC) $(CFLAGS) -o $(PREVIEW_BIN) $(PREVIEW_SRC)

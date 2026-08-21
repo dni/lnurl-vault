@@ -1,12 +1,13 @@
 /* Every screen this firmware can draw, at both panel geometries, as PNGs.
  *
  *     make preview                    -> PNGs in ./preview/
- *     make preview PREVIEW_OUT=/tmp/shots
+ *     make preview PREVIEW_OUT=/tmp/shots PREVIEW_ZOOM=1
  *
  * Drawn by src/ui/display.c itself (see hostgfx/hostgfx.h), so what comes out
  * is what the glass gets. Amounts go through note_display.c rather than being
  * typed in here, so the grouping and unit are the real ones. */
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
 
@@ -14,9 +15,11 @@
 #include "hostgfx.h"
 #include "note_display.h"
 
-#define ZOOM 3
+/* The panels are small; at 1:1 they are hard to look at. */
+#define ZOOM_DEFAULT 3
 
 static const char *g_dir = "preview";
+static int g_zoom = ZOOM_DEFAULT;
 static const char *g_board = "";
 static int g_written;
 static int g_failed;
@@ -24,8 +27,8 @@ static int g_failed;
 static void shot(const char *name) {
     char path[512];
     snprintf(path, sizeof(path), "%s/%s-%s.png", g_dir, g_board, name);
-    if (hostgfx_write_png(path, ZOOM) == 0) {
-        printf("  %s  (%dx%d at %dx)\n", path, hostgfx_width(), hostgfx_height(), ZOOM);
+    if (hostgfx_write_png(path, g_zoom) == 0) {
+        printf("  %s  (%dx%d at %dx)\n", path, hostgfx_width(), hostgfx_height(), g_zoom);
         g_written++;
     } else {
         printf("  FAILED to write %s\n", path);
@@ -147,6 +150,12 @@ static void render_board(const char *board, int w, int h) {
 int main(int argc, char **argv) {
     if (argc > 1) {
         g_dir = argv[1];
+    }
+    if (argc > 2) {
+        const int zoom = atoi(argv[2]);
+        if (zoom > 0) {
+            g_zoom = zoom;
+        }
     }
     if (mkdir(g_dir, 0755) != 0) {
         /* Existing is fine; anything else shows up as a write failure below. */

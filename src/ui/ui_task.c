@@ -460,8 +460,12 @@ static void ui_task_fn(void *arg) {
         if (xQueueReceive(g_request_q, &req, 0) == pdTRUE) {
             confirm_result_t result = service_remote_confirm(&req);
             xQueueSend(req.response_q, &result, portMAX_DELAY);
-            /* Answer first, then let the owner read the outcome. */
-            vTaskDelay(pdMS_TO_TICKS(OUTCOME_HOLD_MS));
+            /* Answer first, then let the owner read the outcome -- unless
+             * there was no screen to draw it on, in which case holding for a
+             * card nobody can see just makes a degraded vault slower. */
+            if (result != CONFIRM_UNAVAILABLE) {
+                vTaskDelay(pdMS_TO_TICKS(OUTCOME_HOLD_MS));
+            }
             mode = UI_IDLE;
             browse_index = -1;
             browse_id[0] = '\0';
