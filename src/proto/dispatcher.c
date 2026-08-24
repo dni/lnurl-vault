@@ -123,6 +123,7 @@ static const char *note_state_name(note_state_t s) {
 static void write_note_obj(json_writer_t *w, const note_meta_t *n) {
     jw_begin_obj(w, NULL);
     jw_str(w, "id", n->id);
+    jw_str(w, "h", n->h);
     jw_str(w, "state", note_state_name(n->state));
     jw_uint64(w, "amount_msat", n->amount_msat);
     jw_str(w, "label", n->label);

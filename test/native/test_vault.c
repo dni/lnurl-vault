@@ -25,6 +25,8 @@ static void test_state_machine(void) {
     note_meta_t meta;
     UL_CHECK(vault_get_meta(id, &meta) && meta.state == NOTE_STATE_PENDING,
              "a freshly generated note starts PENDING");
+    UL_CHECK(strcmp(meta.h, h) == 0,
+             "PENDING metadata repeats the output hash without exposing the secret");
 
     char hex[VAULT_SECRET_HEX_BUF];
     UL_CHECK(vault_export_secret(id, hex) == VAULT_ERR_INVALID_STATE,

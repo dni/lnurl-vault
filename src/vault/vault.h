@@ -50,6 +50,7 @@ typedef struct {
  * what list_notes/get commands are allowed to serialize onto the wire. */
 typedef struct {
     char id[VAULT_ID_BUF];
+    char h[VAULT_HASH_HEX_BUF]; /* sha256(secret), safe metadata for recovery/matching */
     note_state_t state;
     uint64_t amount_msat;
     char label[VAULT_LABEL_BUF];

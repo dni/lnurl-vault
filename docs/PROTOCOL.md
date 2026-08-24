@@ -216,8 +216,14 @@ every single time.
 
 ```json
 {"cmd":"list_notes"}
-→ {"ok":true,"total":3,"offset":0,"notes":[ ... ]}
+→ {"ok":true,"total":3,"offset":0,"notes":[
+    {"id":"a1b2c3d4","h":"<64-hex sha256>","state":"confirmed","amount_msat":21000,"label":"",
+     "host":"mint.example","parent_ids":[],"created_at":1234,"updated_at":1234}
+  ]}
 ```
+
+`h` is always `sha256(k1)` and is safe to use for matching a staged output
+without exporting its secret.
 
 `state` is one of `pending`, `confirmed`, `spent`. `sig` is present only if
 the note carries an offline-verification signature ([LUD-25](https://github.com/lnurl/luds/pull/301)).
@@ -281,8 +287,10 @@ Generates two fresh secrets sharing the same parent lineage, for **split**.
 
 ### `confirm`
 
-Commits a `PENDING` note to `CONFIRMED` once the mint replied
-`{"status":"OK"}`.
+Commits a `PENDING` note to `CONFIRMED` once the companion has authenticated
+the mint's success response. For rotate/split/merge that is the successful
+mutation response. For bound minting it is the settled LUD-21 receipt whose
+`h`, exact net `amount`, invoice and LUD-25 signature all match the quote.
 
 ```json
 {"cmd":"confirm","id":"e5f6a7b8","amount_msat":21000,"host":"mint.example","sig":"optional hex"}
@@ -529,12 +537,22 @@ to the mint itself.
 2. `GET callback?k1=<k1>&pr=<bolt11>`
 3. Once the mint's payment settles (poll `verify` if offered): `mark_spent(old)`
 
-**Minting** (paying a `payRequest` to create a brand-new note): happens
-entirely off-device — the browser pays the invoice and gets a payment
-preimage `P`. To bring `P` under this device's custody: `import_secret(P,
-...)`, then immediately **rotate** it (per [LUD-25](https://github.com/lnurl/luds/pull/301)'s
-security considerations — a payment preimage was also seen by the mint
-itself as a prior holder).
+**Minting** (preferred bound-receipt flow):
+1. Before requesting an invoice, `new_secret()` → `id, h`. The secret is
+   durably `PENDING` on the vault and never enters the browser.
+2. Request `GET payCallback?amount=<gross_msat>&h=<h>`.
+3. Before showing or paying it, require `mintToHash:true`, `verify`, and a
+   `mint` commitment whose `h` and exact net `amount` match the request.
+4. Poll `verify`. On settlement, require the same invoice, `h` and `amount`,
+   plus a valid LUD-25 `sig` under the pinned mint key.
+5. `confirm(id, amount, host, sig)`. No `export_secret`, preimage import, or
+   rotate is involved.
+
+If the payRequest or quote does not offer that additive receipt, discard the
+unpaid staged output and use the compatible legacy flow: pay the ordinary
+invoice, `import_secret(P, ...)`, then immediately **rotate** it. This keeps
+current dni/reference mints working unchanged while receipt-aware mints avoid
+ever making the payment preimage the vault's note secret.
 
 **Receiving a note from someone else** (offline handoff): `import_secret`
 with the received `k1`, then immediately **rotate** it, closing the window
