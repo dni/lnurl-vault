@@ -63,6 +63,12 @@ static uint16_t *next_row(void) {
 
 static display_state_t g_current_state = DISPLAY_STATE_IDLE;
 
+/* Whether the light is off. Not a display_state_t: every state is something
+ * the screen is SAYING, and asleep is the screen saying nothing. Folding it
+ * into that enum would have given every switch over it a case that is not a
+ * card. */
+static bool g_asleep = false;
+
 /* Where the card ends and the bar begins, in one place: two functions each
  * deriving it from the panel height is how a line got drawn one pixel into a
  * band that wasn't its own. The bar was h/8 plus h/12 of margin -- a fifth of
@@ -142,6 +148,7 @@ void display_init(void) {
         }
     }
 
+    g_asleep = false;
     display_set_state(DISPLAY_STATE_IDLE);
 }
 
@@ -189,6 +196,33 @@ static void fill_screen(uint16_t color) {
 void display_set_state(display_state_t state) {
     g_current_state = state;
     fill_screen(display_state_color(state));
+}
+
+void display_sleep(void) {
+    if (g_asleep || !display_ready()) {
+        return;
+    }
+    g_asleep = true;
+    /* Light out first, so the blank is never seen happening -- the screen
+     * goes dark, rather than visibly wiping itself and then going dark. */
+    board_display_backlight(false);
+    /* And then actually clear it. Killing the backlight alone would leave the
+     * card still held in the crystal, which is the half of this that causes
+     * the ghosting; it would also leave a bearer secret on the glass if this
+     * ever blanked a QR, which one day it will. */
+    fill_screen(PALETTE_INK_DARK);
+}
+
+void display_wake(void) {
+    if (!g_asleep || !display_ready()) {
+        return;
+    }
+    g_asleep = false;
+    board_display_backlight(true);
+}
+
+bool display_asleep(void) {
+    return g_asleep;
 }
 
 void display_text(int x, int y, const char *text, int scale, uint16_t fg, uint16_t bg) {

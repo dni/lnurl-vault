@@ -37,6 +37,7 @@
 #include "freertos/task.h"
 #include "note_url.h"
 #include "qr_display.h"
+#include "screen_sleep.h"
 #include "vault.h"
 #include "vault_lock.h"
 
@@ -74,11 +75,41 @@ typedef struct {
 
 static QueueHandle_t g_request_q;
 
+/* When the screen goes dark. Policy in src/proto/screen_sleep.c, the light
+ * itself in display.c; this file is the only thing that joins them. */
+static screen_sleep_t g_screen;
+
+/* A new screen has just been drawn, or a button has just been touched.
+ *
+ * Called AFTER drawing, never before: waking lights whatever is already in
+ * the panel, so lighting first shows the card from a minute ago for a frame.
+ * Everything that puts something new on screen ends with this, which is why
+ * no caller has to remember whether the screen was dark -- and why adding a
+ * screen that forgets shows up immediately as one that will not light. */
+static void screen_awake(void) {
+    if (screen_sleep_touch(&g_screen, esp_timer_get_time())) {
+        display_wake();
+    }
+}
+
 #define BROWSE_IDLE_TIMEOUT_MS 15000
 
 /* The unveiled QR is the secret in the clear, so clear it after a while rather
  * than wait for a button press. Longer than browse (scanning is deliberate). */
 #define QR_SHOWN_TIMEOUT_MS 60000
+
+/* How long the screen stays lit with nothing new on it.
+ *
+ * A vault lives plugged in. Left alone it holds the same resting card in the
+ * same pixels for as long as it has power, and an IPS panel treated like that
+ * ends up with a faint permanent copy of it -- while burning the backlight
+ * for a screen nobody is looking at. Long enough to walk over and read
+ * something; short enough that a device on a desk spends its day dark.
+ *
+ * Comfortably longer than the longest confirm window (30s), though nothing
+ * depends on that: the tick that blanks the screen is not reached while a
+ * prompt is up. See screen_sleep.h. */
+#define SCREEN_SLEEP_MS 60000
 
 typedef enum {
     UI_IDLE,
@@ -149,7 +180,7 @@ static int confirmed_position(int idx) {
  *
  * `position` is the 1-based place among CONFIRMED notes, shown next to the id
  * so the count the old flash conveyed is not lost. */
-static void show_browse_note(int browse_index, int position) {
+static void draw_browse_note(int browse_index, int position) {
     if (browse_index < 0) {
         display_message(DISPLAY_STATE_BROWSE, "NO NOTES", NULL, NULL);
         return;
@@ -174,6 +205,11 @@ static void show_browse_note(int browse_index, int position) {
     /* No verb and no gesture hint: browsing is not a prompt, and the chord
      * that unveils from here is not the confirm hold. */
     display_note_detail(DISPLAY_STATE_BROWSE, NULL, amount, unit, label, id, NULL);
+}
+
+static void show_browse_note(int browse_index, int position) {
+    draw_browse_note(browse_index, position);
+    screen_awake();
 }
 
 /* PENDING notes have no settled value and cannot be browsed or exported, so
@@ -230,9 +266,14 @@ static void draw_idle(size_t confirmed) {
                     NULL);
 }
 
+/* draw_idle() keeps the number honest; this SHOWS it to someone. The
+ * difference is the whole reason they are two functions: notes arriving and
+ * being spent over the wire, with nobody near the device, repaint through
+ * draw_idle() and must not light a dark room. */
 static size_t show_idle(void) {
     const size_t confirmed = confirmed_count();
     draw_idle(confirmed);
+    screen_awake();
     return confirmed;
 }
 
@@ -282,6 +323,9 @@ static bool unveil(const char *browse_id) {
 
     bool shown = qr_display_show(url);
     wipe(url, sizeof(url));
+    if (shown) {
+        screen_awake();
+    }
     return shown;
 }
 
@@ -321,6 +365,7 @@ static void draw_confirm_card(const remote_confirm_request_t *req, const char *h
                         req->has_detail ? req->amount : NULL,
                         req->has_detail ? req->unit : NULL,
                         req->has_detail ? req->label : NULL, NULL, hint);
+    screen_awake();
 }
 
 /* The gate in front of every disclosure: a two-second hold on button 1, with
@@ -425,6 +470,7 @@ static confirm_result_t service_remote_confirm(const remote_confirm_request_t *r
     /* In words, naming what it was about: a prompt that simply vanished never
      * said whether the device had timed out or refused. */
     display_message(card, title, req->action[0] ? req->action : NULL, tail);
+    screen_awake();
     return result;
 }
 
@@ -437,6 +483,13 @@ static void ui_task_fn(void *arg) {
     if (wdt_err != ESP_OK) {
         ESP_LOGW(TAG, "task watchdog not watching ui_task: %s", esp_err_to_name(wdt_err));
     }
+
+    /* A panel that never came up gets a timeout of 0, which means never
+     * sleep: there is nothing to blank, and a device that believes its screen
+     * is dark spends the first press of every gesture turning on a light that
+     * does not exist. */
+    screen_sleep_init(&g_screen, esp_timer_get_time(),
+                      display_ready() ? SCREEN_SLEEP_MS : 0);
 
     ui_mode_t mode = UI_IDLE;
     int browse_index = -1;
@@ -475,6 +528,28 @@ static void ui_task_fn(void *arg) {
         }
 
         button_event_t ev = buttons_poll();
+
+        /* Dark, the first touch buys the light and nothing else.
+         *
+         * On the raw level rather than on the tap a release produces, so the
+         * screen comes up under the thumb instead of after it -- and the
+         * press is then consumed, so waking a vault never also starts it
+         * browsing bearer notes. Whichever way the press arrives, it is spent
+         * here: `ev` is dropped rather than handed to the mode below. */
+        if (screen_sleep_is_asleep(&g_screen)) {
+            if (ev != BTN_EVENT_NONE || buttons_raw_1() || buttons_raw_2()) {
+                buttons_consume_press();
+                /* Repaints in the dark and lights the panel afterwards, in
+                 * that order -- see screen_awake(). Recounting on the way is
+                 * the point: the count on the glass is from before the
+                 * screen went out, and notes move over the wire. */
+                idle_shown = show_idle();
+                idle_checked_us = esp_timer_get_time();
+            }
+            wdt_feed();
+            vTaskDelay(pdMS_TO_TICKS(30));
+            continue;
+        }
 
         switch (mode) {
             case UI_IDLE:
@@ -545,6 +620,25 @@ static void ui_task_fn(void *arg) {
                     idle_checked_us = esp_timer_get_time();
                 }
                 break;
+        }
+
+        /* Lights out. Deliberately here, outside the switch and outside
+         * service_remote_confirm() -- which is the one place this loop does
+         * not run. That is what stops a live prompt going dark under the
+         * person answering it, and it is structural rather than a flag
+         * somebody has to remember to set.
+         *
+         * A QR on screen is safe for the same reason it is safe when it
+         * times out: display_sleep() clears the panel, so the secret leaves
+         * the glass rather than merely losing its backlight. */
+        if (screen_sleep_expired(&g_screen, esp_timer_get_time())) {
+            display_sleep();
+            /* Going dark ends any browse. Waking to a position picked a
+             * minute ago -- or with a note still selected for the chord that
+             * unveils it -- is not where a vault should resume. */
+            mode = UI_IDLE;
+            browse_index = -1;
+            browse_id[0] = '\0';
         }
 
         wdt_feed();

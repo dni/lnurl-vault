@@ -752,3 +752,61 @@ is a substitute for guessing.
 > **Not yet bench-run.** Every row above comes from the preview renderer and
 > the pixel assertions in `test/native/test_card_render.c`. None of it has
 > been on glass.
+
+## 21. The screen going dark — NOT YET BENCH-RUN
+
+A vault lives plugged in. Left alone it holds the same resting card in the
+same pixels for as long as it has power, which is how an IPS panel acquires a
+faint permanent copy of it — and it burns the backlight all day for a screen
+nobody is looking at. After `SCREEN_SLEEP_MS` (60s) with nothing new on
+screen, `ui_task` blanks the framebuffer *and* drops the backlight; a press of
+either button repaints the resting card and turns the light back on.
+
+| Check | Expect |
+|---|---|
+| Leave it at rest for a minute | The screen goes fully dark, not dim, not a lit black rectangle |
+| Look at it in a dark room | No glow at all — the backlight is off, not just black pixels |
+| Press either button once | The resting card comes back, correct note count, no flash of the old card first |
+| That same press | Does **nothing else** — it does not enter browse mode |
+| Press again | *Now* it enters browse mode |
+| Hold a button rather than tapping | Wakes on the way down, under your thumb, not on release |
+| Send `export_secret` while dark | The confirm card appears, lit, and the hold works normally |
+| Let a prompt run its full 30s | The screen does **not** go dark part-way through it |
+| Browse to a note, wait it out | Back to the resting card at ~15s, dark at ~60s after that |
+| Unveil a QR, then walk away | QR clears at ~60s, resting card, then dark — the secret leaves the glass |
+| Wake after any of that | The resting card, never a note still selected from before |
+| Reconnect a host while dark | The port still works; nothing about the transport sleeps |
+
+Three of those rows are the ones worth being awkward about.
+
+**No flash of the old card.** `display_wake()` deliberately does not repaint —
+`ui_task` draws first and lights second, the same order both board files use
+during bring-up. Get that backwards and the owner sees the card from a minute
+ago for a frame. The framebuffer half is asserted in
+`test/native/test_screen_sleep.c`; whether a frame of it is *visible* is a
+question only glass answers.
+
+**The waking press is spent.** Woken on the raw level rather than on the tap a
+release produces, then consumed, so it never also reaches the browse gesture.
+On a device where a press starts browsing bearer secrets, waking the screen
+must not scroll to one.
+
+**A live prompt never goes dark.** Structural rather than a flag: `ui_task`
+only asks `screen_sleep_expired()` from its main loop, and while a
+confirmation is on screen that loop is inside `service_remote_confirm()` and
+is not running. The 60s sleep is longer than the 30s confirm window anyway,
+but nothing depends on that being true.
+
+**On the S3, expect this to misbehave until 7a is fixed.** The wake test is
+"is either button down", and that board's cancel button currently reads as
+permanently pressed — so it will blank at 60s and wake again on the very next
+tick, forever, one blink a minute. That is the open fault showing itself, not
+a second bug, and it is a rather good detector for it.
+
+> **Not yet bench-run.** The clock is unit-tested a tick at a time and the
+> light is asserted against `test/native/hostgfx`
+> (`test/native/test_screen_sleep.c`, 14 checks). Neither can tell you whether
+> the panel truly goes black or merely dims, whether a minute is the right
+> minute, or whether waking looks instant to a person. Both boards implement
+> `board_display_backlight()`; only the classic T-Display's backlight pin has
+> ever been exercised at all, and neither has been watched going out.

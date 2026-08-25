@@ -85,6 +85,31 @@ typedef struct {
  * paths must refuse, not proceed blind. */
 board_display_t board_display_init(void);
 
+/* Turns the panel's backlight on or off, without disturbing anything else
+ * the panel has been told -- orientation, gap, inversion and the pixels
+ * already in its RAM all survive, so waking is a repaint and not a
+ * re-initialisation.
+ *
+ * This exists so the resting screen can go dark (src/proto/screen_sleep.h):
+ * a vault lives plugged in, showing the same card in the same pixels for as
+ * long as it is powered, which is how a panel acquires a permanent ghost of
+ * it.
+ *
+ * Off means dark, not asleep: the controller stays on and the framebuffer
+ * stays valid. Deliberately NOT the ST7789's own display-off, and on the S3
+ * deliberately not the peripheral power rail either -- both would need the
+ * panel brought back up, and a screen that needs re-initialising to answer a
+ * confirmation is a screen that can fail to answer one.
+ *
+ * A board with no way to switch its backlight must still implement this, as
+ * a no-op. display.c blanks the framebuffer as well as calling this, so such
+ * a board goes black-but-lit rather than staying on the resting card: less
+ * good for the backlight, no worse for the glass.
+ *
+ * Safe to call before board_display_init() has succeeded, and safe to call
+ * repeatedly with the same value. */
+void board_display_backlight(bool on);
+
 /* Starts whichever host transport this board is wired for, and begins
  * serving the command protocol on it: native USB-CDC where the chip has a
  * USB-OTG peripheral, a UART behind an external USB bridge where it does not.

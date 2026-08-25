@@ -593,6 +593,17 @@ involved in this flow.
 | Hold both buttons together for ~200ms ("the chord") | **Unveil**: exports the selected note's secret and shows it as a QR code on-screen |
 | Any tap while a QR is shown | Dismiss it, back to browsing |
 | ~15s with no input while browsing | Back to idle |
+| ~60s with nothing new on screen | The screen goes dark: blanked *and* backlit off |
+| Any press while dark | Wakes it, and does nothing else — that press is spent on the light |
+
+The screen going dark is not the device sleeping. Nothing else stops: the
+transports stay up, a paired host can still drive every command, and a
+confirmation arriving while the screen is dark lights it back up and puts its
+card on it — a confirmation nobody can see is not one, so this can never blank
+a live prompt. Going dark also ends any browse, so waking always returns to
+the resting card rather than to a note selected a minute ago. A vault lives
+plugged in showing the same card in the same pixels; an IPS panel treated that
+way ends up wearing a permanent copy of it.
 
 Only `CONFIRMED` notes are browsable (a `PENDING` note has no settled value
 yet; `SPENT` notes have nothing left to show). The browse card shows the

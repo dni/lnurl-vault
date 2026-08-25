@@ -38,6 +38,7 @@ SRC = ../../src/vault/sha256.c \
       ../../src/proto/base64.c \
       ../../src/proto/dispatcher.c \
       ../../src/proto/button_fsm.c \
+      ../../src/proto/screen_sleep.c \
       ../../src/proto/note_url.c \
       ../../src/proto/ble_frame.c \
       ../../src/proto/note_display.c \
@@ -65,6 +66,7 @@ SRC = ../../src/vault/sha256.c \
       test_card_render.c \
       test_line_proto.c \
       test_approval.c \
+      test_screen_sleep.c \
       test_input_health.c \
       test_identity.c \
       test_qr_capacity.c \

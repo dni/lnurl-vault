@@ -24,6 +24,10 @@ static int g_w;
 static int g_h;
 static long g_offscreen;
 
+/* The board's backlight line, as display.c last left it. A real board
+ * powers up lit; so does this. */
+static bool g_backlight = true;
+
 /* Row buffers come from here, not malloc -- see esp_heap_caps.h. */
 static unsigned char g_pool[64 * 1024];
 static size_t g_pool_used;
@@ -55,6 +59,7 @@ void hostgfx_reset(int w, int h) {
     g_w = w;
     g_h = h;
     g_offscreen = 0;
+    g_backlight = true;
     for (int y = 0; y < HOSTGFX_MAX_H; y++) {
         for (int x = 0; x < HOSTGFX_MAX_W; x++) {
             g_fb[y][x] = HOSTGFX_UNPAINTED;
@@ -88,6 +93,14 @@ long hostgfx_offscreen_pixels(void) {
 board_display_t board_display_init(void) {
     board_display_t out = {.panel = &g_fake_panel, .width = g_w, .height = g_h};
     return out;
+}
+
+void board_display_backlight(bool on) {
+    g_backlight = on;
+}
+
+bool hostgfx_backlight(void) {
+    return g_backlight;
 }
 
 int esp_lcd_panel_draw_bitmap(esp_lcd_panel_handle_t panel, int x_start, int y_start, int x_end,

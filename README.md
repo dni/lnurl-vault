@@ -17,6 +17,12 @@ selected note as an on-screen QR code — the offline
 banknote handoff [LUD-25](https://github.com/lnurl/luds/pull/301) itself describes. See
 [`docs/PROTOCOL.md`](docs/PROTOCOL.md)'s "On-device note browsing" section.
 
+Left alone for a minute the screen goes dark — blanked, not just unlit, so the
+panel does not spend its life wearing a ghost of the resting card. A press of
+either button brings it back and does nothing else with that press. Nothing
+else sleeps: a paired host keeps working, and a confirmation arriving while the
+screen is dark lights it up and asks.
+
 Browser-side integration lives in
 [lnurl-wallet](https://github.com/dni/lnurl-wallet), not here: `src/device.ts`
 (the client for the protocol below), `deviceQueue.ts`, `deviceOrchestration.ts`,

@@ -19,6 +19,7 @@ void test_note_display_run(void);
 void test_card_render_run(void);
 void test_line_proto_run(void);
 void test_approval_run(void);
+void test_screen_sleep_run(void);
 void test_input_health_run(void);
 void test_identity_run(void);
 void test_regressions_run(void);
@@ -45,6 +46,7 @@ int main(void) {
     test_card_render_run();
     test_line_proto_run();
     test_approval_run();
+    test_screen_sleep_run();
     test_input_health_run();
     test_identity_run();
     test_regressions_run();
