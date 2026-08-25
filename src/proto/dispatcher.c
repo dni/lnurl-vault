@@ -684,6 +684,7 @@ static void handle_reset(char *out, size_t outcap) {
 #define OTA_CHUNK_DECODE_BUF 1050
 #define OTA_APPROVE_TIMEOUT_MS 30000 /* matches export_secret's confirm window */
 #define WIPE_APPROVE_TIMEOUT_MS 30000 /* likewise */
+#define PRUNE_APPROVE_TIMEOUT_MS 30000 /* likewise */
 
 typedef struct {
     bool active;
@@ -966,6 +967,79 @@ static void handle_delete(const char *line, char *out, size_t outcap) {
     write_ok(out, outcap);
 }
 
+/* `remaining` alongside `removed` so a host can reconcile in one round trip
+ * rather than following up with list_notes -- and so a sweep that removed
+ * nothing is visibly different from one that had nothing to remove. Through
+ * the json writer rather than snprintf, so it honours the same truncation
+ * contract every other response here does; see finish(). */
+static void write_prune_result(char *out, size_t outcap, size_t removed) {
+    json_writer_t w;
+    jw_init(&w, out, outcap);
+    jw_begin_obj(&w, NULL);
+    jw_bool(&w, "ok", true);
+    jw_uint64(&w, "removed", (uint64_t)removed);
+    jw_uint64(&w, "remaining", (uint64_t)vault_count());
+    finish(&w, out, outcap);
+}
+
+/* Forgets every note the vault already knows is dead.
+ *
+ * Not a wipe and deliberately nothing like one: it cannot touch a CONFIRMED
+ * note, so there is no amount of value it can destroy. A SPENT note is one
+ * this vault was TOLD was spent -- a melt a host watched settle, or a
+ * rotate/split/merge input -- and it has been dead since.
+ *
+ * It exists because `delete` takes one id and every gated command costs a
+ * physical hold, so clearing a few dozen of them meant a few dozen deliberate
+ * two-second holds. That is not housekeeping anyone does, so it does not get
+ * done, and the device fills up with dead weight until list_notes starts
+ * refusing pages for it.
+ *
+ * Note what it CANNOT do, and why nothing here tries: it has no idea whether
+ * a CONFIRMED note is still outstanding at the mint. Only the mint knows, only
+ * a host can ask, and asking means presenting the bearer secret -- see
+ * docs/PROTOCOL.md. A vault that quietly dropped notes it merely suspected
+ * were spent would be destroying money on a guess. */
+static void handle_prune_spent(const char *line, char *out, size_t outcap) {
+    (void)line;
+
+    const size_t spent = vault_count_spent();
+    if (spent == 0) {
+        /* Nothing to do, and deliberately no prompt. Asking somebody to
+         * approve a no-op is how people learn to approve without reading,
+         * on a device where the next prompt hands over a bearer secret. */
+        write_prune_result(out, outcap, 0);
+        return;
+    }
+
+    if (!g_deps.prune_approve) {
+        /* A gate that disappears because a dep is NULL is not a gate -- see
+         * confirm_action(). */
+        write_error(out, outcap, "unsupported",
+                    "no on-device confirmation available; refusing to forget notes");
+        return;
+    }
+
+    const confirm_result_t approved =
+        g_deps.prune_approve((uint32_t)spent, PRUNE_APPROVE_TIMEOUT_MS);
+    if (approved != CONFIRM_YES) {
+        write_error(out, outcap, confirm_error_code(approved), NULL);
+        return;
+    }
+
+    size_t removed = 0;
+    const vault_err_t err = vault_prune_spent(&removed);
+    if (err != VAULT_OK) {
+        /* The notes are gone from RAM whatever flash did, so this reports the
+         * storage failure rather than a clean sweep a reboot would undo --
+         * and it still says how many went, because that is what the owner
+         * just watched happen. */
+        write_vault_error(out, outcap, err);
+        return;
+    }
+    write_prune_result(out, outcap, removed);
+}
+
 void dispatcher_handle(const char *line, char *out, size_t outcap) {
     char cmd[32];
     bool found_cmd = json_get_str(line, "cmd", cmd, sizeof(cmd));
@@ -1004,6 +1078,8 @@ void dispatcher_handle(const char *line, char *out, size_t outcap) {
         handle_rename(line, out, outcap);
     } else if (strcmp(cmd, "wipe") == 0) {
         handle_wipe(line, out, outcap);
+    } else if (strcmp(cmd, "prune_spent") == 0) {
+        handle_prune_spent(line, out, outcap);
     } else if (strcmp(cmd, "delete") == 0) {
         handle_delete(line, out, outcap);
     } else if (strcmp(cmd, "reset") == 0) {

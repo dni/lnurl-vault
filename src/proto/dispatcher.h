@@ -110,6 +110,16 @@ typedef void (*ota_write_abort_fn)(void);
  * proceeding ungated: an unconfirmable wipe is not one to grant. */
 typedef confirm_result_t (*wipe_approve_fn)(uint32_t timeout_ms);
 
+/* Approval for forgetting every already-SPENT note, told how many.
+ *
+ * Its own dependency rather than a shared one, for the same reason wipe's and
+ * OTA's are: the card for this is not the card for anything else, and the
+ * COUNT is the whole of what makes it reviewable. "Forget some notes" is not
+ * a thing anyone can sensibly approve; "forget 25 spent notes" is, and the
+ * difference between 25 and 1 is the difference between housekeeping and a
+ * host having been busy behind your back. */
+typedef confirm_result_t (*prune_approve_fn)(uint32_t count, uint32_t timeout_ms);
+
 /* Optional: erases persistent storage AND verifies it is gone, returning
  * false if either the erase or the verification failed. NULL => `wipe` is
  * reported unsupported.
@@ -236,6 +246,7 @@ typedef struct {
      * release key exists. */
     const uint8_t *ota_pubkey;
     wipe_approve_fn wipe_approve;
+    prune_approve_fn prune_approve;
     wipe_storage_fn wipe_storage;
     storage_state_fn storage_state;
     trace_cmd_fn trace_cmd;

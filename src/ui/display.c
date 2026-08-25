@@ -11,6 +11,8 @@
  * test_card_render.c asserts about the pixels. */
 #include "display.h"
 
+#include <stdbool.h>
+
 #include <string.h>
 
 #include "font5x7.h"
@@ -207,6 +209,12 @@ int display_height(void) {
     return g_height;
 }
 
+static display_confirm_side_t g_confirm_side = DISPLAY_CONFIRM_SIDE_UNKNOWN;
+
+void display_set_confirm_side(display_confirm_side_t side) {
+    g_confirm_side = side;
+}
+
 void display_fill_rect(int x, int y, int w, int h, uint16_t color) {
     if (!display_ready() || w <= 0 || h <= 0) {
         return;
@@ -314,6 +322,68 @@ void display_text(int x, int y, const char *text, int scale, uint16_t fg, uint16
         esp_lcd_panel_draw_bitmap(g_panel, x, y + row, x + line_w, y + row + 1, dst);
     }
 }
+/* The two buttons, drawn where they physically are, with the one that
+ * approves filled in.
+ *
+ * Naming the button was not enough and neither was naming the side. The
+ * buttons carry no labels a person can see, so "BTN1" helps only someone who
+ * already knows, and the natural reach is for the left -- which on the classic
+ * board is cancel. That cost two bench runs of section 17 with a correct hint
+ * on screen the whole time. A picture of two buttons with one filled needs no
+ * reading and no prior knowledge; it is the same shape as the thing in the
+ * owner's hands.
+ *
+ * No sprite sheet for this. It is two squares, and display_fill_rect already
+ * draws squares -- a blitter and a generated bitmap would be more machinery
+ * than the drawing deserves.
+ *
+ * Whether there is room for it is draw_gesture_row's call, not this one's.
+ */
+static void draw_button_guide(int row_y, int size, uint16_t ink, uint16_t bg) {
+    const int right_x = g_width - CARD_MARGIN - size;
+    const int left_x = CARD_MARGIN;
+    const bool confirm_right = g_confirm_side == DISPLAY_CONFIRM_SIDE_RIGHT;
+
+    /* Filled = the one to hold. Outlined = the one that refuses. */
+    display_fill_rect(left_x, row_y, size, size, ink);
+    display_fill_rect(right_x, row_y, size, size, ink);
+    const int inset = size >= 6 ? 2 : 1;
+    const int hollow_x = confirm_right ? left_x : right_x;
+    display_fill_rect(hollow_x + inset, row_y + inset, size - 2 * inset, size - 2 * inset, bg);
+}
+
+/* The gesture row: the two buttons, and the words between them.
+ *
+ * Centred in the span the glyphs leave rather than laid out from the left,
+ * because the row is symmetric and a line hugging one glyph reads as belonging
+ * to that button. Falls back to the plain left-aligned line when there is no
+ * guide to sit between, or when the words do not fit between the glyphs --
+ * clipping the gesture is the one thing this row must never do. */
+static void draw_gesture_row(int row_y, int size, const char *hint, uint16_t ink, uint16_t bg) {
+    const int text_w = font5x7_text_width(hint, FONT5X7_MIN_READABLE_SCALE);
+    const int span_l = CARD_MARGIN + size;
+    const int span_r = g_width - CARD_MARGIN - size;
+
+    /* Decided before anything is drawn, not after. Drawing the guide first and
+     * then discovering the words do not fit leaves them overlapping, which is
+     * how LET GO FIRST came to sit on top of both glyphs.
+     *
+     * When they do not fit, the words win and the guide is dropped. LET GO
+     * FIRST is the longest of them and also the most urgent: it is shown
+     * precisely when a button is already down, when saying which button to
+     * reach for is redundant and saying to release is not. */
+    const bool guide = g_confirm_side != DISPLAY_CONFIRM_SIDE_UNKNOWN &&
+                       span_r > span_l && text_w <= span_r - span_l;
+    if (!guide) {
+        display_text(CARD_MARGIN, row_y, hint, FONT5X7_MIN_READABLE_SCALE, ink, bg);
+        return;
+    }
+
+    draw_button_guide(row_y, size, ink, bg);
+    display_text(span_l + (span_r - span_l - text_w) / 2, row_y, hint,
+                 FONT5X7_MIN_READABLE_SCALE, ink, bg);
+}
+
 
 void display_note_detail(display_state_t state, const char *action, const char *amount_num,
                           const char *amount_unit, const char *label, const char *id,
@@ -444,10 +514,11 @@ void display_note_detail(display_state_t state, const char *action, const char *
     if (hint && hint[0]) {
         const int hint_y = usable_h - small_h;
         if (hint_y >= y - gap && hint_y >= margin) {
-            display_text(margin, hint_y, hint, FONT5X7_MIN_READABLE_SCALE, ink, bg);
+            draw_gesture_row(hint_y, small_h, hint, ink, bg);
         }
     }
 }
+
 
 /* Centred, or at the margin if wider than the panel: display_text refuses a
  * negative x outright, so an over-long line would vanish rather than clip. */

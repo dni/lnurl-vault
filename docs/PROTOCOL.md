@@ -393,6 +393,48 @@ or as the burn step of a rotate/split/merge.
 `delete` only succeeds on a `SPENT` note (housekeeping) — a `PENDING` note is
 dropped via `discard`, and a `CONFIRMED` one must be spent first.
 
+### `prune_spent`
+
+```json
+{"cmd":"prune_spent"}
+→ {"ok":true,"removed":25,"remaining":14}
+```
+
+Forgets every note already in `SPENT` state, in one gated action. Gated like
+any other destructive command, and the card carries the **count** where a
+note's amount would go — because "forget some notes" is not something anyone
+can sensibly approve, and the difference between 25 and 1 is the difference
+between housekeeping and a host having been busy behind your back.
+
+It exists because `delete` takes one id and every gated command costs a
+physical two-second hold, so clearing a few dozen dead notes meant a few dozen
+deliberate holds. That is housekeeping nobody does, so it does not get done,
+and the device fills with dead weight until `list_notes` starts refusing pages
+for it.
+
+**It takes no parameters, deliberately** — there is nothing to aim it with. It
+cannot touch a `CONFIRMED` note (that is money) or a `PENDING` one (that may
+yet confirm), and it leaves alone any note the index named whose blob would
+not load, since those are not known-spent, they are unreadable.
+
+With nothing to do it answers `{"ok":true,"removed":0}` and **does not
+prompt**: asking somebody to approve a no-op is how people learn to approve
+without reading, on a device where the next prompt hands over a bearer secret.
+
+**What it cannot do**, and does not try to. It has no idea whether a
+`CONFIRMED` note is still outstanding at the mint. A note reaches `SPENT` only
+because a host told this vault so — a melt it watched settle, or a
+rotate/split/merge that burned the note as an input. A note redeemed by
+somebody else's wallet, or rotated away by another client, still reads
+`CONFIRMED` here forever. LUD-25 is explicit that this is inherent: "A spent
+note keeps its valid signature forever, and no revocation is visible offline."
+
+Reconciling that needs the mint, and asking the mint means presenting the
+bearer secret at its withdraw endpoint — which puts a live secret in an access
+log for every note checked. A vault that quietly dropped notes it merely
+suspected were spent would be destroying money on a guess, so this one does
+not guess.
+
 ### `reset`
 
 Reboots the device. Not part of note lifecycle management — a recovery

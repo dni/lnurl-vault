@@ -93,6 +93,21 @@ uint16_t display_state_ink_dim(display_state_t state);
  * rather than clipped: a caller computing a negative origin has a bug, and
  * silently drawing something slightly wrong on a device that shows bearer
  * secrets is worse than drawing nothing. */
+/* Which side of the screen the CONFIRM button is physically on, so the confirm
+ * card can draw the two buttons where they actually are rather than name one.
+ * Mirrors board.h's board_confirm_side_t; kept separate so this layer stays
+ * free of board.h, which the native tests do not compile. */
+typedef enum {
+    DISPLAY_CONFIRM_SIDE_UNKNOWN = 0,
+    DISPLAY_CONFIRM_SIDE_LEFT,
+    DISPLAY_CONFIRM_SIDE_RIGHT,
+} display_confirm_side_t;
+
+/* UNKNOWN draws no guide at all, which is the honest answer for a board whose
+ * orientation has not been established: a guide pointing at the wrong button
+ * is worse than no guide. */
+void display_set_confirm_side(display_confirm_side_t side);
+
 void display_fill_rect(int x, int y, int w, int h, uint16_t color);
 
 /* Draws `text` with its top-left at (x, y), each font pixel scaled to a
