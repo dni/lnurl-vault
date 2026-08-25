@@ -45,6 +45,7 @@ SRC = ../../src/vault/sha256.c \
       ../../src/proto/note_display.c \
       ../../src/ui/font5x7.c \
       ../../src/ui/display.c \
+      ../../src/ui/boot_screen.c \
       hostgfx/hostgfx.c \
       ../../src/proto/line_proto.c \
       ../../src/proto/approval.c \
@@ -97,7 +98,8 @@ SAN_FLAGS = -fsanitize=address,undefined -fno-sanitize-recover=all -g -O1
 # Renders every screen to a PNG, at both panel geometries, from the same
 # src/ui/display.c the firmware runs. See hostgfx/hostgfx.h.
 PREVIEW_BIN = vault_preview
-PREVIEW_SRC = ../../src/ui/display.c ../../src/ui/font5x7.c ../../src/proto/note_display.c \
+PREVIEW_SRC = ../../src/ui/display.c ../../src/ui/boot_screen.c ../../src/ui/font5x7.c \
+              ../../src/proto/note_display.c \
               hostgfx/hostgfx.c preview.c
 PREVIEW_OUT ?= preview
 PREVIEW_ZOOM ?= 3

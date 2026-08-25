@@ -172,6 +172,11 @@ static int confirmed_position(int idx) {
     return pos;
 }
 
+/* Defined below, beside the other counting helpers; needed here for the
+ * browse card's "3 of 12" band. Takes vault_lock itself, so it must not be
+ * called with it already held. */
+static size_t confirmed_count(void);
+
 /* Shows the selected note while browsing, so unveiling the wrong one takes a
  * deliberate misreading rather than a miscount. This replaced a blinked-out
  * position count, which told you where you were in the list but not which
@@ -198,13 +203,24 @@ static void draw_browse_note(int browse_index, int position) {
     char amount[NOTE_AMOUNT_BUF];
     char unit[8];
     char label[24];
-    char id[VAULT_ID_BUF + 16];
+    char badge[24];
     note_format_amount_parts(meta.amount_msat, amount, sizeof(amount), unit, sizeof(unit));
     note_format_label(meta.label, label, sizeof(label));
-    snprintf(id, sizeof(id), "%s  %d", meta.id, position);
-    /* No verb and no gesture hint: browsing is not a prompt, and the chord
-     * that unveils from here is not the confirm hold. */
-    display_note_detail(DISPLAY_STATE_BROWSE, NULL, amount, unit, label, id, NULL);
+    /* Where you are goes in the band, where the verb goes on a prompt. It used
+     * to be tacked onto the end of the id -- "f822a462  3" -- which put the
+     * one number that says how far through the list you are in the same
+     * weight, the same size and the same line as eight characters of hex that
+     * mean nothing to a person. The id keeps its own line and the band says
+     * which of how many. */
+    snprintf(badge, sizeof(badge), "NOTE %d/%u", position, (unsigned)confirmed_count());
+    /* Still no gesture hint: browsing is not a prompt, and the chord that
+     * unveils from here is not the confirm hold. */
+    display_note_detail(DISPLAY_STATE_BROWSE, badge, amount, unit, label, meta.id, NULL);
+}
+
+static void show_browse_note(int browse_index, int position) {
+    draw_browse_note(browse_index, position);
+    screen_awake();
 }
 
 static void show_browse_note(int browse_index, int position) {

@@ -663,11 +663,11 @@ bench run rather than by reading the code:
 |---|---|
 | `export_secret` | `SHOW SECRET` above the amount, `HOLD BTN1 2s` below it |
 | A gated destructive command | its own verb — `MARK SPENT`, `DISCARD`, `RENAME`, `DELETE` — not the disclosure card |
-| `wipe` | `WIPE ALL`, on a card that is no longer bare colour |
+| `wipe` | `WIPE ALL` in the band, on a card that is no longer bare colour |
 | OTA | `NEW FIRMWARE`, likewise |
-| Holding button 1 | the bar fills over 2s and the card resolves green |
+| Holding button 1 | the bar fills across the full width of the bottom edge over 2s, in the card's own amber, and resolves to a green field |
 | Tapping button 1 | the bar visibly starts and drops back, rather than nothing happening |
-| Browsing a note | unchanged: no verb, no hint, note id still shown |
+| Browsing a note | still no gesture hint, but the band now says `NOTE 3/12` where a prompt puts its verb, and the id has its own line |
 | A seven-digit amount | still readable; the digits shrink to make room, no line falls off the bottom |
 
 The note id is deliberately **not** on the confirm card any more. Eight hex
@@ -752,12 +752,12 @@ out, on a device where a press starts browsing bearer secrets.
 
 | Check | Expect |
 |---|---|
-| Power on | `LNURL VAULT`, the firmware version, and the board name, before anything else draws |
-| At rest, notes on the device | `3 NOTES` (or `1 NOTE`) over `TAP TO VIEW`, white on dark grey |
+| Power on | the boot sequence — see section 22 |
+| At rest, notes on the device | `3 NOTES` over a dimmer `TAP TO VIEW`, warm white on near-black, teal rule along the top |
 | At rest, empty vault | `NO NOTES` over `PAIR TO ADD` |
-| Approve a disclosure | `APPROVED` over `SHOW SECRET`, green |
-| Cancel with button 2 | `DECLINED` / `SHOW SECRET` / `NOTHING DONE`, white on red |
-| Let a prompt time out | `NO ANSWER` / the verb / `NOTHING DONE`, on grey |
+| Approve a disclosure | `APPROVED` over `SHOW SECRET`, a full field of mint green with warm-dark text |
+| Cancel with button 2 | `DECLINED` / `SHOW SECRET` / `NOTHING DONE`, a full field of coral |
+| Let a prompt time out | `NO ANSWER` / the verb / `NOTHING DONE`, a full field of warm grey |
 | Outcome timing | the wallet gets its answer FIRST; the card stays up ~1.8s afterwards |
 | Hold button 1 before the prompt appears | the card says `LET GO FIRST`; releasing switches it to `HOLD BTN1 2s` |
 | Unveil a note that cannot be shown | `FAILED` over `NOT SHOWN`, not a bare red flash |
@@ -846,3 +846,87 @@ a second bug, and it is a rather good detector for it.
 > minute, or whether waking looks instant to a person. Both boards implement
 > `board_display_backlight()`; only the classic T-Display's backlight pin has
 > ever been exercised at all, and neither has been watched going out.
+
+## 22. The redesign, and the boot sequence — PARTIALLY BENCH-RUN
+
+Two changes with one cause. Every screen was a full field of a saturated
+primary with black or white text on it, chosen so a state would be
+unmistakable at arm's length — which it was. But a saturated field has no
+edges, so nothing on it could be framed, separated or emphasised: the whole
+screen read as one wash, and the colour was spent on the background before
+any of it could be spent on meaning. And the boot screen was three lines of
+grey on the same grey the device rests on, gone before anyone looked up.
+
+**Colour moved from the wallpaper into the structure.** Two kinds of screen
+now, split by what the screen is *for* rather than by which looked nicer:
+
+- **Cards** — browse, confirm, rest. Read up close, holding the device, with
+  detail to study. Warm near-black ground, warm off-white text, the state
+  colour as a header band across the top and as the progress bar along the
+  bottom. A second, dimmer ink weight for what is context rather than content
+  — unit, label, id.
+- **Fields** — approved, declined, no answer. Read at a glance from across a
+  room, carrying no detail at all. Still the full panel of colour, because
+  that is exactly what a field of colour is good at, with the card's own warm
+  dark as the ink.
+
+The colours came off the primaries at the same time: warm amber rather than
+sodium yellow, coral rather than fire engine, mint rather than laser green.
+Same six hues, same distance apart, less fluorescent.
+
+| Check | Expect |
+|---|---|
+| Any card, in daylight | the warm off-white is legible on the near-black; the dim weight is legible but visibly *quieter*, not merely darker |
+| Any card, across a room | the band alone tells you which state it is, without reading a word |
+| An outcome, across a room | still readable as a colour at the same distance the old full-bleed screens were |
+| Confirm card | the amber band carries the verb in the card's own dark; the amount is the biggest thing under it |
+| Browse card | violet band reading `NOTE 3/12`; the id on its own line, in the dim weight |
+| Holding to approve | the bar fills the full width of the bottom edge, in the state's colour, not white |
+| A seven-digit amount | the digits shrink; the id line survives, and nothing lands in the bar |
+
+**The boot sequence** is about two seconds where it used to be a blink:
+
+| Stage | Expect |
+|---|---|
+| 1 | A shutter: a full teal field opens from the centre outwards, settling into exactly the band-and-bar the cards use |
+| 2 | `LNURL` then `VAULT`, one character at a time, several times the size of the old single line |
+| 3 | The band becomes an identity strip — `v0.0.7  t-display` — and the middle clears |
+| 4 | `STORAGE`, `IDENTITY`, `LINK` appear one at a time as each actually comes up, the bar counting them off |
+| 5 | Held for about two thirds of a second, then the resting card |
+
+The checklist is not decoration and not padding. Each of those three could
+already fail on its own — storage unavailable, a key that could not be
+written down, a transport that did not start — and each used to fail into an
+identical dark rectangle unless a host happened to be attached to ask. A
+failed step draws `FAIL` in the full ink weight against a dimmed label, so the
+one line worth noticing is not the one that looks like the rest.
+
+**Forcing a failure is the row worth being awkward about.** The honest way to
+see the `FAIL` state is to break storage: erase the NVS partition and let
+`vault_nvs_boot()` fail, or flash a build with the storage init stubbed out.
+The preview renderer draws it without a board (`00d-boot-storage-failed`),
+which is a substitute for guessing, not for the bench.
+
+One real bug fell out of the layout work: `display_note_detail()` never
+counted the id line when deciding how large the amount could be, so on a card
+whose amount happened to take a large scale the id was silently dropped — on
+the one screen whose job is to say WHICH bearer note the next gesture
+discloses. The band shrinking the content area is what surfaced it. It was
+always wrong, and it is fixed here rather than separately, because separating
+it would mean landing a card layout that is known to drop that line.
+
+> **Bench record — 2026-08-25.** Classic T-Display, firmware
+> `0.0.7-4-g74452ce-dirty` — the redesign built from this branch before the
+> documentation commit, so identical firmware source to what is here. Flashed,
+> then reset deliberately so the boot sequence could be watched from the
+> start. Both were seen on glass and reported as looking right.
+>
+> That is a judgement on the whole, **not a pass on the rows above**, none of
+> which was checked off individually. In particular nobody has yet looked at a
+> card in daylight, forced the `FAIL` state, or put a seven-digit amount on
+> the glass to see whether the id line survives beside it. Those stay open.
+>
+> Everything else here still comes from the preview renderer and the pixel
+> assertions in `test/native/test_card_render.c`, which check the relationship
+> — a card wears its colour as a band, an outcome as a field — rather than any
+> literal value, so the palette can be retuned without rewriting them.

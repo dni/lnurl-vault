@@ -759,7 +759,8 @@ panel edge.
 cd test/native && make preview      # PNGs in test/native/preview/
 ```
 
-Renders every card the firmware can draw — idle, browse, each confirm verb,
+Renders every screen the firmware can draw — each stage of boot, idle,
+browse, each confirm verb,
 the outcome states, and the awkward cases (a seven-figure amount, a label
 longer than the panel, a sub-sat note) — at both real panel geometries, as
 PNGs you can open.
