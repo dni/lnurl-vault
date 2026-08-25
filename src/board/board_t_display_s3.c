@@ -241,6 +241,16 @@ board_display_t board_display_init(void) {
     return out;
 }
 
+void board_display_backlight(bool on) {
+    /* Only the backlight. PIN_POWER_ON stays high: it is the peripheral
+     * power rail, not a screen switch, and dropping it takes the panel's
+     * configuration with it -- so waking would mean re-running bring-up,
+     * on the one device whose screen has to be able to answer a
+     * confirmation on demand. drive_high() has already made this pad an
+     * output by the time anything can ask for the light. */
+    gpio_set_level(PIN_LCD_BL, on ? 1 : 0);
+}
+
 void board_serial_start(void) {
     serial_cdc_start(); /* native USB-CDC on the S3's USB-OTG peripheral */
 }

@@ -36,6 +36,32 @@ bool display_ready(void);
 int display_width(void);
 int display_height(void);
 
+/* Puts the screen out, and brings it back.
+ *
+ * The vault sits on a desk all day with the same resting card in the same
+ * pixels; an IPS panel left like that acquires a faint permanent copy of it.
+ * Sleeping blanks the framebuffer to black AND kills the backlight -- both,
+ * not either: the backlight alone leaves the liquid crystal held in the same
+ * state it was ghosting into, and the blank alone leaves a lit black
+ * rectangle that looks like a dead device.
+ *
+ * WHEN to sleep is not decided here. That is src/proto/screen_sleep.h, driven
+ * by src/ui/ui_task.c, which is also the only thing that should call these.
+ *
+ * Order matters when waking, and it is the caller's to get right: REPAINT
+ * FIRST, THEN display_wake(). The panel keeps whatever was last drawn on it,
+ * so lighting it before the new card is composed shows the old one -- the
+ * same reason both board files turn their backlight on last during
+ * bring-up. Drawing while asleep is not an error; it simply happens in the
+ * dark, which is exactly what is wanted.
+ *
+ * Both are idempotent, and both do nothing at all when the panel never came
+ * up: there is no screen to blank, and a display_ready() of false already
+ * means every disclosure refuses. */
+void display_sleep(void);
+void display_wake(void);
+bool display_asleep(void);
+
 void display_set_state(display_state_t state);
 
 /* Exposed so anything drawing onto a state's background, or checking what was

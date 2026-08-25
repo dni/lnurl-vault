@@ -175,6 +175,14 @@ board_display_t board_display_init(void) {
     return out;
 }
 
+void board_display_backlight(bool on) {
+    /* A plain GPIO on this board -- no PWM, so this is on or off rather than
+     * dim. The pad is configured as an output at the end of
+     * board_display_init(); before that this writes an output register
+     * nothing is driving from, which is exactly the no-op it should be. */
+    gpio_set_level(PIN_TFT_BL, on ? 1 : 0);
+}
+
 void board_serial_start(void) {
     serial_uart_start(); /* CH9102 USB-UART bridge on UART0 */
 }
