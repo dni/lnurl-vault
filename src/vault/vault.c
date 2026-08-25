@@ -126,6 +126,9 @@ static bool gen_unique_id(vault_rng_fn rng, char out[VAULT_ID_BUF], const char *
 
 static void fill_meta(const note_t *n, note_meta_t *out) {
     memcpy(out->id, n->id, VAULT_ID_BUF);
+    uint8_t digest[32];
+    sha256(n->secret, VAULT_SECRET_LEN, digest);
+    hex_encode(digest, sizeof(digest), out->h, VAULT_HASH_HEX_BUF);
     out->state = n->state;
     out->amount_msat = n->amount_msat;
     memcpy(out->label, n->label, VAULT_LABEL_BUF);

@@ -275,6 +275,8 @@ void test_dispatcher_run(void) {
     dispatcher_handle("{\"cmd\":\"list_notes\"}", out, sizeof(out));
     UL_CHECK(json_get_bool(out, "ok", &ok) && ok, "list_notes returns ok:true");
     UL_CHECK(json_has(out, "notes"), "list_notes response carries a notes field");
+    UL_CHECK(strstr(out, "\"h\":") != NULL,
+             "list_notes exposes each note hash for recovery matching");
 
     dispatcher_handle("{\"cmd\":\"reset\"}", out, sizeof(out));
     UL_CHECK(json_get_bool(out, "ok", &ok) && ok,
