@@ -894,3 +894,55 @@ it would mean landing a card layout that is known to drop that line.
 > assertions in `test/native/test_card_render.c`, which check the relationship
 > — a card wears its colour as a band, an outcome as a field — rather than any
 > literal value, so the palette can be retuned without rewriting them.
+
+## 23. The three note formats — NOT YET BENCH-RUN
+
+Found on the bench, not by reading: a note unveiled on the device and scanned
+with **Wallet of Satoshi** came back as *"that isn't an ln invoice"*.
+
+Nothing was broken. The QR held what it was built to hold — an `https://`
+claim link into a web wallet, this project's answer to issue #26, because a
+stock phone camera opens `https://` and does nothing at all with `lnurlw://`.
+A Lightning wallet's scanner wants an invoice or an LNURL, and an https URL is
+neither.
+
+But LUD-25 names two encodings for a bearer note, and the device shipped
+neither by default: "prefixed with the `lnurlw://` scheme (LUD-17) **or
+bech32-encoded as an ordinary LNURL**". The bech32 form — `LNURL1…`, what
+every LNURL wallet has understood for years — was not implemented at all. That
+is the spec's opening promise going unmet: "a `WALLET` that does not know about
+`LNURLcash` still sees a normal withdraw link and can cash it out to a BOLT-11
+invoice as usual."
+
+So there are three now, cycled with button 1 on the unveil screen, because
+which one a given wallet accepts is a question a person holding the device can
+answer in ten seconds and no amount of reading answers at all.
+
+| Check | Expect |
+|---|---|
+| Unveil a note | opens on `LNURL`; the strip under the code reads `LNURL   BTN1 NEXT` |
+| Press button 1 | `LNURLW`, then `LINK`, then back to `LNURL` — the code visibly changes each time |
+| Press button 2 | back to the browse card, as any tap used to do |
+| Scan `LNURL` with a stock wallet | a withdraw prompt, **not** "isn't an ln invoice" |
+| Scan `LINK` with the phone's camera app | the claim page opens in a browser |
+| Scan `LNURLW` with an LNURL-native wallet | a withdraw prompt, where the wallet implements LUD-17 |
+| Cycle repeatedly for a minute | the code still clears at ~60s from the **chord**, not from the last press |
+| A note on a very long mint host | the code still renders; the caption may be squeezed out, and that is the right way round |
+
+**The window is the row worth being awkward about.** Cycling redraws the
+secret but does not touch the deadline, so a bearer secret cannot be held on
+screen indefinitely by tapping. Verifying that means unveiling, pressing
+button 1 every few seconds, and watching the clock — it must clear about sixty
+seconds after the chord regardless.
+
+**Scanning is enough; claiming is not required.** A wallet that recognises the
+format shows a withdraw prompt, which answers the question — backing out there
+leaves the note unspent. Note that redeeming through a wallet leaves the device
+still reading `CONFIRMED`, since nothing tells it: that needs a `mark_spent`.
+
+> **Not yet bench-run.** The encoder is checked against BIP-173's own vectors
+> and against strings produced by an independent implementation of the spec
+> and round-tripped back through a decoder written the same way
+> (`test/native/test_bech32.c`) — so the LNURL is known to be a *valid* LNURL.
+> Whether Wallet of Satoshi, or any other wallet, actually accepts one for a
+> LUD-25 bearer note is a question only a phone answers.

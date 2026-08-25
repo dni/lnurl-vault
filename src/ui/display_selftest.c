@@ -177,7 +177,7 @@ void qr_selftest_run(void) {
         diag("QR %u/%u len=%u ver=%u modules=%d scale=%d px=%d buf=%d", i + 1, n, (unsigned)len,
              ver, modules, scale, modules * scale, modules * scale * modules * scale * 2);
 
-        bool shown = qr_display_show(ladder[i]);
+        bool shown = qr_display_show(ladder[i], NULL);
         diag("QR %u/%u shown=%s", i + 1, n, shown ? "YES" : "NO");
         if (!shown) {
             display_fill_rect(0, 0, display_width(), display_height(), C_RED);

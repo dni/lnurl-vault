@@ -613,11 +613,38 @@ rather than a miscount. At rest, before any of that, the screen shows how many
 `CONFIRMED` notes the device holds and that a tap will show them; it does not
 show what they are worth.
 
-**What the QR encodes.** By default a plain `https://` claim link into a
-wallet, `<wallet>/#/claim?u=<host>&k1=<secret>&a=<msat>` — because a stock
-phone camera opens that, and does not open `lnurlw://` (issue #26: the codes
-render and decode fine, nothing handles them). A note nobody can accept with
-the phone in their pocket is not a bearer note.
+**What the QR encodes**, and how to change it without a rebuild. Three forms,
+cycled with button 1 while the code is up; button 2 dismisses as before. The
+strip under the code names the one showing.
+
+| Caption | Form | Who takes it |
+|---|---|---|
+| `LNURL` | bech32 `LNURL1…`, uppercase | An ordinary Lightning wallet's scanner. The default |
+| `LNURLW` | `lnurlw://<host>?k1=…&amount=…` ([LUD-17](https://github.com/lnurl/luds/blob/luds/17.md)) | LNURL-native wallets that implement the scheme |
+| `LINK` | `<wallet>/#/claim?u=<host>&k1=<secret>&a=<msat>` | A stock phone camera, which opens it in a browser |
+
+LUD-25 names the first two: "prefixed with the `lnurlw://` scheme (LUD-17) or
+bech32-encoded as an ordinary LNURL, `<withdraw LNURL>?k1=<P or secret>&amount=<msat>`
+*is* the bearer note". The third is not in the spec — it is this project's
+answer to issue #26, because a stock camera opens `https://` and does nothing
+at all with `lnurlw://`, and a note nobody can accept with the phone in their
+pocket is not a bearer note.
+
+None of the three works everywhere, which is why the device cycles rather than
+picks. The claim link is an `https` URL, so a wallet expecting an invoice
+rejects it outright — Wallet of Satoshi reports it as "not an ln invoice",
+which is the spec's own backward-compatibility promise going unmet. `lnurlw://`
+support is patchy. Bech32 is the broadest, and is what the unveil screen opens
+on.
+
+Cycling deliberately does **not** extend the 60-second window: the secret
+leaves the screen a fixed time after the chord that unveiled it, however many
+times it is redrawn.
+
+The bech32 form costs nothing to carry despite being the longest string —
+about 177 characters against the claim link's 138 — because it is uppercase,
+and the QR encoder packs uppercase bech32 in alphanumeric mode at 5.5 bits per
+character instead of byte mode's 8.
 
 The secret sits in the **fragment**, never the query, so it is not in a
 request line, a referrer or a server log.
