@@ -895,7 +895,7 @@ it would mean landing a card layout that is known to drop that line.
 > — a card wears its colour as a band, an outcome as a field — rather than any
 > literal value, so the palette can be retuned without rewriting them.
 
-## 23. The three note formats — NOT YET BENCH-RUN
+## 23. The three note formats — PARTIALLY BENCH-RUN
 
 Found on the bench, not by reading: a note unveiled on the device and scanned
 with **Wallet of Satoshi** came back as *"that isn't an ln invoice"*.
@@ -923,7 +923,7 @@ answer in ten seconds and no amount of reading answers at all.
 | Unveil a note | opens on `LNURL`; the strip under the code reads `LNURL   BTN1 NEXT` |
 | Press button 1 | `LNURLW`, then `LINK`, then back to `LNURL` — the code visibly changes each time |
 | Press button 2 | back to the browse card, as any tap used to do |
-| Scan `LNURL` with a stock wallet | a withdraw prompt, **not** "isn't an ln invoice" |
+| Scan `LNURL` with a stock wallet | the wallet reaches the mint — **bench-run, see below** |
 | Scan `LINK` with the phone's camera app | the claim page opens in a browser |
 | Scan `LNURLW` with an LNURL-native wallet | a withdraw prompt, where the wallet implements LUD-17 |
 | Cycle repeatedly for a minute | the code still clears at ~60s from the **chord**, not from the last press |
@@ -940,9 +940,34 @@ format shows a withdraw prompt, which answers the question — backing out there
 leaves the note unspent. Note that redeeming through a wallet leaves the device
 still reading `CONFIRMED`, since nothing tells it: that needs a `mark_spent`.
 
-> **Not yet bench-run.** The encoder is checked against BIP-173's own vectors
-> and against strings produced by an independent implementation of the spec
-> and round-tripped back through a decoder written the same way
-> (`test/native/test_bech32.c`) — so the LNURL is known to be a *valid* LNURL.
-> Whether Wallet of Satoshi, or any other wallet, actually accepts one for a
-> LUD-25 bearer note is a question only a phone answers.
+> **Bench record — 2026-08-25.** Classic T-Display. A note on `moneyer.dev/w`
+> unveiled, shown as `LNURL`, scanned with **Wallet of Satoshi**. WoS returned
+> the mint's own words: `Invalid or already spent k1.` — which is
+> `lnurl_mint/db.py`'s error, not the wallet's.
+>
+> **That is the row passing, not failing.** For WoS to say it, the entire
+> chain had to work: the code decoded, the bech32 parsed as an LNURL, the
+> LNURL resolved to `moneyer.dev/w`, and the wallet made a LUD-03
+> `withdrawRequest` GET carrying the `k1` that the mint answered. The same
+> device, minutes earlier, could get no further than "that isn't an ln
+> invoice" — which is exactly the difference this section exists to close.
+>
+> What it does **not** show is a successful claim, because the note was dead
+> before it was scanned (see below). `LNURLW` and `LINK` are still unrun, as
+> is the 60-second window row.
+>
+> **The device was holding a note the mint had already retired**, and had no
+> way to know. That is inherent, and LUD-25 says so in as many words: "The
+> signature proves the note *was issued*, it can never prove the note is
+> *still outstanding*. A spent note keeps its valid signature forever, and no
+> revocation is visible offline." Only a paired host can tell the vault, via
+> `mark_spent`. Worth knowing that the mint deliberately does not distinguish
+> "spent" from "never heard of it" — one message covers both, so the endpoint
+> cannot be used as an oracle to probe for live `k1`s. So this note is either
+> spent or was rotated away; from outside, those look identical on purpose.
+>
+> Everything else here still rests on the encoder being checked against
+> BIP-173's own vectors and against strings from an independent implementation
+> of the spec, round-tripped back through a decoder written the same way
+> (`test/native/test_bech32.c`) — so the LNURL is known to be a *valid* LNURL
+> quite apart from any wallet's opinion of it.
