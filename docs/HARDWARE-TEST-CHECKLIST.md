@@ -972,7 +972,7 @@ still reading `CONFIRMED`, since nothing tells it: that needs a `mark_spent`.
 > (`test/native/test_bech32.c`) — so the LNURL is known to be a *valid* LNURL
 > quite apart from any wallet's opinion of it.
 
-## 24. Forgetting spent notes — NOT YET BENCH-RUN
+## 24. Forgetting spent notes — BENCH-RUN
 
 `delete` takes one id, and every gated command costs a physical two-second
 hold. So clearing a few dozen spent notes meant a few dozen deliberate holds,
@@ -1010,19 +1010,43 @@ instead of N — so the only way to know the removal actually stuck is to pull
 the power and count again. A sweep that lived only in RAM would look identical
 until the next boot.
 
-> **Bench record — 2026-08-25.** Classic T-Display holding 39 notes, 25 of
-> them spent. `prune_spent` sent and deliberately left unanswered: the command
-> reached the gate, the window ran its full 30.2s, and the device returned
-> `{"ok":false,"error":"timeout"}`. A re-census immediately afterwards found
-> **39 notes still there** — the unanswered-prompt row, passing on real
-> hardware.
+> **Bench record — 2026-08-25.** Classic T-Display, firmware
+> `0.0.7-8-g5f3462d`, holding **39 notes — 25 spent, 14 confirmed, 0 pending**.
+> Three runs, one per outcome:
 >
-> Every other row still needs a press. Nothing above has yet confirmed that
-> the card shows the right count, that approving removes exactly the 25, that
-> the 14 live notes survive intact, or that the removal sticks across a power
-> cycle — which is the one row the host tests structurally cannot answer at
-> all.
+> | Run | Answer | Notes after |
+> |---|---|---|
+> | Left unanswered | `{"ok":false,"error":"timeout"}` after 30.2s | 39 |
+> | Cancel button | `{"ok":false,"error":"user_declined"}` after 6.6s | 39 |
+> | Confirm button held | `{"ok":true,"removed":25,"remaining":14}` after 5.0s | 14 |
 >
-> The rest is covered natively by `test/native/test_prune.c` (10 checks)
-> against the in-RAM vault, which exercises the state rules and the gate but
-> not NVS.
+> On the approved run: every spent note gone, every live note present, and
+> every survivor carrying its own amount, label, host and state unchanged —
+> compared id by id against a census taken before the sweep, not by counting.
+>
+> **The removal stuck across a power cycle.** The board was reset and
+> re-censused: 14 notes, the same 14. That is the row the host tests
+> structurally cannot answer, and the one that would have caught a sweep
+> living only in RAM.
+>
+> **A second sweep raised no card.** With nothing to do it answered
+> `{"ok":true,"removed":0,"remaining":14}` in **0.11 seconds** — far inside
+> any confirm window, which is how a wire-only test can tell "did not prompt"
+> from "prompted and was approved fast".
+>
+> Two rows are still unrun, both cosmetic. Nobody has read the card itself, so
+> the claim that it says `PRUNE SPENT` over the count over `notes` still rests
+> on the preview renderer; and the singular `note` case needs a vault with
+> exactly one spent note in it. The PENDING-survives row was not exercised
+> either — this device had no PENDING notes — and rests on
+> `test/native/test_prune.c`.
+>
+> **A finding for anyone reading this expecting a tidier device.** The sweep
+> worked and 14 notes remained, of which 13 were dead test notes on
+> `example.com` and `127.0.0.1:8111` — worthless, unspendable, and `CONFIRMED`.
+> Nothing here can tell those from a real note: a `CONFIRMED` note is money by
+> the vault's own reckoning, whatever host it names. Clearing them means
+> `mark_spent` on each (one hold apiece) or `wipe` (one hold, everything). That
+> is not a gap in this command; a bulk removal of `CONFIRMED` notes is a way to
+> destroy money in one gesture, which is what `wipe` already is, behind a
+> stronger gate.
