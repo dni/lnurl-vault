@@ -11,6 +11,7 @@
 #include <string.h>
 #include <sys/stat.h>
 
+#include "boot_screen.h"
 #include "display.h"
 #include "hostgfx.h"
 #include "note_display.h"
@@ -61,9 +62,33 @@ static void render_board(const char *board, int w, int h) {
     g_board = board;
     printf("%s (%dx%d)\n", board, w, h);
 
+    /* The boot screen animates; vTaskDelay is a no-op here, so what lands is
+     * the last frame of each stage. Three shots because it is three screens,
+     * and the middle one -- a checklist half filled in -- is the one nobody
+     * would think to look at and the one a failing device stops on. */
     fresh(w, h);
-    display_message(DISPLAY_STATE_IDLE, "LNURL VAULT", "v0.0.7", board);
-    shot("00-boot");
+    boot_screen_begin("0.0.7", board);
+    shot("00-boot-name");
+
+    fresh(w, h);
+    boot_screen_begin("0.0.7", board);
+    boot_screen_step("STORAGE", true);
+    boot_screen_step("IDENTITY", true);
+    shot("00b-boot-partway");
+
+    fresh(w, h);
+    boot_screen_begin("0.0.7", board);
+    boot_screen_step("STORAGE", true);
+    boot_screen_step("IDENTITY", true);
+    boot_screen_step("LINK", true);
+    shot("00c-boot-ready");
+
+    fresh(w, h);
+    boot_screen_begin("0.0.7", board);
+    boot_screen_step("STORAGE", false);
+    boot_screen_step("IDENTITY", true);
+    boot_screen_step("LINK", true);
+    shot("00d-boot-storage-failed");
 
     fresh(w, h);
     display_message(DISPLAY_STATE_IDLE, "3 NOTES", "TAP TO VIEW", NULL);
@@ -74,7 +99,7 @@ static void render_board(const char *board, int w, int h) {
     shot("01b-idle-empty");
 
     fresh(w, h);
-    note_card(DISPLAY_STATE_BROWSE, NULL, 21000, "rent", "f822a462  3", NULL);
+    note_card(DISPLAY_STATE_BROWSE, "NOTE 3/12", 21000, "rent", "f822a462", NULL);
     shot("02-browse");
 
     fresh(w, h);
@@ -143,7 +168,7 @@ static void render_board(const char *board, int w, int h) {
     shot("13-confirm-sub-sat");
 
     fresh(w, h);
-    note_card(DISPLAY_STATE_BROWSE, NULL, 21000, NULL, "f822a462  3", NULL);
+    note_card(DISPLAY_STATE_BROWSE, "NOTE 3/12", 21000, NULL, "f822a462", NULL);
     shot("14-browse-no-label");
 }
 

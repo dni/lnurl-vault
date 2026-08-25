@@ -20,6 +20,12 @@
  * against a browse card drawing white on purple: zero pixels both times. */
 #define INK display_state_ink(DISPLAY_STATE_CONFIRM_PENDING)
 #define BROWSE_INK display_state_ink(DISPLAY_STATE_BROWSE)
+/* The state colour is no longer the background -- it is the header band and
+ * the progress bar. So "was the verb drawn?" is now asked of the band: text
+ * in the card's own ground colour EATS accent pixels, and a longer verb eats
+ * more. See palette.h. */
+#define ACCENT display_state_accent(DISPLAY_STATE_CONFIRM_PENDING)
+#define BROWSE_ACCENT display_state_accent(DISPLAY_STATE_BROWSE)
 
 /* Both real panels. A card has to work on the narrow one. */
 static const int PANEL_W[2] = {240, 320};
@@ -79,13 +85,53 @@ static void test_the_verb_reaches_the_glass(void) {
         panel(i);
         display_note_detail(DISPLAY_STATE_CONFIRM_PENDING, "-", "21 000", "sats", "rent", NULL,
                             "HOLD BTN1 2s");
-        const long shortest = hostgfx_ink_pixels(INK);
+        const long shortest = hostgfx_ink_pixels(ACCENT);
 
         panel(i);
         confirm_card("HOLD BTN1 2s");
-        const long full = hostgfx_ink_pixels(INK);
+        const long full = hostgfx_ink_pixels(ACCENT);
 
-        UL_CHECK(full > shortest, "the verb is drawn");
+        UL_CHECK(shortest > 0, "the band is on the glass at all");
+        UL_CHECK(full < shortest, "the verb is drawn into it -- a longer one covers more band");
+    }
+}
+
+static void test_every_card_has_its_band(void) {
+    /* Browse has no verb, and used to get no first line at all -- which left
+     * it as a wall of colour with text at the top and a third of the panel
+     * empty. The band is the card's spine whether or not there is anything to
+     * write on it. */
+    for (int i = 0; i < PANELS; i++) {
+        panel(i);
+        display_note_detail(DISPLAY_STATE_BROWSE, NULL, "21 000", "sats", "rent", "f822a462",
+                            NULL);
+        UL_CHECK(hostgfx_ink_pixels(BROWSE_ACCENT) > 0, "a browse card still gets a band");
+
+        panel(i);
+        display_note_detail(DISPLAY_STATE_CONFIRM_PENDING, "WIPE ALL", NULL, NULL, NULL, NULL,
+                            NULL);
+        UL_CHECK(hostgfx_ink_pixels(ACCENT) > 0, "so does one with nothing but a verb");
+    }
+}
+
+static void test_a_card_is_dark_and_an_outcome_is_not(void) {
+    /* The whole point of the redesign: things you read up close sit on a dark
+     * ground with the colour as structure; things you read across a room are
+     * the colour. Asserted as a relationship rather than against literals, so
+     * the palette can be retuned without rewriting this. */
+    for (int i = 0; i < PANELS; i++) {
+        const long area = (long)PANEL_W[i] * PANEL_H[i];
+
+        panel(i);
+        confirm_card("HOLD BTN1 2s");
+        const long card_accent = hostgfx_ink_pixels(ACCENT);
+        UL_CHECK(card_accent > 0 && card_accent < area / 3,
+                 "a card wears its colour as a band, not as wallpaper");
+
+        panel(i);
+        display_message(DISPLAY_STATE_APPROVED, "APPROVED", "SHOW SECRET", NULL);
+        const long field = hostgfx_ink_pixels(display_state_accent(DISPLAY_STATE_APPROVED));
+        UL_CHECK(field > area / 2, "an outcome is still a field of colour");
     }
 }
 
@@ -96,14 +142,15 @@ static void test_a_card_with_no_note_still_says_both(void) {
         display_note_detail(DISPLAY_STATE_CONFIRM_PENDING, "WIPE ALL", NULL, NULL, NULL, NULL,
                             "HOLD BTN1 2s");
         const long both = hostgfx_ink_pixels(INK);
+        const long named = hostgfx_ink_pixels(ACCENT);
 
         panel(i);
-        display_note_detail(DISPLAY_STATE_CONFIRM_PENDING, "WIPE ALL", NULL, NULL, NULL, NULL,
-                            NULL);
-        const long verb_only = hostgfx_ink_pixels(INK);
+        display_note_detail(DISPLAY_STATE_CONFIRM_PENDING, NULL, NULL, NULL, NULL, NULL,
+                            "HOLD BTN1 2s");
+        const long unnamed = hostgfx_ink_pixels(ACCENT);
 
-        UL_CHECK(verb_only > 0, "a note-less card still names the action");
-        UL_CHECK(both > verb_only, "and still says how to approve it");
+        UL_CHECK(named < unnamed, "a note-less card still names the action, in the band");
+        UL_CHECK(both > 0, "and still says how to approve it");
     }
 }
 
@@ -112,12 +159,12 @@ static void test_the_browse_card_shows_which_note(void) {
     for (int i = 0; i < PANELS; i++) {
         panel(i);
         display_note_detail(DISPLAY_STATE_BROWSE, NULL, "21 000", "sats", "rent", "-", NULL);
-        const long shortest = hostgfx_ink_pixels(BROWSE_INK);
+        const long shortest = hostgfx_ink_pixels(display_state_ink_dim(DISPLAY_STATE_BROWSE));
 
         panel(i);
         display_note_detail(DISPLAY_STATE_BROWSE, NULL, "21 000", "sats", "rent", "f822a462  3",
                             NULL);
-        const long full = hostgfx_ink_pixels(BROWSE_INK);
+        const long full = hostgfx_ink_pixels(display_state_ink_dim(DISPLAY_STATE_BROWSE));
 
         UL_CHECK(full > shortest, "the note id and position are drawn");
     }
@@ -313,6 +360,8 @@ void test_card_render_run(void) {
     test_the_gesture_hint_reaches_the_glass();
     test_the_gesture_hint_clears_the_progress_bar();
     test_the_verb_reaches_the_glass();
+    test_every_card_has_its_band();
+    test_a_card_is_dark_and_an_outcome_is_not();
     test_a_card_with_no_note_still_says_both();
     test_the_browse_card_shows_which_note();
     test_no_line_runs_past_the_panel_edge();

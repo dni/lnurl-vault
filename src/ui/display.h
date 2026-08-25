@@ -62,13 +62,32 @@ void display_sleep(void);
 void display_wake(void);
 bool display_asleep(void);
 
+/* The two pieces of card furniture, in pixels: the header band along the top
+ * and the progress bar along the bottom. Exposed only so the boot screen can
+ * animate INTO exactly the geometry every card afterwards uses -- an opening
+ * shutter that settles a pixel off the band it becomes is worse than no
+ * animation. Nothing else should need these; a card gets them by being drawn
+ * through display_note_detail(). */
+int display_band_height(void);
+int display_bar_height(void);
+
 void display_set_state(display_state_t state);
 
 /* Exposed so anything drawing onto a state's background, or checking what was
  * drawn there, gets the same answer rather than a second copy of the mapping.
- * The ink is not a constant -- see palette.h. */
+ * None of these is a constant -- see palette.h.
+ *
+ * `color` is the ground: a warm near-black on the screens you read up close,
+ * the state's own colour on the ones you read across a room. `accent` is the
+ * state's colour either way, which is what the header band and the progress
+ * bar are drawn in. `ink` is the text, and `ink_dim` is the second weight for
+ * everything that is context rather than content -- unit, label, id, gesture.
+ * Without that second weight an amount and the eight hex characters beside it
+ * carried exactly equal force. */
 uint16_t display_state_color(display_state_t state);
+uint16_t display_state_accent(display_state_t state);
 uint16_t display_state_ink(display_state_t state);
+uint16_t display_state_ink_dim(display_state_t state);
 
 /* Fills an axis-aligned rectangle. Out-of-bounds rectangles are dropped
  * rather than clipped: a caller computing a negative origin has a bug, and
