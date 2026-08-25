@@ -21,6 +21,7 @@ void test_line_proto_run(void);
 void test_approval_run(void);
 void test_input_health_run(void);
 void test_identity_run(void);
+void test_derive_run(void);
 void test_regressions_run(void);
 void test_gated_actions_run(void);
 void test_wipe_run(void);
@@ -47,6 +48,7 @@ int main(void) {
     test_approval_run();
     test_input_health_run();
     test_identity_run();
+    test_derive_run();
     test_regressions_run();
     test_gated_actions_run();
     test_wipe_run();

@@ -31,6 +31,7 @@ CJSON_CFLAGS := $(shell pkg-config --cflags libcjson)
 CJSON_LIBS := $(shell pkg-config --libs libcjson)
 CFLAGS = -std=c11 -Wall -Wextra -Werror -I../../src/vault -I../../src/proto -I../../src/ota -I../../src/ui -I../../src/board -Ihostgfx -I. $(CJSON_CFLAGS)
 SRC = ../../src/vault/sha256.c \
+      ../../src/vault/derive.c \
       ../../src/vault/hex.c \
       ../../src/vault/vault.c \
       ../../src/vault/identity.c \
@@ -53,6 +54,7 @@ SRC = ../../src/vault/sha256.c \
       ../../src/ota/ota_sign.c \
       test_sha256.c \
       test_hex.c \
+      test_derive.c \
       test_json.c \
       test_vault.c \
       test_dispatcher.c \
