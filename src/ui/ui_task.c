@@ -825,6 +825,32 @@ confirm_result_t ui_task_request_action_confirm(const char *action, const note_m
     return request_confirm_detailed(timeout_ms, note, action);
 }
 
+confirm_result_t ui_task_request_prune_confirm(uint32_t count, uint32_t timeout_ms) {
+    if (!g_request_q) {
+        return CONFIRM_UNAVAILABLE;
+    }
+    QueueHandle_t resp_q = xQueueCreate(1, sizeof(confirm_result_t));
+    if (!resp_q) {
+        return CONFIRM_UNAVAILABLE;
+    }
+    remote_confirm_request_t req = {.timeout_ms = timeout_ms, .response_q = resp_q};
+    /* Not routed through request_confirm_detailed(): that one formats a
+     * note's amount, and what has to be on this card is a COUNT. It borrows
+     * the amount's slot on purpose -- same position, same size -- because
+     * "25" is exactly as much the reviewable fact here as "21 000" is on a
+     * disclosure. */
+    snprintf(req.action, sizeof(req.action), "PRUNE SPENT");
+    req.has_detail = true;
+    snprintf(req.amount, sizeof(req.amount), "%u", (unsigned)count);
+    snprintf(req.unit, sizeof(req.unit), "%s", count == 1 ? "note" : "notes");
+
+    xQueueSend(g_request_q, &req, portMAX_DELAY);
+    confirm_result_t result = CONFIRM_TIMEOUT;
+    xQueueReceive(resp_q, &result, portMAX_DELAY);
+    vQueueDelete(resp_q);
+    return result;
+}
+
 confirm_result_t ui_task_request_wipe_confirm(uint32_t timeout_ms) {
     /* No note to name: a wipe is about all of them, which is exactly why the
      * verb has to be on screen. This card and a single note's disclosure used

@@ -239,6 +239,15 @@ static confirm_result_t wipe_approve_on_device(uint32_t timeout_ms) {
     return result;
 }
 
+/* The gate in front of prune_spent. Same lock dance as the three above, for
+ * the same reason. */
+static confirm_result_t prune_approve_on_device(uint32_t count, uint32_t timeout_ms) {
+    vault_lock_release();
+    confirm_result_t result = ui_task_request_prune_confirm(count, timeout_ms);
+    vault_lock_acquire();
+    return result;
+}
+
 /* The gate in front of mark_spent, delete, discard and rename -- see
  * dispatcher.h's action_confirm_fn. Releases vault_lock across the wait for
  * the same reason the other three do: ui_task is on the far side of it and
@@ -298,6 +307,7 @@ void app_main(void) {
         .ota_write_abort = ota_write_abort,
         .ota_pubkey = OTA_RELEASE_PUBKEY,
         .wipe_approve = wipe_approve_on_device,
+        .prune_approve = prune_approve_on_device,
         .wipe_storage = vault_nvs_wipe,
         .storage_state = vault_nvs_state_name,
         .trace_cmd = trace_cmd,

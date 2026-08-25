@@ -971,3 +971,58 @@ still reading `CONFIRMED`, since nothing tells it: that needs a `mark_spent`.
 > of the spec, round-tripped back through a decoder written the same way
 > (`test/native/test_bech32.c`) — so the LNURL is known to be a *valid* LNURL
 > quite apart from any wallet's opinion of it.
+
+## 24. Forgetting spent notes — NOT YET BENCH-RUN
+
+`delete` takes one id, and every gated command costs a physical two-second
+hold. So clearing a few dozen spent notes meant a few dozen deliberate holds,
+which is housekeeping nobody does — and the bench device duly reached 39 notes
+of which 25 were already spent, at which point `list_notes` had to be asked
+for smaller pages to answer at all.
+
+`prune_spent` is the same removal done once. It takes no parameters, cannot
+touch a `CONFIRMED` or `PENDING` note, and puts the **count** on the card
+where an amount would go.
+
+| Check | Expect |
+|---|---|
+| `{"cmd":"prune_spent"}` with spent notes present | a card reading `PRUNE SPENT` over the count and `notes` |
+| The count on the card | matches `list_notes`' own tally of `spent` — not the total |
+| Hold to approve | `{"ok":true,"removed":N,"remaining":M}`, and `M` is what `list_notes` then reports |
+| Every `CONFIRMED` note afterwards | still there, with its own amount, label and host |
+| Every `PENDING` note afterwards | still there |
+| Cancel with button 2 | `user_declined`, and **nothing** removed |
+| Let it time out | nothing removed |
+| Run it again immediately | `{"ok":true,"removed":0}` and **no card at all** |
+| Power-cycle afterwards | the notes are still gone; the index does not bring them back |
+| One note, singular | the card reads `note`, not `notes` |
+
+Two rows carry the weight.
+
+**No card on a second run.** Approving a no-op is how somebody learns to
+approve without reading, on a device where the next prompt hands over a bearer
+secret. The command answers `ok` with `removed: 0` and never reaches the
+screen.
+
+**Power-cycle afterwards.** The sweep rewrites the persisted index once for
+the whole pass rather than once per note — one chance to be interrupted
+instead of N — so the only way to know the removal actually stuck is to pull
+the power and count again. A sweep that lived only in RAM would look identical
+until the next boot.
+
+> **Bench record — 2026-08-25.** Classic T-Display holding 39 notes, 25 of
+> them spent. `prune_spent` sent and deliberately left unanswered: the command
+> reached the gate, the window ran its full 30.2s, and the device returned
+> `{"ok":false,"error":"timeout"}`. A re-census immediately afterwards found
+> **39 notes still there** — the unanswered-prompt row, passing on real
+> hardware.
+>
+> Every other row still needs a press. Nothing above has yet confirmed that
+> the card shows the right count, that approving removes exactly the 25, that
+> the 14 live notes survive intact, or that the removal sticks across a power
+> cycle — which is the one row the host tests structurally cannot answer at
+> all.
+>
+> The rest is covered natively by `test/native/test_prune.c` (10 checks)
+> against the in-RAM vault, which exercises the state rules and the gate but
+> not NVS.
