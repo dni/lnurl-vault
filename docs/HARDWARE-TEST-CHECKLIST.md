@@ -538,6 +538,42 @@ known to work. Section 7a is why.
 >
 > On both mints the device's `list_notes` lineage agreed with the mint at
 > every step and nothing was left `PENDING`.
+
+> **Bench record — 2026-08-25, fw `0.0.7-5-g4870adc`.** Classic T-Display,
+> `/dev/cu.usbserial-5B310132921`, against `lnurl-mint` at current `main`
+> backed by `fake_cln.py`. **8 passed, 0 failed, 1 skipped** — `import_secret`,
+> **rotate after import**, **split**, **merge** (21000 msat out against 21000
+> in, value conserved), **rotate**, **melt**, nothing left `PENDING`.
+>
+> The `mint` row was skipped, and not by choice: `lnurl-mint`'s comment
+> feature now advertises LUD-21 `verify` **only** when the payRequest carried a
+> valid `comment` (`router.py`'s `get_pay_callback`). This harness mints over
+> `verify` with no comment, so it polls for a settlement it will never be told
+> about and reports "never settled". The mint is right — degrading visibly
+> rather than silently is the whole point of that change — and the harness is
+> what is out of date. The fix is to mint with comment protection, which
+> removes the polling entirely: a wallet that sends `comment = sha256(secret)`
+> already knows the k1 before it pays and never needs `verify` to learn a
+> preimage. Until then, drive this section with `--seed-note`.
+>
+> Two things this run found that a green suite would not have:
+>
+>  - `list_notes` at `limit: 20` now returns `response_too_large` on a device
+>    holding 33 notes. `h` joined the metadata in #107, ~70 bytes a note, and
+>    20 no longer fit one response. The device is right to refuse rather than
+>    truncate; this harness asked for 20, swallowed the refusal, and reported a
+>    note that was plainly there as "not on device". Fixed here by halving the
+>    limit on that error and raising instead of returning a short list. A fixed
+>    page size was never safe anyway — `label` and `host` are variable-length.
+>
+>  - Two runs were lost before this one: three approvals timed out, and a
+>    fourth came back `user_declined` from a press on button 2. That was the
+>    operator not knowing the gesture, **not** a missing hint -- `make
+>    preview` renders `HOLD BTN1 2s` on the 240x135 confirm card, with and
+>    without a label, so #105 landed that fix and it works. Recorded because
+>    the first instinct on three silent timeouts was to suspect the card, and
+>    the preview renderer answered it in seconds without touching the board.
+>    That is what it is for.
 >
 > The whole session cost far more approvals than it should have, for a reason
 > worth recording: the approval is a **two-second hold**, nobody driving it
