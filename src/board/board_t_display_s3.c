@@ -241,6 +241,16 @@ board_display_t board_display_init(void) {
     return out;
 }
 
+void board_display_backlight(bool on) {
+    /* Only the backlight. PIN_POWER_ON stays high: it is the peripheral
+     * power rail, not a screen switch, and dropping it takes the panel's
+     * configuration with it -- so waking would mean re-running bring-up,
+     * on the one device whose screen has to be able to answer a
+     * confirmation on demand. drive_high() has already made this pad an
+     * output by the time anything can ask for the light. */
+    gpio_set_level(PIN_LCD_BL, on ? 1 : 0);
+}
+
 void board_serial_start(void) {
     serial_cdc_start(); /* native USB-CDC on the S3's USB-OTG peripheral */
 }
@@ -285,6 +295,16 @@ bool board_button_1_pressed(void) {
 
 bool board_button_2_pressed(void) {
     return gpio_get_level(PIN_BUTTON_2) == 0;
+}
+
+/* UNKNOWN, deliberately. This file already says the rotation here is
+ * unverified, and which side a button lands on is downstream of that -- so a
+ * side claimed from the pin numbers would be a guess wearing a fact's
+ * clothing, and pointing an owner at the wrong button is worse than not
+ * pointing at all. The card falls back to naming BTN1 until someone raises a
+ * confirm card on this board and presses the left one. */
+board_confirm_side_t board_confirm_side(void) {
+    return BOARD_CONFIRM_SIDE_UNKNOWN;
 }
 
 #endif /* LNURLVAULT_BOARD_T_DISPLAY_S3 */

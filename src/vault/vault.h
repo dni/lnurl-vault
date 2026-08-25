@@ -153,6 +153,41 @@ vault_err_t vault_rename(const char *id, const char *label);
  * via vault_discard; a CONFIRMED one must be spent first). */
 vault_err_t vault_delete(const char *id);
 
+/* How many notes are in NOTE_STATE_SPENT right now.
+ *
+ * Not an estimate and not a guess about the mint: a note reaches SPENT only
+ * because something told this vault so -- a melt the host watched settle, or
+ * a rotate/split/merge that burned it as an input. Those notes are dead by
+ * the vault's own record and nothing can bring them back. */
+size_t vault_count_spent(void);
+
+/* Forgets every SPENT note in one pass, writing how many went to
+ * `out_removed` (which may be NULL).
+ *
+ * This exists because vault_delete() takes one id, and every gated command
+ * costs a physical hold on the device -- so clearing the dead weight of a few
+ * dozen spent notes meant a few dozen deliberate two-second holds, which is
+ * not housekeeping anybody does. It is the same removal, done once.
+ *
+ * Touches NOTHING else. A PENDING note may yet confirm and a CONFIRMED one is
+ * money; neither is this function's business, and the loop below is written
+ * so that it cannot become so by accident.
+ *
+ * Notes the index named but whose blobs would not load are left alone too.
+ * They are not known-spent, they are unreadable, and they live outside
+ * g_notes precisely so that operations like this one cannot quietly drop
+ * them -- see g_unloaded_ids.
+ *
+ * One index rewrite for the whole pass rather than one per note: calling
+ * vault_delete() in a loop would rewrite the persisted index N times and
+ * leave N chances to be interrupted half-done.
+ *
+ * Returns VAULT_ERR_STORAGE_FULL if the removal did not stick on flash. The
+ * notes are gone from RAM either way -- same contract as vault_delete() --
+ * so the caller reports the failure rather than claiming a clean sweep that a
+ * reboot would undo. */
+vault_err_t vault_prune_spent(size_t *out_removed);
+
 size_t vault_list(note_meta_t *out, size_t max);
 bool vault_get_meta(const char *id, note_meta_t *out);
 void vault_get_info(size_t *note_count, size_t *pending_count);

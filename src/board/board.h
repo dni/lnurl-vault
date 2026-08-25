@@ -85,6 +85,31 @@ typedef struct {
  * paths must refuse, not proceed blind. */
 board_display_t board_display_init(void);
 
+/* Turns the panel's backlight on or off, without disturbing anything else
+ * the panel has been told -- orientation, gap, inversion and the pixels
+ * already in its RAM all survive, so waking is a repaint and not a
+ * re-initialisation.
+ *
+ * This exists so the resting screen can go dark (src/proto/screen_sleep.h):
+ * a vault lives plugged in, showing the same card in the same pixels for as
+ * long as it is powered, which is how a panel acquires a permanent ghost of
+ * it.
+ *
+ * Off means dark, not asleep: the controller stays on and the framebuffer
+ * stays valid. Deliberately NOT the ST7789's own display-off, and on the S3
+ * deliberately not the peripheral power rail either -- both would need the
+ * panel brought back up, and a screen that needs re-initialising to answer a
+ * confirmation is a screen that can fail to answer one.
+ *
+ * A board with no way to switch its backlight must still implement this, as
+ * a no-op. display.c blanks the framebuffer as well as calling this, so such
+ * a board goes black-but-lit rather than staying on the resting card: less
+ * good for the backlight, no worse for the glass.
+ *
+ * Safe to call before board_display_init() has succeeded, and safe to call
+ * repeatedly with the same value. */
+void board_display_backlight(bool on);
+
 /* Starts whichever host transport this board is wired for, and begins
  * serving the command protocol on it: native USB-CDC where the chip has a
  * USB-OTG peripheral, a UART behind an external USB bridge where it does not.
@@ -116,5 +141,27 @@ void board_buttons_init(void);
  * (see docs/PROTOCOL.md). */
 bool board_button_1_pressed(void);
 bool board_button_2_pressed(void);
+
+/* Which side of the screen the CONFIRM button is physically on, as the owner
+ * reads it.
+ *
+ * "BTN1" is the name the firmware uses and it is worth nothing to someone
+ * holding the device: the two buttons are unlabelled, and the natural reach
+ * is for the left one, which on the classic board is cancel. That is not
+ * hypothetical -- it cost two bench runs of section 17, three approvals
+ * timing out and a fourth coming back `user_declined`, with the hint on
+ * screen and correct the whole time.
+ *
+ * The value is per board because it depends on where the buttons sit AND on
+ * the rotation the panel is driven at, and those are decided in board files.
+ * It is a claim about physical hardware, so it belongs to the board that was
+ * put on a bench rather than to the UI. */
+typedef enum {
+    BOARD_CONFIRM_SIDE_UNKNOWN = 0,
+    BOARD_CONFIRM_SIDE_LEFT,
+    BOARD_CONFIRM_SIDE_RIGHT,
+} board_confirm_side_t;
+
+board_confirm_side_t board_confirm_side(void);
 
 #endif

@@ -175,6 +175,14 @@ board_display_t board_display_init(void) {
     return out;
 }
 
+void board_display_backlight(bool on) {
+    /* A plain GPIO on this board -- no PWM, so this is on or off rather than
+     * dim. The pad is configured as an output at the end of
+     * board_display_init(); before that this writes an output register
+     * nothing is driving from, which is exactly the no-op it should be. */
+    gpio_set_level(PIN_TFT_BL, on ? 1 : 0);
+}
+
 void board_serial_start(void) {
     serial_uart_start(); /* CH9102 USB-UART bridge on UART0 */
 }
@@ -233,6 +241,16 @@ bool board_button_1_pressed(void) {
 
 bool board_button_2_pressed(void) {
     return gpio_get_level(PIN_BUTTON_2) == 0;
+}
+
+/* Bench-verified on this board, 2026-08-25, by raising a real confirm card and
+ * pressing the left button: it came back user_declined, so the left one is
+ * BUTTON 2 and confirm is on the right. Not derivable from the pin numbers --
+ * where a button sits relative to the SCREEN depends on the rotation and
+ * mirroring this file establishes, which were themselves settled empirically
+ * (see the orientation notes above). */
+board_confirm_side_t board_confirm_side(void) {
+    return BOARD_CONFIRM_SIDE_RIGHT;
 }
 
 #endif /* LNURLVAULT_BOARD_T_DISPLAY */

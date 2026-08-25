@@ -11,6 +11,8 @@
  * test_card_render.c asserts about the pixels. */
 #include "display.h"
 
+#include <stdbool.h>
+
 #include <string.h>
 
 #include "font5x7.h"
@@ -63,6 +65,12 @@ static uint16_t *next_row(void) {
 
 static display_state_t g_current_state = DISPLAY_STATE_IDLE;
 
+/* Whether the light is off. Not a display_state_t: every state is something
+ * the screen is SAYING, and asleep is the screen saying nothing. Folding it
+ * into that enum would have given every switch over it a case that is not a
+ * card. */
+static bool g_asleep = false;
+
 /* Where the card ends and the bar begins, in one place: two functions each
  * deriving it from the panel height is how a line got drawn one pixel into a
  * band that wasn't its own. The bar was h/8 plus h/12 of margin -- a fifth of
@@ -70,13 +78,16 @@ static display_state_t g_current_state = DISPLAY_STATE_IDLE;
  * without holding the amount to an unreadable 21px. */
 #define CARD_MARGIN 6
 
+/* Taller and full-bleed since the redesign. Inset and thin, it read as a
+ * detail floating on the card; edge to edge along the bottom it is the card's
+ * base, and the hold fills the whole width of the screen. */
 static int progress_bar_h(void) {
-    const int h = g_height / 16;
-    return h < 6 ? 6 : h;
+    const int h = g_height / 12;
+    return h < 8 ? 8 : h;
 }
 
 static int progress_bar_top(void) {
-    return g_height - CARD_MARGIN - progress_bar_h();
+    return g_height - progress_bar_h();
 }
 
 /* One past the last row a card may draw on. */
@@ -86,37 +97,69 @@ static int card_usable_h(void) {
 
 
 
-uint16_t display_state_color(display_state_t state) {
+/* Which of the two kinds of screen this is -- see palette.h.
+ *
+ * Cards are read up close and carry detail, so they get a dark ground and the
+ * state colour as structure. Fields are read at a glance from across a room
+ * and carry no detail at all, so they get the whole panel in colour. The
+ * split is by what the screen is FOR, not by which looked nicer: an outcome
+ * has one job, and a field of colour does that job better than any amount of
+ * layout. */
+static bool state_is_field(display_state_t state) {
+    return state == DISPLAY_STATE_APPROVED || state == DISPLAY_STATE_DECLINED ||
+           state == DISPLAY_STATE_EXPIRED;
+}
+
+uint16_t display_state_accent(display_state_t state) {
     switch (state) {
         case DISPLAY_STATE_IDLE:
-            return PALETTE_IDLE;
+            return PALETTE_ACCENT_IDLE;
         case DISPLAY_STATE_BROWSE:
-            return PALETTE_BROWSE;
+            return PALETTE_ACCENT_BROWSE;
         case DISPLAY_STATE_CONFIRM_PENDING:
-            return PALETTE_PENDING;
+            return PALETTE_ACCENT_PENDING;
         case DISPLAY_STATE_APPROVED:
-            return PALETTE_APPROVED;
+            return PALETTE_ACCENT_APPROVED;
         case DISPLAY_STATE_DECLINED:
-            return PALETTE_DECLINED;
+            return PALETTE_ACCENT_DECLINED;
         case DISPLAY_STATE_EXPIRED:
-            return PALETTE_EXPIRED;
+            return PALETTE_ACCENT_EXPIRED;
         default:
-            return PALETTE_INK_DARK;
+            return PALETTE_ACCENT_IDLE;
     }
 }
 
-/* Black was fine while only amber and green carried text. It is close to
- * invisible on the dark grey the device now rests on. Per state, not per call
- * site, so a new screen can't get it wrong. */
+uint16_t display_state_color(display_state_t state) {
+    return state_is_field(state) ? display_state_accent(state) : PALETTE_GROUND;
+}
+
+/* One ink for every card, because the ground is now the same on all of them;
+ * the warm dark for every field, because it is the ground those colours were
+ * chosen against. The old per-state table existed to keep text legible on six
+ * different backgrounds, and there are no longer six. */
 uint16_t display_state_ink(display_state_t state) {
-    switch (state) {
-        case DISPLAY_STATE_IDLE:
-        case DISPLAY_STATE_BROWSE:
-        case DISPLAY_STATE_DECLINED:
-            return PALETTE_INK_LIGHT;
-        default:
-            return PALETTE_INK_DARK;
+    return state_is_field(state) ? PALETTE_GROUND : PALETTE_INK;
+}
+
+/* The second weight. Context rather than content: the unit, the label, the
+ * id, the gesture line. On a field there is no such thing -- an outcome is
+ * all content -- so it collapses back to the same ink. */
+uint16_t display_state_ink_dim(display_state_t state) {
+    return state_is_field(state) ? PALETTE_GROUND : PALETTE_INK_DIM;
+}
+
+/* The band at the top of a card, and the height it occupies. Tall enough to
+ * carry the verb at the readable minimum with air around it: this is the one
+ * element that has to work both up close (as a label) and across a room (as a
+ * colour). */
+static int band_h(void) {
+    const int text = FONT5X7_HEIGHT * FONT5X7_MIN_READABLE_SCALE;
+    const int pad = CARD_MARGIN - 2 < 3 ? 3 : CARD_MARGIN - 2;
+    int h = text + 2 * pad;
+    if (h > g_height / 3) {
+        h = g_height / 3;
     }
+    return h;
 }
 
 void display_init(void) {
@@ -142,6 +185,7 @@ void display_init(void) {
         }
     }
 
+    g_asleep = false;
     display_set_state(DISPLAY_STATE_IDLE);
 }
 
@@ -163,6 +207,12 @@ int display_width(void) {
 
 int display_height(void) {
     return g_height;
+}
+
+static display_confirm_side_t g_confirm_side = DISPLAY_CONFIRM_SIDE_UNKNOWN;
+
+void display_set_confirm_side(display_confirm_side_t side) {
+    g_confirm_side = side;
 }
 
 void display_fill_rect(int x, int y, int w, int h, uint16_t color) {
@@ -189,6 +239,41 @@ static void fill_screen(uint16_t color) {
 void display_set_state(display_state_t state) {
     g_current_state = state;
     fill_screen(display_state_color(state));
+}
+
+int display_band_height(void) {
+    return band_h();
+}
+
+int display_bar_height(void) {
+    return progress_bar_h();
+}
+
+void display_sleep(void) {
+    if (g_asleep || !display_ready()) {
+        return;
+    }
+    g_asleep = true;
+    /* Light out first, so the blank is never seen happening -- the screen
+     * goes dark, rather than visibly wiping itself and then going dark. */
+    board_display_backlight(false);
+    /* And then actually clear it. Killing the backlight alone would leave the
+     * card still held in the crystal, which is the half of this that causes
+     * the ghosting; it would also leave a bearer secret on the glass if this
+     * ever blanked a QR, which one day it will. */
+    fill_screen(PALETTE_INK_DARK);
+}
+
+void display_wake(void) {
+    if (!g_asleep || !display_ready()) {
+        return;
+    }
+    g_asleep = false;
+    board_display_backlight(true);
+}
+
+bool display_asleep(void) {
+    return g_asleep;
 }
 
 void display_text(int x, int y, const char *text, int scale, uint16_t fg, uint16_t bg) {
@@ -237,6 +322,68 @@ void display_text(int x, int y, const char *text, int scale, uint16_t fg, uint16
         esp_lcd_panel_draw_bitmap(g_panel, x, y + row, x + line_w, y + row + 1, dst);
     }
 }
+/* The two buttons, drawn where they physically are, with the one that
+ * approves filled in.
+ *
+ * Naming the button was not enough and neither was naming the side. The
+ * buttons carry no labels a person can see, so "BTN1" helps only someone who
+ * already knows, and the natural reach is for the left -- which on the classic
+ * board is cancel. That cost two bench runs of section 17 with a correct hint
+ * on screen the whole time. A picture of two buttons with one filled needs no
+ * reading and no prior knowledge; it is the same shape as the thing in the
+ * owner's hands.
+ *
+ * No sprite sheet for this. It is two squares, and display_fill_rect already
+ * draws squares -- a blitter and a generated bitmap would be more machinery
+ * than the drawing deserves.
+ *
+ * Whether there is room for it is draw_gesture_row's call, not this one's.
+ */
+static void draw_button_guide(int row_y, int size, uint16_t ink, uint16_t bg) {
+    const int right_x = g_width - CARD_MARGIN - size;
+    const int left_x = CARD_MARGIN;
+    const bool confirm_right = g_confirm_side == DISPLAY_CONFIRM_SIDE_RIGHT;
+
+    /* Filled = the one to hold. Outlined = the one that refuses. */
+    display_fill_rect(left_x, row_y, size, size, ink);
+    display_fill_rect(right_x, row_y, size, size, ink);
+    const int inset = size >= 6 ? 2 : 1;
+    const int hollow_x = confirm_right ? left_x : right_x;
+    display_fill_rect(hollow_x + inset, row_y + inset, size - 2 * inset, size - 2 * inset, bg);
+}
+
+/* The gesture row: the two buttons, and the words between them.
+ *
+ * Centred in the span the glyphs leave rather than laid out from the left,
+ * because the row is symmetric and a line hugging one glyph reads as belonging
+ * to that button. Falls back to the plain left-aligned line when there is no
+ * guide to sit between, or when the words do not fit between the glyphs --
+ * clipping the gesture is the one thing this row must never do. */
+static void draw_gesture_row(int row_y, int size, const char *hint, uint16_t ink, uint16_t bg) {
+    const int text_w = font5x7_text_width(hint, FONT5X7_MIN_READABLE_SCALE);
+    const int span_l = CARD_MARGIN + size;
+    const int span_r = g_width - CARD_MARGIN - size;
+
+    /* Decided before anything is drawn, not after. Drawing the guide first and
+     * then discovering the words do not fit leaves them overlapping, which is
+     * how LET GO FIRST came to sit on top of both glyphs.
+     *
+     * When they do not fit, the words win and the guide is dropped. LET GO
+     * FIRST is the longest of them and also the most urgent: it is shown
+     * precisely when a button is already down, when saying which button to
+     * reach for is redundant and saying to release is not. */
+    const bool guide = g_confirm_side != DISPLAY_CONFIRM_SIDE_UNKNOWN &&
+                       span_r > span_l && text_w <= span_r - span_l;
+    if (!guide) {
+        display_text(CARD_MARGIN, row_y, hint, FONT5X7_MIN_READABLE_SCALE, ink, bg);
+        return;
+    }
+
+    draw_button_guide(row_y, size, ink, bg);
+    display_text(span_l + (span_r - span_l - text_w) / 2, row_y, hint,
+                 FONT5X7_MIN_READABLE_SCALE, ink, bg);
+}
+
 
 void display_note_detail(display_state_t state, const char *action, const char *amount_num,
                           const char *amount_unit, const char *label, const char *id,
@@ -247,6 +394,8 @@ void display_note_detail(display_state_t state, const char *action, const char *
     g_current_state = state;
     const uint16_t bg = display_state_color(state);
     const uint16_t ink = display_state_ink(state);
+    const uint16_t dim = display_state_ink_dim(state);
+    const uint16_t accent = display_state_accent(state);
     fill_screen(bg);
 
     /* Every line is drawn at the largest scale that fits the panel, rather
@@ -296,11 +445,30 @@ void display_note_detail(display_state_t state, const char *action, const char *
         second[used + n] = '\0';
     }
 
-    /* The verb, first: it is the difference between handing over one note's
-     * secret and erasing every note, which used to look identical here. */
-    if (action && action[0] && y + small_h <= usable_h) {
-        display_text(margin, y, action, FONT5X7_MIN_READABLE_SCALE, ink, bg);
-        y += small_h + gap;
+    /* The band, first and always. The verb is the difference between handing
+     * over one note's secret and erasing every note, which used to look
+     * identical here; it now says which twice, in words and in a colour
+     * readable from further away than the words are.
+     *
+     * Drawn even with nothing to put in it. A card without its band reads as
+     * one that failed to finish drawing, and browse -- which has no verb --
+     * needs the spine as much as a prompt does. */
+    {
+        const int bh = band_h();
+        display_fill_rect(0, 0, g_width, bh, accent);
+        if (action && action[0]) {
+            /* Clipped rather than shrunk if it is too long: this is the one
+             * line whose size must not vary, because a smaller verb on a
+             * wider verb's card is exactly how WIPE ALL comes to look like
+             * an ordinary prompt. See font5x7.h.
+             *
+             * The ground is the ink here -- the same warm dark the card sits
+             * on. One value doing both jobs is what stops the band reading as
+             * a separate sticker on top of the card. */
+            const int th = FONT5X7_HEIGHT * FONT5X7_MIN_READABLE_SCALE;
+            display_text(margin, (bh - th) / 2, action, FONT5X7_MIN_READABLE_SCALE, bg, accent);
+        }
+        y = bh + gap;
     }
 
     /* Full width for the digits. Reserving room for the unit on the same line
@@ -308,7 +476,13 @@ void display_note_detail(display_state_t state, const char *action, const char *
      * 21px; the unit is a word, the digits are what a mistake costs money on.
      * The budget is in font5x7_card_amount_scale(), where it is testable. */
     if (amount_num && amount_num[0]) {
-        const int lines_below = (second[0] ? 1 : 0) + ((hint && hint[0]) ? 1 : 0);
+        /* The id counts. It was left out, so on a card whose amount happened
+         * to take a large scale the id line simply did not fit and was
+         * dropped -- silently, and on the one screen whose job is to say
+         * WHICH bearer note the next gesture discloses. The band shrinking
+         * the content area is what surfaced it; it was always wrong. */
+        const int lines_below = (second[0] ? 1 : 0) + ((id && id[0]) ? 1 : 0) +
+                                ((hint && hint[0]) ? 1 : 0);
         const int scale = font5x7_card_amount_scale(amount_num, avail, usable_h, y, lines_below);
         if (scale > 0) {
             display_text(margin, y, amount_num, scale, ink, bg);
@@ -327,11 +501,11 @@ void display_note_detail(display_state_t state, const char *action, const char *
         if (fits > 0 && (int)strlen(second) > fits) {
             second[fits] = '\0';
         }
-        display_text(margin, y, second, scale, ink, bg);
+        display_text(margin, y, second, scale, dim, bg);
         y += FONT5X7_HEIGHT * scale + gap;
     }
     if (id && id[0] && y + small_h <= usable_h) {
-        display_text(margin, y, id, FONT5X7_MIN_READABLE_SCALE, ink, bg);
+        display_text(margin, y, id, FONT5X7_MIN_READABLE_SCALE, dim, bg);
         y += small_h + gap;
     }
     /* Pinned to the bottom rather than laid out after what precedes it: the
@@ -340,10 +514,11 @@ void display_note_detail(display_state_t state, const char *action, const char *
     if (hint && hint[0]) {
         const int hint_y = usable_h - small_h;
         if (hint_y >= y - gap && hint_y >= margin) {
-            display_text(margin, hint_y, hint, FONT5X7_MIN_READABLE_SCALE, ink, bg);
+            draw_gesture_row(hint_y, small_h, hint, ink, bg);
         }
     }
 }
+
 
 /* Centred, or at the margin if wider than the panel: display_text refuses a
  * negative x outright, so an over-long line would vanish rather than clip. */
@@ -364,6 +539,7 @@ void display_message(display_state_t state, const char *title, const char *line1
     g_current_state = state;
     const uint16_t bg = display_state_color(state);
     const uint16_t ink = display_state_ink(state);
+    const uint16_t dim = display_state_ink_dim(state);
     fill_screen(bg);
 
     const int margin = CARD_MARGIN;
@@ -372,8 +548,25 @@ void display_message(display_state_t state, const char *title, const char *line1
     /* Roomier than a card's 3px: two or three lines with the screen to
      * themselves read as one block at that spacing. */
     const int gap = small_h / 3;
-    /* No bar on a message, so this owns the whole panel. */
-    const int usable_h = g_height - 2 * margin;
+
+    /* A card gets a rule; a field does not.
+     *
+     * On a field the state colour is already the whole panel, so a rule in it
+     * would be invisible and a rule in anything else would be decoration. On
+     * a card -- which here means the resting screen, the one a person looks
+     * at for hours -- it is the only thing that says which device this is
+     * rather than a dark rectangle with two words on it. */
+    int top = margin;
+    if (!state_is_field(state)) {
+        int rule = g_height / 20;
+        if (rule < 4) {
+            rule = 4;
+        }
+        display_fill_rect(0, 0, g_width, rule, display_state_accent(state));
+        top = rule + margin;
+    }
+    /* No bar on a message, so this owns everything below the rule. */
+    const int usable_h = g_height - top - margin;
 
     const int extra = ((line1 && line1[0]) ? small_h + gap : 0) +
                       ((line2 && line2[0]) ? small_h + gap : 0);
@@ -393,23 +586,27 @@ void display_message(display_state_t state, const char *title, const char *line1
         return;
     }
 
-    /* Centred as a block: hung off the top it reads as a card that failed to
-     * finish drawing. */
-    int y = (g_height - block_h) / 2;
-    if (y < margin) {
-        y = margin;
+    /* Centred as a block in what the rule left: hung off the top it reads as
+     * a card that failed to finish drawing. */
+    int y = top + (usable_h - block_h) / 2;
+    if (y < top) {
+        y = top;
     }
 
     if (title_scale > 0) {
         draw_centred(y, title, title_scale, ink, bg);
         y += FONT5X7_HEIGHT * title_scale + gap;
     }
+    /* The lines under a title are context -- "TAP TO VIEW", the verb an
+     * outcome was about, the board name at boot -- so they take the second
+     * weight. On a field there is no second weight and this is the same ink;
+     * an outcome is all content. */
     if (line1 && line1[0]) {
-        draw_centred(y, line1, FONT5X7_MIN_READABLE_SCALE, ink, bg);
+        draw_centred(y, line1, FONT5X7_MIN_READABLE_SCALE, dim, bg);
         y += small_h + gap;
     }
     if (line2 && line2[0]) {
-        draw_centred(y, line2, FONT5X7_MIN_READABLE_SCALE, ink, bg);
+        draw_centred(y, line2, FONT5X7_MIN_READABLE_SCALE, dim, bg);
     }
 }
 
@@ -421,27 +618,30 @@ void display_progress(uint16_t permille) {
         permille = 1000;
     }
 
-    /* A band across the LOWER part of the panel, inset from the edges so it
-     * reads as a bar rather than as the screen changing colour. Low rather
-     * than centred so it cannot paint over the note detail
-     * display_confirm_note() draws above it -- the whole point of the hold is
-     * that the owner can read what they are approving while they hold. */
-    int margin = g_width / 8;
-    int track_w = g_width - 2 * margin;
-    int bar_h = progress_bar_h();
-    int y = progress_bar_top();
+    /* Edge to edge along the very bottom, in the state's own colour, so the
+     * hold fills the full width of the screen and the bar is the base of the
+     * card rather than a detail floating on it. Below everything
+     * display_note_detail() draws -- the whole point of the hold is that the
+     * owner can read what they are approving while they hold it.
+     *
+     * White on black was the loudest possible pairing for the one element
+     * that is already moving, and it belonged to no state: an approval bar
+     * and a wipe bar were identical. */
+    const int track_w = g_width;
+    const int bar_h = progress_bar_h();
+    const int y = progress_bar_top();
     if (track_w <= 2 || bar_h <= 2) {
         return; /* a panel too small to draw a meaningful bar on */
     }
 
-    int filled = (int)(((int32_t)track_w * permille) / 1000);
+    const int filled = (int)(((int32_t)track_w * permille) / 1000);
 
     /* Track, then fill. Repainting the whole track each call is what makes
      * this safe to call at any rate and in any order, including going
      * backwards if a hold restarts. */
-    display_fill_rect(margin, y, track_w, bar_h, PALETTE_INK_DARK);
+    display_fill_rect(0, y, track_w, bar_h, PALETTE_TRACK);
     if (filled > 0) {
-        display_fill_rect(margin, y, filled, bar_h, PALETTE_PAPER);
+        display_fill_rect(0, y, filled, bar_h, display_state_accent(g_current_state));
     }
 }
 

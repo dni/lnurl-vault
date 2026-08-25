@@ -25,6 +25,7 @@
 #include <string.h>
 
 #include "approval.h"
+#include "board.h"
 #include "note_display.h"
 #include "buttons.h"
 #include "button_fsm.h"
@@ -37,6 +38,7 @@
 #include "freertos/task.h"
 #include "note_url.h"
 #include "qr_display.h"
+#include "screen_sleep.h"
 #include "vault.h"
 #include "vault_lock.h"
 
@@ -60,8 +62,54 @@ typedef struct {
 /* The gesture, said out loud on the card. approval.h makes approving a
  * two-second hold of button 1; nothing on screen used to mention either the
  * hold or the button, which left tapping -- and concluding the device was
- * dead -- as the obvious thing to try. */
-#define CONFIRM_HINT "HOLD BTN1 2s"
+ * dead -- as the obvious thing to try.
+ *
+ * Naming the button was not enough. The two buttons carry no labels a person
+ * can see, so "BTN1" only helps someone who already knows which one it is,
+ * and the natural reach is for the left -- which on the classic board is
+ * cancel. That cost two bench runs of section 17 with this hint on screen and
+ * correct throughout: three approvals timed out, and a fourth came back
+ * user_declined from a press on the wrong button.
+ *
+ * So say the side instead, where the board knows it (board_confirm_side).
+ * "RIGHT" needs no lookup and no prior knowledge, and it is the one fact the
+ * owner is actually missing while holding the thing. A board that has not had
+ * its side established on a bench keeps the old wording rather than guess:
+ * pointing someone at the wrong button is worse than making them work it out.
+ */
+#define CONFIRM_HINT_UNKNOWN_SIDE "HOLD BTN1 2s"
+#define CONFIRM_HINT_WITH_GUIDE "HOLD 2s"
+
+/* display.c cannot ask board.h -- the native tests compile it without any
+ * board file -- so the side is pushed down once, at startup, the same way
+ * display_set_state pushes the palette. */
+static void publish_confirm_side(void) {
+    switch (board_confirm_side()) {
+        case BOARD_CONFIRM_SIDE_LEFT:
+            display_set_confirm_side(DISPLAY_CONFIRM_SIDE_LEFT);
+            break;
+        case BOARD_CONFIRM_SIDE_RIGHT:
+            display_set_confirm_side(DISPLAY_CONFIRM_SIDE_RIGHT);
+            break;
+        case BOARD_CONFIRM_SIDE_UNKNOWN:
+        default:
+            display_set_confirm_side(DISPLAY_CONFIRM_SIDE_UNKNOWN);
+            break;
+    }
+}
+
+static const char *confirm_hint(void) {
+    switch (board_confirm_side()) {
+        case BOARD_CONFIRM_SIDE_LEFT:
+        case BOARD_CONFIRM_SIDE_RIGHT:
+            /* The card draws both buttons with the right one filled, so the
+             * words do not have to name a side as well. */
+            return CONFIRM_HINT_WITH_GUIDE;
+        case BOARD_CONFIRM_SIDE_UNKNOWN:
+        default:
+            return CONFIRM_HINT_UNKNOWN_SIDE;
+    }
+}
 
 /* While a button already down when the prompt appeared has not been seen
  * released -- nothing it does counts until then (approval.h), and the owner
@@ -74,11 +122,41 @@ typedef struct {
 
 static QueueHandle_t g_request_q;
 
+/* When the screen goes dark. Policy in src/proto/screen_sleep.c, the light
+ * itself in display.c; this file is the only thing that joins them. */
+static screen_sleep_t g_screen;
+
+/* A new screen has just been drawn, or a button has just been touched.
+ *
+ * Called AFTER drawing, never before: waking lights whatever is already in
+ * the panel, so lighting first shows the card from a minute ago for a frame.
+ * Everything that puts something new on screen ends with this, which is why
+ * no caller has to remember whether the screen was dark -- and why adding a
+ * screen that forgets shows up immediately as one that will not light. */
+static void screen_awake(void) {
+    if (screen_sleep_touch(&g_screen, esp_timer_get_time())) {
+        display_wake();
+    }
+}
+
 #define BROWSE_IDLE_TIMEOUT_MS 15000
 
 /* The unveiled QR is the secret in the clear, so clear it after a while rather
  * than wait for a button press. Longer than browse (scanning is deliberate). */
 #define QR_SHOWN_TIMEOUT_MS 60000
+
+/* How long the screen stays lit with nothing new on it.
+ *
+ * A vault lives plugged in. Left alone it holds the same resting card in the
+ * same pixels for as long as it has power, and an IPS panel treated like that
+ * ends up with a faint permanent copy of it -- while burning the backlight
+ * for a screen nobody is looking at. Long enough to walk over and read
+ * something; short enough that a device on a desk spends its day dark.
+ *
+ * Comfortably longer than the longest confirm window (30s), though nothing
+ * depends on that: the tick that blanks the screen is not reached while a
+ * prompt is up. See screen_sleep.h. */
+#define SCREEN_SLEEP_MS 60000
 
 typedef enum {
     UI_IDLE,
@@ -141,6 +219,11 @@ static int confirmed_position(int idx) {
     return pos;
 }
 
+/* Defined below, beside the other counting helpers; needed here for the
+ * browse card's "3 of 12" band. Takes vault_lock itself, so it must not be
+ * called with it already held. */
+static size_t confirmed_count(void);
+
 /* Shows the selected note while browsing, so unveiling the wrong one takes a
  * deliberate misreading rather than a miscount. This replaced a blinked-out
  * position count, which told you where you were in the list but not which
@@ -149,7 +232,7 @@ static int confirmed_position(int idx) {
  *
  * `position` is the 1-based place among CONFIRMED notes, shown next to the id
  * so the count the old flash conveyed is not lost. */
-static void show_browse_note(int browse_index, int position) {
+static void draw_browse_note(int browse_index, int position) {
     if (browse_index < 0) {
         display_message(DISPLAY_STATE_BROWSE, "NO NOTES", NULL, NULL);
         return;
@@ -167,13 +250,24 @@ static void show_browse_note(int browse_index, int position) {
     char amount[NOTE_AMOUNT_BUF];
     char unit[8];
     char label[24];
-    char id[VAULT_ID_BUF + 16];
+    char badge[24];
     note_format_amount_parts(meta.amount_msat, amount, sizeof(amount), unit, sizeof(unit));
     note_format_label(meta.label, label, sizeof(label));
-    snprintf(id, sizeof(id), "%s  %d", meta.id, position);
-    /* No verb and no gesture hint: browsing is not a prompt, and the chord
-     * that unveils from here is not the confirm hold. */
-    display_note_detail(DISPLAY_STATE_BROWSE, NULL, amount, unit, label, id, NULL);
+    /* Where you are goes in the band, where the verb goes on a prompt. It used
+     * to be tacked onto the end of the id -- "f822a462  3" -- which put the
+     * one number that says how far through the list you are in the same
+     * weight, the same size and the same line as eight characters of hex that
+     * mean nothing to a person. The id keeps its own line and the band says
+     * which of how many. */
+    snprintf(badge, sizeof(badge), "NOTE %d/%u", position, (unsigned)confirmed_count());
+    /* Still no gesture hint: browsing is not a prompt, and the chord that
+     * unveils from here is not the confirm hold. */
+    display_note_detail(DISPLAY_STATE_BROWSE, badge, amount, unit, label, meta.id, NULL);
+}
+
+static void show_browse_note(int browse_index, int position) {
+    draw_browse_note(browse_index, position);
+    screen_awake();
 }
 
 /* PENDING notes have no settled value and cannot be browsed or exported, so
@@ -230,9 +324,14 @@ static void draw_idle(size_t confirmed) {
                     NULL);
 }
 
+/* draw_idle() keeps the number honest; this SHOWS it to someone. The
+ * difference is the whole reason they are two functions: notes arriving and
+ * being spent over the wire, with nobody near the device, repaint through
+ * draw_idle() and must not light a dark room. */
 static size_t show_idle(void) {
     const size_t confirmed = confirmed_count();
     draw_idle(confirmed);
+    screen_awake();
     return confirmed;
 }
 
@@ -248,12 +347,27 @@ static void wipe(char *buf, size_t len) {
     }
 }
 
-/* Exports the selected note's secret and shows it as a QR. Resolves by the id
- * captured at selection, NOT browse position: a concurrent remote delete
- * compacts the array (vault.c's remove_at), so the index can point at a
- * different note by unveil time. Looking up by id discloses exactly the
- * selected note or nothing. Secret and URL are wiped once no longer needed. */
-static bool unveil(const char *browse_id) {
+/* Room for the longest form a note takes. The bech32 LNURL is the big one --
+ * about 177 characters for an ordinary mint, against the claim link's 138 --
+ * and note_url_build_as() refuses rather than truncates, so undersizing this
+ * shows up as a format that simply will not display. */
+#define UNVEIL_URL_BUF 320
+
+/* What the strip under the code says. The name of the form on screen, and
+ * that there is another one behind button 1 -- without which the cycling is
+ * a feature nobody discovers. Button 2 still dismisses, as any tap used to;
+ * it is not on the strip because the two together do not fit at a size worth
+ * reading, and leaving is the thing people already know how to do. */
+#define QR_CAPTION_BUF 32
+
+/* Exports the selected note's secret and shows it as a QR, in `format`.
+ *
+ * Resolves by the id captured at selection, NOT browse position: a concurrent
+ * remote delete compacts the array (vault.c's remove_at), so the index can
+ * point at a different note by unveil time. Looking up by id discloses exactly
+ * the selected note or nothing. Secret and URL are wiped once no longer
+ * needed. */
+static bool unveil(const char *browse_id, note_url_format_t format) {
     if (!browse_id || !browse_id[0]) {
         return false;
     }
@@ -272,17 +386,45 @@ static bool unveil(const char *browse_id) {
         return false;
     }
 
-    char url[256];
-    bool built = note_url_build_as(LNURLVAULT_QR_FORMAT, NULL, meta.host, k1, meta.amount_msat,
-                                    url, sizeof(url));
+    char url[UNVEIL_URL_BUF];
+    bool built = note_url_build_as(format, NULL, meta.host, k1, meta.amount_msat, url,
+                                    sizeof(url));
     wipe(k1, sizeof(k1));
     if (!built) {
         return false;
     }
 
-    bool shown = qr_display_show(url);
+    char caption[QR_CAPTION_BUF];
+    snprintf(caption, sizeof(caption), "%s   BTN1 NEXT", note_url_format_name(format));
+
+    bool shown = qr_display_show(url, caption);
     wipe(url, sizeof(url));
+    if (shown) {
+        screen_awake();
+    }
     return shown;
+}
+
+/* Shows the note in the next form that will actually render.
+ *
+ * Tries each in turn rather than only the next one: a mint host long enough
+ * to push the bech32 form past what a QR version here can hold would
+ * otherwise make button 1 look dead on that note, on that form, and nowhere
+ * else -- which is the kind of fault nobody reproduces. Returns false only if
+ * NONE of them renders, which is the same condition the chord already treats
+ * as a failed unveil.
+ *
+ * `*format` is left on whatever ended up on screen. */
+static bool unveil_next_format(const char *browse_id, note_url_format_t *format) {
+    for (int step = 1; step <= NOTE_URL_FORMAT_COUNT; step++) {
+        const note_url_format_t next =
+            (note_url_format_t)(((int)*format + step) % NOTE_URL_FORMAT_COUNT);
+        if (unveil(browse_id, next)) {
+            *format = next;
+            return true;
+        }
+    }
+    return false;
 }
 
 /* Why the watchdog watches THIS task and not the transports.
@@ -321,6 +463,7 @@ static void draw_confirm_card(const remote_confirm_request_t *req, const char *h
                         req->has_detail ? req->amount : NULL,
                         req->has_detail ? req->unit : NULL,
                         req->has_detail ? req->label : NULL, NULL, hint);
+    screen_awake();
 }
 
 /* The gate in front of every disclosure: a two-second hold on button 1, with
@@ -356,7 +499,7 @@ static confirm_result_t service_remote_confirm(const remote_confirm_request_t *r
      * clears that, so drawing first would tell every owner to let go. */
     approval_state_t state = approval_poll(&ap, buttons_raw_1(), buttons_raw_2(), now);
     bool waiting = approval_waiting_for_release(&ap);
-    draw_confirm_card(req, waiting ? RELEASE_HINT : CONFIRM_HINT);
+    draw_confirm_card(req, waiting ? RELEASE_HINT : confirm_hint());
     display_progress(0);
 
     uint16_t drawn = 0;
@@ -369,7 +512,7 @@ static confirm_result_t service_remote_confirm(const remote_confirm_request_t *r
         const bool now_waiting = approval_waiting_for_release(&ap);
         if (state == APPROVAL_PENDING && now_waiting != waiting) {
             waiting = now_waiting;
-            draw_confirm_card(req, waiting ? RELEASE_HINT : CONFIRM_HINT);
+            draw_confirm_card(req, waiting ? RELEASE_HINT : confirm_hint());
             display_progress(drawn);
         }
 
@@ -425,6 +568,7 @@ static confirm_result_t service_remote_confirm(const remote_confirm_request_t *r
     /* In words, naming what it was about: a prompt that simply vanished never
      * said whether the device had timed out or refused. */
     display_message(card, title, req->action[0] ? req->action : NULL, tail);
+    screen_awake();
     return result;
 }
 
@@ -438,10 +582,21 @@ static void ui_task_fn(void *arg) {
         ESP_LOGW(TAG, "task watchdog not watching ui_task: %s", esp_err_to_name(wdt_err));
     }
 
+    /* A panel that never came up gets a timeout of 0, which means never
+     * sleep: there is nothing to blank, and a device that believes its screen
+     * is dark spends the first press of every gesture turning on a light that
+     * does not exist. */
+    screen_sleep_init(&g_screen, esp_timer_get_time(),
+                      display_ready() ? SCREEN_SLEEP_MS : 0);
+
     ui_mode_t mode = UI_IDLE;
     int browse_index = -1;
     char browse_id[VAULT_ID_BUF] = {0}; /* identity of the selected note, for unveil() */
     int64_t browse_last_activity_us = 0;
+    /* Which encoding the unveil screen is showing. Reset to the build default
+     * on every fresh chord rather than carried between notes: the last note
+     * you handed over says nothing about which wallet the next person has. */
+    note_url_format_t qr_format = LNURLVAULT_QR_FORMAT;
 
     size_t idle_shown = show_idle();
     int64_t idle_checked_us = esp_timer_get_time();
@@ -476,6 +631,28 @@ static void ui_task_fn(void *arg) {
 
         button_event_t ev = buttons_poll();
 
+        /* Dark, the first touch buys the light and nothing else.
+         *
+         * On the raw level rather than on the tap a release produces, so the
+         * screen comes up under the thumb instead of after it -- and the
+         * press is then consumed, so waking a vault never also starts it
+         * browsing bearer notes. Whichever way the press arrives, it is spent
+         * here: `ev` is dropped rather than handed to the mode below. */
+        if (screen_sleep_is_asleep(&g_screen)) {
+            if (ev != BTN_EVENT_NONE || buttons_raw_1() || buttons_raw_2()) {
+                buttons_consume_press();
+                /* Repaints in the dark and lights the panel afterwards, in
+                 * that order -- see screen_awake(). Recounting on the way is
+                 * the point: the count on the glass is from before the
+                 * screen went out, and notes move over the wire. */
+                idle_shown = show_idle();
+                idle_checked_us = esp_timer_get_time();
+            }
+            wdt_feed();
+            vTaskDelay(pdMS_TO_TICKS(30));
+            continue;
+        }
+
         switch (mode) {
             case UI_IDLE:
                 /* Keep the count honest. */
@@ -502,7 +679,8 @@ static void ui_task_fn(void *arg) {
 
             case UI_BROWSE:
                 if (ev == BTN_EVENT_BOTH_CHORD) {
-                    if (unveil(browse_id)) {
+                    qr_format = LNURLVAULT_QR_FORMAT;
+                    if (unveil(browse_id, qr_format)) {
                         mode = UI_QR_SHOWN;
                     } else {
                         /* Note gone, export refused, or a URL too long for a
@@ -531,7 +709,32 @@ static void ui_task_fn(void *arg) {
                 break;
 
             case UI_QR_SHOWN:
-                if (ev == BTN_EVENT_1_TAP || ev == BTN_EVENT_2_TAP || ev == BTN_EVENT_BOTH_CHORD) {
+                /* Button 1 cycles the encoding; button 2 leaves. It used to be
+                 * that any tap left, which was fine when there was one form to
+                 * show and nothing to choose between.
+                 *
+                 * Three forms because no single one works everywhere: LUD-25
+                 * names lnurlw:// and bech32 LNURL, and neither of those opens
+                 * on a stock phone camera, which is what the claim link is
+                 * for. Which one a given wallet accepts is a question the
+                 * person holding the device can now answer by pressing a
+                 * button, instead of by rebuilding the firmware.
+                 *
+                 * Note what is deliberately NOT here: cycling does not touch
+                 * browse_last_activity_us. The secret leaves the screen at a
+                 * fixed deadline from the chord that unveiled it, however many
+                 * times it is redrawn, so this cannot become a way to hold a
+                 * bearer secret up indefinitely by tapping. Another chord is
+                 * one gesture away if the window runs out. */
+                if (ev == BTN_EVENT_1_TAP) {
+                    if (!unveil_next_format(browse_id, &qr_format)) {
+                        display_message(DISPLAY_STATE_DECLINED, "FAILED", "NOT SHOWN", NULL);
+                        vTaskDelay(pdMS_TO_TICKS(900));
+                        mode = UI_BROWSE;
+                        browse_last_activity_us = esp_timer_get_time();
+                        show_browse_note(browse_index, confirmed_position(browse_index));
+                    }
+                } else if (ev == BTN_EVENT_2_TAP || ev == BTN_EVENT_BOTH_CHORD) {
                     mode = UI_BROWSE;
                     browse_last_activity_us = esp_timer_get_time();
                     show_browse_note(browse_index, confirmed_position(browse_index));
@@ -547,6 +750,25 @@ static void ui_task_fn(void *arg) {
                 break;
         }
 
+        /* Lights out. Deliberately here, outside the switch and outside
+         * service_remote_confirm() -- which is the one place this loop does
+         * not run. That is what stops a live prompt going dark under the
+         * person answering it, and it is structural rather than a flag
+         * somebody has to remember to set.
+         *
+         * A QR on screen is safe for the same reason it is safe when it
+         * times out: display_sleep() clears the panel, so the secret leaves
+         * the glass rather than merely losing its backlight. */
+        if (screen_sleep_expired(&g_screen, esp_timer_get_time())) {
+            display_sleep();
+            /* Going dark ends any browse. Waking to a position picked a
+             * minute ago -- or with a note still selected for the chord that
+             * unveils it -- is not where a vault should resume. */
+            mode = UI_IDLE;
+            browse_index = -1;
+            browse_id[0] = '\0';
+        }
+
         wdt_feed();
         vTaskDelay(pdMS_TO_TICKS(30));
     }
@@ -559,6 +781,7 @@ void ui_task_init(void) {
     if (!g_request_q) {
         g_request_q = xQueueCreate(4, sizeof(remote_confirm_request_t));
     }
+    publish_confirm_side();
 }
 
 void ui_task_start(void) {
@@ -648,6 +871,32 @@ confirm_result_t ui_task_request_action_confirm(const char *action, const note_m
      * on the floor, which meant every gated destructive command -- mark_spent,
      * discard, delete, rename -- put up the same card export_secret does. */
     return request_confirm_detailed(timeout_ms, note, action);
+}
+
+confirm_result_t ui_task_request_prune_confirm(uint32_t count, uint32_t timeout_ms) {
+    if (!g_request_q) {
+        return CONFIRM_UNAVAILABLE;
+    }
+    QueueHandle_t resp_q = xQueueCreate(1, sizeof(confirm_result_t));
+    if (!resp_q) {
+        return CONFIRM_UNAVAILABLE;
+    }
+    remote_confirm_request_t req = {.timeout_ms = timeout_ms, .response_q = resp_q};
+    /* Not routed through request_confirm_detailed(): that one formats a
+     * note's amount, and what has to be on this card is a COUNT. It borrows
+     * the amount's slot on purpose -- same position, same size -- because
+     * "25" is exactly as much the reviewable fact here as "21 000" is on a
+     * disclosure. */
+    snprintf(req.action, sizeof(req.action), "PRUNE SPENT");
+    req.has_detail = true;
+    snprintf(req.amount, sizeof(req.amount), "%u", (unsigned)count);
+    snprintf(req.unit, sizeof(req.unit), "%s", count == 1 ? "note" : "notes");
+
+    xQueueSend(g_request_q, &req, portMAX_DELAY);
+    confirm_result_t result = CONFIRM_TIMEOUT;
+    xQueueReceive(resp_q, &result, portMAX_DELAY);
+    vQueueDelete(resp_q);
+    return result;
 }
 
 confirm_result_t ui_task_request_wipe_confirm(uint32_t timeout_ms) {

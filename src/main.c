@@ -19,6 +19,7 @@
 #include "device_reboot.h"
 #include "dispatcher.h"
 #include "display.h"
+#include "boot_screen.h"
 #include "display_selftest.h"
 #include "esp_log.h"
 #include "esp_random.h"
@@ -238,6 +239,15 @@ static confirm_result_t wipe_approve_on_device(uint32_t timeout_ms) {
     return result;
 }
 
+/* The gate in front of prune_spent. Same lock dance as the three above, for
+ * the same reason. */
+static confirm_result_t prune_approve_on_device(uint32_t count, uint32_t timeout_ms) {
+    vault_lock_release();
+    confirm_result_t result = ui_task_request_prune_confirm(count, timeout_ms);
+    vault_lock_acquire();
+    return result;
+}
+
 /* The gate in front of mark_spent, delete, discard and rename -- see
  * dispatcher.h's action_confirm_fn. Releases vault_lock across the wait for
  * the same reason the other three do: ui_task is on the far side of it and
@@ -258,9 +268,12 @@ void app_main(void) {
     buttons_init();
     display_init();
     /* Stays up through storage and transport bring-up until ui_task replaces
-     * it; no delay is added for it. A flash that landed and one that silently
-     * did not are otherwise the same dark screen. */
-    display_message(DISPLAY_STATE_IDLE, "LNURL VAULT", "v" LNURLVAULT_FW_VERSION, BOARD_NAME);
+     * it. A flash that landed and one that silently did not are otherwise the
+     * same dark screen -- and each stage below can fail on its own, which
+     * used to be visible only over the wire, to a host that may not be
+     * attached yet. See boot_screen.h; this does add about two seconds to
+     * boot, most of it spent saying something. */
+    boot_screen_begin(LNURLVAULT_FW_VERSION, BOARD_NAME);
     vault_lock_init();
     cmd_lock_init();
 
@@ -276,6 +289,10 @@ void app_main(void) {
     if (!storage_ok) {
         ESP_LOGE(TAG, "NVS storage init failed; vault will run in-RAM only this boot");
     }
+    /* Both halves have to be true for the notes to survive a power cycle, and
+     * a device that says OK here having failed either is worse than one that
+     * says nothing. */
+    boot_screen_step("STORAGE", storage_ok && err == ESP_OK);
 
     dispatcher_deps_t deps = {
         .rng = rng_fill,
@@ -290,6 +307,7 @@ void app_main(void) {
         .ota_write_abort = ota_write_abort,
         .ota_pubkey = OTA_RELEASE_PUBKEY,
         .wipe_approve = wipe_approve_on_device,
+        .prune_approve = prune_approve_on_device,
         .wipe_storage = vault_nvs_wipe,
         .storage_state = vault_nvs_state_name,
         .trace_cmd = trace_cmd,
@@ -316,6 +334,10 @@ void app_main(void) {
      * the key is generated from the same RNG the notes use and has to be
      * stored before it is served. */
     identity_boot();
+    /* Not "a key exists" -- "a key exists AND was stored". identity_boot()
+     * refuses to serve one it could not write down, so this reports what the
+     * device will actually answer identify with. */
+    boot_screen_step("IDENTITY", g_identity_ready);
 
     if (storage_ok) {
         vault_init(vault_nvs_storage(), now_seconds);
@@ -327,6 +349,11 @@ void app_main(void) {
     }
 
     board_serial_start();
+    /* The transport is up. NOT "a host is attached" -- nothing here can know
+     * that, and claiming it would make the one line that could reassure
+     * someone the least trustworthy on the screen. */
+    boot_screen_step("LINK", true);
+    boot_screen_done();
 
     /* Diagnostics sit between the transport and ui_task, which is the only
      * window where they get both properties they need. Run before the

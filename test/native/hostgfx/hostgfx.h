@@ -1,6 +1,7 @@
 #ifndef LNURLVAULT_HOSTGFX_H
 #define LNURLVAULT_HOSTGFX_H
 
+#include <stdbool.h>
 #include <stdint.h>
 
 /* A panel to run the firmware's own drawing code against, on a laptop.
@@ -50,6 +51,12 @@ int hostgfx_first_ink_col(uint16_t ink);
 /* Rightmost inked column, or -1. Text clips at the edge rather than wrapping,
  * so how close a line got to running out of screen is worth asking. */
 int hostgfx_last_ink_col(uint16_t ink);
+
+/* Whether display.c has asked the board for the backlight. Starts on at
+ * hostgfx_reset(); this is what lets a test tell "blanked to black and dark"
+ * from "drew a black card and left the light on", which are the same
+ * framebuffer and very different devices. */
+bool hostgfx_backlight(void);
 
 /* Draw, snapshot, draw the other thing, ask what moved: how a test locates a
  * band without knowing display.c's internal geometry. */

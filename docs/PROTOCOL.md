@@ -393,6 +393,48 @@ or as the burn step of a rotate/split/merge.
 `delete` only succeeds on a `SPENT` note (housekeeping) — a `PENDING` note is
 dropped via `discard`, and a `CONFIRMED` one must be spent first.
 
+### `prune_spent`
+
+```json
+{"cmd":"prune_spent"}
+→ {"ok":true,"removed":25,"remaining":14}
+```
+
+Forgets every note already in `SPENT` state, in one gated action. Gated like
+any other destructive command, and the card carries the **count** where a
+note's amount would go — because "forget some notes" is not something anyone
+can sensibly approve, and the difference between 25 and 1 is the difference
+between housekeeping and a host having been busy behind your back.
+
+It exists because `delete` takes one id and every gated command costs a
+physical two-second hold, so clearing a few dozen dead notes meant a few dozen
+deliberate holds. That is housekeeping nobody does, so it does not get done,
+and the device fills with dead weight until `list_notes` starts refusing pages
+for it.
+
+**It takes no parameters, deliberately** — there is nothing to aim it with. It
+cannot touch a `CONFIRMED` note (that is money) or a `PENDING` one (that may
+yet confirm), and it leaves alone any note the index named whose blob would
+not load, since those are not known-spent, they are unreadable.
+
+With nothing to do it answers `{"ok":true,"removed":0}` and **does not
+prompt**: asking somebody to approve a no-op is how people learn to approve
+without reading, on a device where the next prompt hands over a bearer secret.
+
+**What it cannot do**, and does not try to. It has no idea whether a
+`CONFIRMED` note is still outstanding at the mint. A note reaches `SPENT` only
+because a host told this vault so — a melt it watched settle, or a
+rotate/split/merge that burned the note as an input. A note redeemed by
+somebody else's wallet, or rotated away by another client, still reads
+`CONFIRMED` here forever. LUD-25 is explicit that this is inherent: "A spent
+note keeps its valid signature forever, and no revocation is visible offline."
+
+Reconciling that needs the mint, and asking the mint means presenting the
+bearer secret at its withdraw endpoint — which puts a live secret in an access
+log for every note checked. A vault that quietly dropped notes it merely
+suspected were spent would be destroying money on a guess, so this one does
+not guess.
+
 ### `reset`
 
 Reboots the device. Not part of note lifecycle management — a recovery
@@ -593,6 +635,17 @@ involved in this flow.
 | Hold both buttons together for ~200ms ("the chord") | **Unveil**: exports the selected note's secret and shows it as a QR code on-screen |
 | Any tap while a QR is shown | Dismiss it, back to browsing |
 | ~15s with no input while browsing | Back to idle |
+| ~60s with nothing new on screen | The screen goes dark: blanked *and* backlit off |
+| Any press while dark | Wakes it, and does nothing else — that press is spent on the light |
+
+The screen going dark is not the device sleeping. Nothing else stops: the
+transports stay up, a paired host can still drive every command, and a
+confirmation arriving while the screen is dark lights it back up and puts its
+card on it — a confirmation nobody can see is not one, so this can never blank
+a live prompt. Going dark also ends any browse, so waking always returns to
+the resting card rather than to a note selected a minute ago. A vault lives
+plugged in showing the same card in the same pixels; an IPS panel treated that
+way ends up wearing a permanent copy of it.
 
 Only `CONFIRMED` notes are browsable (a `PENDING` note has no settled value
 yet; `SPENT` notes have nothing left to show). The browse card shows the
@@ -602,11 +655,38 @@ rather than a miscount. At rest, before any of that, the screen shows how many
 `CONFIRMED` notes the device holds and that a tap will show them; it does not
 show what they are worth.
 
-**What the QR encodes.** By default a plain `https://` claim link into a
-wallet, `<wallet>/#/claim?u=<host>&k1=<secret>&a=<msat>` — because a stock
-phone camera opens that, and does not open `lnurlw://` (issue #26: the codes
-render and decode fine, nothing handles them). A note nobody can accept with
-the phone in their pocket is not a bearer note.
+**What the QR encodes**, and how to change it without a rebuild. Three forms,
+cycled with button 1 while the code is up; button 2 dismisses as before. The
+strip under the code names the one showing.
+
+| Caption | Form | Who takes it |
+|---|---|---|
+| `LNURL` | bech32 `LNURL1…`, uppercase | An ordinary Lightning wallet's scanner. The default |
+| `LNURLW` | `lnurlw://<host>?k1=…&amount=…` ([LUD-17](https://github.com/lnurl/luds/blob/luds/17.md)) | LNURL-native wallets that implement the scheme |
+| `LINK` | `<wallet>/#/claim?u=<host>&k1=<secret>&a=<msat>` | A stock phone camera, which opens it in a browser |
+
+LUD-25 names the first two: "prefixed with the `lnurlw://` scheme (LUD-17) or
+bech32-encoded as an ordinary LNURL, `<withdraw LNURL>?k1=<P or secret>&amount=<msat>`
+*is* the bearer note". The third is not in the spec — it is this project's
+answer to issue #26, because a stock camera opens `https://` and does nothing
+at all with `lnurlw://`, and a note nobody can accept with the phone in their
+pocket is not a bearer note.
+
+None of the three works everywhere, which is why the device cycles rather than
+picks. The claim link is an `https` URL, so a wallet expecting an invoice
+rejects it outright — Wallet of Satoshi reports it as "not an ln invoice",
+which is the spec's own backward-compatibility promise going unmet. `lnurlw://`
+support is patchy. Bech32 is the broadest, and is what the unveil screen opens
+on.
+
+Cycling deliberately does **not** extend the 60-second window: the secret
+leaves the screen a fixed time after the chord that unveiled it, however many
+times it is redrawn.
+
+The bech32 form costs nothing to carry despite being the longest string —
+about 177 characters against the claim link's 138 — because it is uppercase,
+and the QR encoder packs uppercase bech32 in alphanumeric mode at 5.5 bits per
+character instead of byte mode's 8.
 
 The secret sits in the **fragment**, never the query, so it is not in a
 request line, a referrer or a server log.

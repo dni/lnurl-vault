@@ -63,4 +63,15 @@ confirm_result_t ui_task_request_wipe_confirm(uint32_t timeout_ms);
 confirm_result_t ui_task_request_action_confirm(const char *action, const note_meta_t *note,
                                                  uint32_t timeout_ms);
 
+/* The gate in front of `prune_spent` -- forgetting every note the vault
+ * already knows is dead (dispatcher.h's prune_approve_fn).
+ *
+ * Its own entry point because the card has to carry the COUNT, and the count
+ * is not a note. It is drawn where an amount goes, at the size an amount
+ * gets, because it is the one number that makes this reviewable: approving
+ * "forget some notes" is not approving anything, and the difference between
+ * 25 and 1 is the difference between housekeeping and a host having been busy
+ * behind your back. */
+confirm_result_t ui_task_request_prune_confirm(uint32_t count, uint32_t timeout_ms);
+
 #endif

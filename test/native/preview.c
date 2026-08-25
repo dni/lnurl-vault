@@ -8,9 +8,11 @@
  * typed in here, so the grouping and unit are the real ones. */
 #include <stdio.h>
 #include <stdlib.h>
+#include <stdbool.h>
 #include <string.h>
 #include <sys/stat.h>
 
+#include "boot_screen.h"
 #include "display.h"
 #include "hostgfx.h"
 #include "note_display.h"
@@ -54,16 +56,54 @@ static void note_card(display_state_t state, const char *action, uint64_t msat,
     display_note_detail(state, action, amount, unit, shown, id, hint);
 }
 
-#define HINT "HOLD BTN1 2s"
+/* Mirrors ui_task.c's confirm_hint(). The board files are not compiled here,
+ * so the side cannot be read from board_confirm_side(); it is keyed off the
+ * board being rendered instead, which is the point -- these PNGs are meant to
+ * show what each panel actually says, and the two no longer say the same
+ * thing. Classic is bench-verified RIGHT; the S3's rotation is unverified, so
+ * it keeps the button-name wording. */
+#define HINT_UNKNOWN_SIDE "HOLD BTN1 2s"
+#define HINT_WITH_GUIDE "HOLD 2s"
 #define RELEASE "LET GO FIRST"
+
+static const char *g_hint = HINT_UNKNOWN_SIDE;
+#define HINT (g_hint)
 
 static void render_board(const char *board, int w, int h) {
     g_board = board;
+    const bool classic = strcmp(board, "t-display") == 0;
+    g_hint = classic ? HINT_WITH_GUIDE : HINT_UNKNOWN_SIDE;
+    display_set_confirm_side(classic ? DISPLAY_CONFIRM_SIDE_RIGHT
+                                     : DISPLAY_CONFIRM_SIDE_UNKNOWN);
     printf("%s (%dx%d)\n", board, w, h);
 
+    /* The boot screen animates; vTaskDelay is a no-op here, so what lands is
+     * the last frame of each stage. Three shots because it is three screens,
+     * and the middle one -- a checklist half filled in -- is the one nobody
+     * would think to look at and the one a failing device stops on. */
     fresh(w, h);
-    display_message(DISPLAY_STATE_IDLE, "LNURL VAULT", "v0.0.7", board);
-    shot("00-boot");
+    boot_screen_begin("0.0.7", board);
+    shot("00-boot-name");
+
+    fresh(w, h);
+    boot_screen_begin("0.0.7", board);
+    boot_screen_step("STORAGE", true);
+    boot_screen_step("IDENTITY", true);
+    shot("00b-boot-partway");
+
+    fresh(w, h);
+    boot_screen_begin("0.0.7", board);
+    boot_screen_step("STORAGE", true);
+    boot_screen_step("IDENTITY", true);
+    boot_screen_step("LINK", true);
+    shot("00c-boot-ready");
+
+    fresh(w, h);
+    boot_screen_begin("0.0.7", board);
+    boot_screen_step("STORAGE", false);
+    boot_screen_step("IDENTITY", true);
+    boot_screen_step("LINK", true);
+    shot("00d-boot-storage-failed");
 
     fresh(w, h);
     display_message(DISPLAY_STATE_IDLE, "3 NOTES", "TAP TO VIEW", NULL);
@@ -74,7 +114,7 @@ static void render_board(const char *board, int w, int h) {
     shot("01b-idle-empty");
 
     fresh(w, h);
-    note_card(DISPLAY_STATE_BROWSE, NULL, 21000, "rent", "f822a462  3", NULL);
+    note_card(DISPLAY_STATE_BROWSE, "NOTE 3/12", 21000, "rent", "f822a462", NULL);
     shot("02-browse");
 
     fresh(w, h);
@@ -143,7 +183,7 @@ static void render_board(const char *board, int w, int h) {
     shot("13-confirm-sub-sat");
 
     fresh(w, h);
-    note_card(DISPLAY_STATE_BROWSE, NULL, 21000, NULL, "f822a462  3", NULL);
+    note_card(DISPLAY_STATE_BROWSE, "NOTE 3/12", 21000, NULL, "f822a462", NULL);
     shot("14-browse-no-label");
 }
 

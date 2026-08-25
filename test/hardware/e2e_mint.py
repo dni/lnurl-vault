@@ -25,9 +25,9 @@ Two ways in, because not every mint can settle its own invoices:
   --seed-note K1   start from a note you already hold. moneyer --dev prints
                    one at startup; its fake funding source mints unpayable
                    invoices on purpose, so nothing can settle a fresh one.
-  (default)        mint a new note over LUD-21 verify, which needs a mint
-                   whose funding source actually settles -- lnurl-mint in
-                   front of test/hardware/fake_cln.py does.
+  (default)        mint a new note with LUD-25 comment protection, which
+                   needs a mint whose funding source actually settles --
+                   lnurl-mint in front of test/hardware/fake_cln.py does.
 
 --fake-cln points at that fake node's control API, so a melt has an invoice
 it can genuinely pay. Without it the melt row is skipped rather than
@@ -122,10 +122,32 @@ class Mint:
             return {"status": "ERROR", "reason": f"HTTP {r.status_code}: {r.text[:200]}"}
 
     def mint_note(self, amount_msat, timeout=20):
-        """Pay a payRequest and come back with the preimage, which for
-        LUD-25 IS the note's spend secret. Returns None if this mint's
-        funding source never settles (moneyer --dev, deliberately)."""
-        r = self.http.get(f"{self.base}/p/cb", params={"amount": amount_msat})
+        """Mint a note and come back with its spend secret.
+
+        Minted WITH comment protection, because minting without it no longer
+        works and should not: `lnurl-mint` advertises LUD-21 `verify` only
+        when the payRequest carried a valid `comment`, so a no-comment mint
+        polls for a settlement nothing will ever report. That is the mint
+        degrading visibly instead of silently, which is the whole point of
+        the change -- without a comment the payment preimage IS the note, and
+        every routing hop on the path learns it before the payer does.
+
+        With a comment, WALLET picks the secret up front and discloses only
+        `sha256(secret)`, so the note is keyed by something no hop ever sees.
+        It also means the k1 is known before the invoice is paid, and `verify`
+        stops being the way the secret is learned -- it is only how settlement
+        is observed.
+
+        Falls back to the preimage for a mint that ignores `comment`
+        altogether, since then the old behaviour is still the correct one.
+        Returns None if the funding source never settles (moneyer --dev,
+        deliberately).
+        """
+        secret = urandom(32).hex()
+        comment = sha256(bytes.fromhex(secret)).hexdigest()
+        r = self.http.get(
+            f"{self.base}/p/cb", params={"amount": amount_msat, "comment": comment}
+        )
         r.raise_for_status()
         body = r.json()
         verify = body.get("verify")
@@ -134,8 +156,15 @@ class Mint:
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
             v = self.http.get(verify).json()
-            if v.get("settled") and v.get("preimage"):
-                return v["preimage"]
+            if v.get("settled"):
+                # Which of the two the mint actually did is a question for the
+                # mint, not an assumption to carry: ask whether the note it
+                # issued answers to our secret before claiming it does.
+                if self.spendable(self.note(secret)):
+                    return secret
+                if v.get("preimage"):
+                    return v["preimage"]
+                return None
             time.sleep(0.5)
         return None
 
@@ -178,12 +207,26 @@ class Vault:
 
     def notes(self):
         """Every note, following the paging -- a device that has been
-        benched before will have more than one page of them."""
-        out, offset = [], 0
+        benched before will have more than one page of them.
+
+        How many fit in one response is not a constant the host can pick
+        once. A note's metadata carries a variable-length label and host, and
+        `h` (64 hex) joined it in #107, so the answer moves with what the
+        device happens to be holding: 20 fit before that field existed and do
+        not now. The device refuses the whole page rather than truncating it
+        -- `response_too_large`, "ask for fewer" -- which is the right answer
+        and one this had to actually handle. Returning what had been
+        collected so far turned a protocol error into a note that looked
+        absent, which reads as a device fault when it is a harness one.
+        """
+        out, offset, limit = [], 0, 16
         while True:
-            r = self.dev.cmd({"cmd": "list_notes", "offset": offset, "limit": 20})
+            r = self.dev.cmd({"cmd": "list_notes", "offset": offset, "limit": limit})
+            if r and not r.get("ok") and r.get("error") == "response_too_large" and limit > 1:
+                limit //= 2
+                continue
             if not r or not r.get("ok"):
-                return out
+                raise RuntimeError(f"list_notes failed at offset {offset}: {r}")
             page = r.get("notes") or []
             out.extend(page)
             offset += len(page)

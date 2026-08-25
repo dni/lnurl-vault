@@ -36,18 +36,78 @@ bool display_ready(void);
 int display_width(void);
 int display_height(void);
 
+/* Puts the screen out, and brings it back.
+ *
+ * The vault sits on a desk all day with the same resting card in the same
+ * pixels; an IPS panel left like that acquires a faint permanent copy of it.
+ * Sleeping blanks the framebuffer to black AND kills the backlight -- both,
+ * not either: the backlight alone leaves the liquid crystal held in the same
+ * state it was ghosting into, and the blank alone leaves a lit black
+ * rectangle that looks like a dead device.
+ *
+ * WHEN to sleep is not decided here. That is src/proto/screen_sleep.h, driven
+ * by src/ui/ui_task.c, which is also the only thing that should call these.
+ *
+ * Order matters when waking, and it is the caller's to get right: REPAINT
+ * FIRST, THEN display_wake(). The panel keeps whatever was last drawn on it,
+ * so lighting it before the new card is composed shows the old one -- the
+ * same reason both board files turn their backlight on last during
+ * bring-up. Drawing while asleep is not an error; it simply happens in the
+ * dark, which is exactly what is wanted.
+ *
+ * Both are idempotent, and both do nothing at all when the panel never came
+ * up: there is no screen to blank, and a display_ready() of false already
+ * means every disclosure refuses. */
+void display_sleep(void);
+void display_wake(void);
+bool display_asleep(void);
+
+/* The two pieces of card furniture, in pixels: the header band along the top
+ * and the progress bar along the bottom. Exposed only so the boot screen can
+ * animate INTO exactly the geometry every card afterwards uses -- an opening
+ * shutter that settles a pixel off the band it becomes is worse than no
+ * animation. Nothing else should need these; a card gets them by being drawn
+ * through display_note_detail(). */
+int display_band_height(void);
+int display_bar_height(void);
+
 void display_set_state(display_state_t state);
 
 /* Exposed so anything drawing onto a state's background, or checking what was
  * drawn there, gets the same answer rather than a second copy of the mapping.
- * The ink is not a constant -- see palette.h. */
+ * None of these is a constant -- see palette.h.
+ *
+ * `color` is the ground: a warm near-black on the screens you read up close,
+ * the state's own colour on the ones you read across a room. `accent` is the
+ * state's colour either way, which is what the header band and the progress
+ * bar are drawn in. `ink` is the text, and `ink_dim` is the second weight for
+ * everything that is context rather than content -- unit, label, id, gesture.
+ * Without that second weight an amount and the eight hex characters beside it
+ * carried exactly equal force. */
 uint16_t display_state_color(display_state_t state);
+uint16_t display_state_accent(display_state_t state);
 uint16_t display_state_ink(display_state_t state);
+uint16_t display_state_ink_dim(display_state_t state);
 
 /* Fills an axis-aligned rectangle. Out-of-bounds rectangles are dropped
  * rather than clipped: a caller computing a negative origin has a bug, and
  * silently drawing something slightly wrong on a device that shows bearer
  * secrets is worse than drawing nothing. */
+/* Which side of the screen the CONFIRM button is physically on, so the confirm
+ * card can draw the two buttons where they actually are rather than name one.
+ * Mirrors board.h's board_confirm_side_t; kept separate so this layer stays
+ * free of board.h, which the native tests do not compile. */
+typedef enum {
+    DISPLAY_CONFIRM_SIDE_UNKNOWN = 0,
+    DISPLAY_CONFIRM_SIDE_LEFT,
+    DISPLAY_CONFIRM_SIDE_RIGHT,
+} display_confirm_side_t;
+
+/* UNKNOWN draws no guide at all, which is the honest answer for a board whose
+ * orientation has not been established: a guide pointing at the wrong button
+ * is worse than no guide. */
+void display_set_confirm_side(display_confirm_side_t side);
+
 void display_fill_rect(int x, int y, int w, int h, uint16_t color);
 
 /* Draws `text` with its top-left at (x, y), each font pixel scaled to a

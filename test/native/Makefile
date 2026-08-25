@@ -33,17 +33,21 @@ CFLAGS = -std=c11 -Wall -Wextra -Werror -I../../src/vault -I../../src/proto -I..
 SRC = ../../src/vault/sha256.c \
       ../../src/vault/derive.c \
       ../../src/vault/hex.c \
+      ../../src/vault/entropy.c \
       ../../src/vault/vault.c \
       ../../src/vault/identity.c \
       ../../src/proto/json.c \
       ../../src/proto/base64.c \
       ../../src/proto/dispatcher.c \
       ../../src/proto/button_fsm.c \
+      ../../src/proto/screen_sleep.c \
       ../../src/proto/note_url.c \
+      ../../src/proto/bech32.c \
       ../../src/proto/ble_frame.c \
       ../../src/proto/note_display.c \
       ../../src/ui/font5x7.c \
       ../../src/ui/display.c \
+      ../../src/ui/boot_screen.c \
       hostgfx/hostgfx.c \
       ../../src/proto/line_proto.c \
       ../../src/proto/approval.c \
@@ -55,6 +59,7 @@ SRC = ../../src/vault/sha256.c \
       test_sha256.c \
       test_hex.c \
       test_derive.c \
+      test_entropy.c \
       test_json.c \
       test_vault.c \
       test_dispatcher.c \
@@ -62,16 +67,19 @@ SRC = ../../src/vault/sha256.c \
       test_response_bounds.c \
       test_button_fsm.c \
       test_note_url.c \
+      test_bech32.c \
       test_ble_frame.c \
       test_note_display.c \
       test_card_render.c \
       test_line_proto.c \
       test_approval.c \
+      test_screen_sleep.c \
       test_input_health.c \
       test_identity.c \
       test_qr_capacity.c \
       test_wipe.c \
       test_gated_actions.c \
+      test_prune.c \
       test_list_paging.c \
       test_regressions.c \
       test_base64.c \
@@ -95,7 +103,8 @@ SAN_FLAGS = -fsanitize=address,undefined -fno-sanitize-recover=all -g -O1
 # Renders every screen to a PNG, at both panel geometries, from the same
 # src/ui/display.c the firmware runs. See hostgfx/hostgfx.h.
 PREVIEW_BIN = vault_preview
-PREVIEW_SRC = ../../src/ui/display.c ../../src/ui/font5x7.c ../../src/proto/note_display.c \
+PREVIEW_SRC = ../../src/ui/display.c ../../src/ui/boot_screen.c ../../src/ui/font5x7.c \
+              ../../src/proto/note_display.c \
               hostgfx/hostgfx.c preview.c
 PREVIEW_OUT ?= preview
 PREVIEW_ZOOM ?= 3

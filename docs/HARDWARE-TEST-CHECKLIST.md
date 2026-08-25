@@ -371,9 +371,31 @@ The device must **never** erase to recover. On a full partition it reports
 > wrong phrase refused, correct phrase prompted then timed out. Note count
 > unchanged at 13 throughout. Via `bench.py`.
 >
-> **Granting a wipe: NOT YET BENCH-RUN**, deliberately — kept out of the
-> automated bench so no test run is one press from erasing a device. Also
-> **not bench-run**: reaching a genuinely full NVS partition to see
+> **Granting a wipe — bench-run 2026-08-25.** Classic T-Display holding 14
+> notes, all of them known-worthless test notes, erased at the owner's
+> explicit request. Run from a standalone script, **not** from `bench.py`:
+> the rule that granting a wipe stays out of the automated suite stands, and
+> is the reason this needed writing on purpose rather than just running.
+>
+> | Attempt | Answer | Notes after |
+> |---|---|---|
+> | Left unanswered | `{"ok":false,"error":"timeout"}` after 30.3s | 14 |
+> | `BOOT` held | `{"ok":true,"wiped":true}` after 7.3s | 0 |
+>
+> Afterwards: `note_count` 0 with `storage` still `ok` — an erased vault, not
+> a broken one. Power-cycled and re-read: still 0, so the erase stuck, and the
+> device still answered every command.
+>
+> **The device identity changed, which had never been observed before.**
+> `b8992dcf…7ea28e` before, `3d7ee0eb…1d87de` after. `docs/PROTOCOL.md`'s
+> `identify` section has always claimed this — "`wipe` destroys it along with
+> everything else, so a wiped vault is deliberately a *different* vault to any
+> client that had pinned it" — and `vault_nvs_wipe()` erases the whole NVS
+> partition, which is where the seed lives. True, and now checked rather than
+> reasoned. Any host that had pinned the old key will warn about a swapped
+> vault, which is the warning working.
+>
+> Still **not bench-run**: reaching a genuinely full NVS partition to see
 > `storage: "full"` in the wild. `list_notes` returning
 > `response_too_large` at around 30 notes *was* reproduced, which is issue #7
 > and the nearest thing to it.
@@ -538,6 +560,42 @@ known to work. Section 7a is why.
 >
 > On both mints the device's `list_notes` lineage agreed with the mint at
 > every step and nothing was left `PENDING`.
+
+> **Bench record — 2026-08-25, fw `0.0.7-5-g4870adc`.** Classic T-Display,
+> `/dev/cu.usbserial-5B310132921`, against `lnurl-mint` at current `main`
+> backed by `fake_cln.py`. **8 passed, 0 failed, 1 skipped** — `import_secret`,
+> **rotate after import**, **split**, **merge** (21000 msat out against 21000
+> in, value conserved), **rotate**, **melt**, nothing left `PENDING`.
+>
+> The `mint` row was skipped, and not by choice: `lnurl-mint`'s comment
+> feature now advertises LUD-21 `verify` **only** when the payRequest carried a
+> valid `comment` (`router.py`'s `get_pay_callback`). This harness mints over
+> `verify` with no comment, so it polls for a settlement it will never be told
+> about and reports "never settled". The mint is right — degrading visibly
+> rather than silently is the whole point of that change — and the harness is
+> what is out of date. The fix is to mint with comment protection, which
+> removes the polling entirely: a wallet that sends `comment = sha256(secret)`
+> already knows the k1 before it pays and never needs `verify` to learn a
+> preimage. Until then, drive this section with `--seed-note`.
+>
+> Two things this run found that a green suite would not have:
+>
+>  - `list_notes` at `limit: 20` now returns `response_too_large` on a device
+>    holding 33 notes. `h` joined the metadata in #107, ~70 bytes a note, and
+>    20 no longer fit one response. The device is right to refuse rather than
+>    truncate; this harness asked for 20, swallowed the refusal, and reported a
+>    note that was plainly there as "not on device". Fixed here by halving the
+>    limit on that error and raising instead of returning a short list. A fixed
+>    page size was never safe anyway — `label` and `host` are variable-length.
+>
+>  - Two runs were lost before this one: three approvals timed out, and a
+>    fourth came back `user_declined` from a press on button 2. That was the
+>    operator not knowing the gesture, **not** a missing hint -- `make
+>    preview` renders `HOLD BTN1 2s` on the 240x135 confirm card, with and
+>    without a label, so #105 landed that fix and it works. Recorded because
+>    the first instinct on three silent timeouts was to suspect the card, and
+>    the preview renderer answered it in seconds without touching the board.
+>    That is what it is for.
 >
 > The whole session cost far more approvals than it should have, for a reason
 > worth recording: the approval is a **two-second hold**, nobody driving it
@@ -627,11 +685,11 @@ bench run rather than by reading the code:
 |---|---|
 | `export_secret` | `SHOW SECRET` above the amount, `HOLD BTN1 2s` below it |
 | A gated destructive command | its own verb — `MARK SPENT`, `DISCARD`, `RENAME`, `DELETE` — not the disclosure card |
-| `wipe` | `WIPE ALL`, on a card that is no longer bare colour |
+| `wipe` | `WIPE ALL` in the band, on a card that is no longer bare colour |
 | OTA | `NEW FIRMWARE`, likewise |
-| Holding button 1 | the bar fills over 2s and the card resolves green |
+| Holding button 1 | the bar fills across the full width of the bottom edge over 2s, in the card's own amber, and resolves to a green field |
 | Tapping button 1 | the bar visibly starts and drops back, rather than nothing happening |
-| Browsing a note | unchanged: no verb, no hint, note id still shown |
+| Browsing a note | still no gesture hint, but the band now says `NOTE 3/12` where a prompt puts its verb, and the id has its own line |
 | A seven-digit amount | still readable; the digits shrink to make room, no line falls off the bottom |
 
 The note id is deliberately **not** on the confirm card any more. Eight hex
@@ -716,12 +774,12 @@ out, on a device where a press starts browsing bearer secrets.
 
 | Check | Expect |
 |---|---|
-| Power on | `LNURL VAULT`, the firmware version, and the board name, before anything else draws |
-| At rest, notes on the device | `3 NOTES` (or `1 NOTE`) over `TAP TO VIEW`, white on dark grey |
+| Power on | the boot sequence — see section 22 |
+| At rest, notes on the device | `3 NOTES` over a dimmer `TAP TO VIEW`, warm white on near-black, teal rule along the top |
 | At rest, empty vault | `NO NOTES` over `PAIR TO ADD` |
-| Approve a disclosure | `APPROVED` over `SHOW SECRET`, green |
-| Cancel with button 2 | `DECLINED` / `SHOW SECRET` / `NOTHING DONE`, white on red |
-| Let a prompt time out | `NO ANSWER` / the verb / `NOTHING DONE`, on grey |
+| Approve a disclosure | `APPROVED` over `SHOW SECRET`, a full field of mint green with warm-dark text |
+| Cancel with button 2 | `DECLINED` / `SHOW SECRET` / `NOTHING DONE`, a full field of coral |
+| Let a prompt time out | `NO ANSWER` / the verb / `NOTHING DONE`, a full field of warm grey |
 | Outcome timing | the wallet gets its answer FIRST; the card stays up ~1.8s afterwards |
 | Hold button 1 before the prompt appears | the card says `LET GO FIRST`; releasing switches it to `HOLD BTN1 2s` |
 | Unveil a note that cannot be shown | `FAILED` over `NOT SHOWN`, not a bare red flash |
@@ -752,3 +810,301 @@ is a substitute for guessing.
 > **Not yet bench-run.** Every row above comes from the preview renderer and
 > the pixel assertions in `test/native/test_card_render.c`. None of it has
 > been on glass.
+
+## 21. The screen going dark — NOT YET BENCH-RUN
+
+A vault lives plugged in. Left alone it holds the same resting card in the
+same pixels for as long as it has power, which is how an IPS panel acquires a
+faint permanent copy of it — and it burns the backlight all day for a screen
+nobody is looking at. After `SCREEN_SLEEP_MS` (60s) with nothing new on
+screen, `ui_task` blanks the framebuffer *and* drops the backlight; a press of
+either button repaints the resting card and turns the light back on.
+
+| Check | Expect |
+|---|---|
+| Leave it at rest for a minute | The screen goes fully dark, not dim, not a lit black rectangle |
+| Look at it in a dark room | No glow at all — the backlight is off, not just black pixels |
+| Press either button once | The resting card comes back, correct note count, no flash of the old card first |
+| That same press | Does **nothing else** — it does not enter browse mode |
+| Press again | *Now* it enters browse mode |
+| Hold a button rather than tapping | Wakes on the way down, under your thumb, not on release |
+| Send `export_secret` while dark | The confirm card appears, lit, and the hold works normally |
+| Let a prompt run its full 30s | The screen does **not** go dark part-way through it |
+| Browse to a note, wait it out | Back to the resting card at ~15s, dark at ~60s after that |
+| Unveil a QR, then walk away | QR clears at ~60s, resting card, then dark — the secret leaves the glass |
+| Wake after any of that | The resting card, never a note still selected from before |
+| Reconnect a host while dark | The port still works; nothing about the transport sleeps |
+
+Three of those rows are the ones worth being awkward about.
+
+**No flash of the old card.** `display_wake()` deliberately does not repaint —
+`ui_task` draws first and lights second, the same order both board files use
+during bring-up. Get that backwards and the owner sees the card from a minute
+ago for a frame. The framebuffer half is asserted in
+`test/native/test_screen_sleep.c`; whether a frame of it is *visible* is a
+question only glass answers.
+
+**The waking press is spent.** Woken on the raw level rather than on the tap a
+release produces, then consumed, so it never also reaches the browse gesture.
+On a device where a press starts browsing bearer secrets, waking the screen
+must not scroll to one.
+
+**A live prompt never goes dark.** Structural rather than a flag: `ui_task`
+only asks `screen_sleep_expired()` from its main loop, and while a
+confirmation is on screen that loop is inside `service_remote_confirm()` and
+is not running. The 60s sleep is longer than the 30s confirm window anyway,
+but nothing depends on that being true.
+
+**On the S3, expect this to misbehave until 7a is fixed.** The wake test is
+"is either button down", and that board's cancel button currently reads as
+permanently pressed — so it will blank at 60s and wake again on the very next
+tick, forever, one blink a minute. That is the open fault showing itself, not
+a second bug, and it is a rather good detector for it.
+
+> **Not yet bench-run.** The clock is unit-tested a tick at a time and the
+> light is asserted against `test/native/hostgfx`
+> (`test/native/test_screen_sleep.c`, 14 checks). Neither can tell you whether
+> the panel truly goes black or merely dims, whether a minute is the right
+> minute, or whether waking looks instant to a person. Both boards implement
+> `board_display_backlight()`; only the classic T-Display's backlight pin has
+> ever been exercised at all, and neither has been watched going out.
+
+## 22. The redesign, and the boot sequence — PARTIALLY BENCH-RUN
+
+Two changes with one cause. Every screen was a full field of a saturated
+primary with black or white text on it, chosen so a state would be
+unmistakable at arm's length — which it was. But a saturated field has no
+edges, so nothing on it could be framed, separated or emphasised: the whole
+screen read as one wash, and the colour was spent on the background before
+any of it could be spent on meaning. And the boot screen was three lines of
+grey on the same grey the device rests on, gone before anyone looked up.
+
+**Colour moved from the wallpaper into the structure.** Two kinds of screen
+now, split by what the screen is *for* rather than by which looked nicer:
+
+- **Cards** — browse, confirm, rest. Read up close, holding the device, with
+  detail to study. Warm near-black ground, warm off-white text, the state
+  colour as a header band across the top and as the progress bar along the
+  bottom. A second, dimmer ink weight for what is context rather than content
+  — unit, label, id.
+- **Fields** — approved, declined, no answer. Read at a glance from across a
+  room, carrying no detail at all. Still the full panel of colour, because
+  that is exactly what a field of colour is good at, with the card's own warm
+  dark as the ink.
+
+The colours came off the primaries at the same time: warm amber rather than
+sodium yellow, coral rather than fire engine, mint rather than laser green.
+Same six hues, same distance apart, less fluorescent.
+
+| Check | Expect |
+|---|---|
+| Any card, in daylight | the warm off-white is legible on the near-black; the dim weight is legible but visibly *quieter*, not merely darker |
+| Any card, across a room | the band alone tells you which state it is, without reading a word |
+| An outcome, across a room | still readable as a colour at the same distance the old full-bleed screens were |
+| Confirm card | the amber band carries the verb in the card's own dark; the amount is the biggest thing under it |
+| Browse card | violet band reading `NOTE 3/12`; the id on its own line, in the dim weight |
+| Holding to approve | the bar fills the full width of the bottom edge, in the state's colour, not white |
+| A seven-digit amount | the digits shrink; the id line survives, and nothing lands in the bar |
+
+**The boot sequence** is about two seconds where it used to be a blink:
+
+| Stage | Expect |
+|---|---|
+| 1 | A shutter: a full teal field opens from the centre outwards, settling into exactly the band-and-bar the cards use |
+| 2 | `LNURL` then `VAULT`, one character at a time, several times the size of the old single line |
+| 3 | The band becomes an identity strip — `v0.0.7  t-display` — and the middle clears |
+| 4 | `STORAGE`, `IDENTITY`, `LINK` appear one at a time as each actually comes up, the bar counting them off |
+| 5 | Held for about two thirds of a second, then the resting card |
+
+The checklist is not decoration and not padding. Each of those three could
+already fail on its own — storage unavailable, a key that could not be
+written down, a transport that did not start — and each used to fail into an
+identical dark rectangle unless a host happened to be attached to ask. A
+failed step draws `FAIL` in the full ink weight against a dimmed label, so the
+one line worth noticing is not the one that looks like the rest.
+
+**Forcing a failure is the row worth being awkward about.** The honest way to
+see the `FAIL` state is to break storage: erase the NVS partition and let
+`vault_nvs_boot()` fail, or flash a build with the storage init stubbed out.
+The preview renderer draws it without a board (`00d-boot-storage-failed`),
+which is a substitute for guessing, not for the bench.
+
+One real bug fell out of the layout work: `display_note_detail()` never
+counted the id line when deciding how large the amount could be, so on a card
+whose amount happened to take a large scale the id was silently dropped — on
+the one screen whose job is to say WHICH bearer note the next gesture
+discloses. The band shrinking the content area is what surfaced it. It was
+always wrong, and it is fixed here rather than separately, because separating
+it would mean landing a card layout that is known to drop that line.
+
+> **Bench record — 2026-08-25.** Classic T-Display, firmware
+> `0.0.7-4-g74452ce-dirty` — the redesign built from this branch before the
+> documentation commit, so identical firmware source to what is here. Flashed,
+> then reset deliberately so the boot sequence could be watched from the
+> start. Both were seen on glass and reported as looking right.
+>
+> That is a judgement on the whole, **not a pass on the rows above**, none of
+> which was checked off individually. In particular nobody has yet looked at a
+> card in daylight, forced the `FAIL` state, or put a seven-digit amount on
+> the glass to see whether the id line survives beside it. Those stay open.
+>
+> Everything else here still comes from the preview renderer and the pixel
+> assertions in `test/native/test_card_render.c`, which check the relationship
+> — a card wears its colour as a band, an outcome as a field — rather than any
+> literal value, so the palette can be retuned without rewriting them.
+
+## 23. The three note formats — PARTIALLY BENCH-RUN
+
+Found on the bench, not by reading: a note unveiled on the device and scanned
+with **Wallet of Satoshi** came back as *"that isn't an ln invoice"*.
+
+Nothing was broken. The QR held what it was built to hold — an `https://`
+claim link into a web wallet, this project's answer to issue #26, because a
+stock phone camera opens `https://` and does nothing at all with `lnurlw://`.
+A Lightning wallet's scanner wants an invoice or an LNURL, and an https URL is
+neither.
+
+But LUD-25 names two encodings for a bearer note, and the device shipped
+neither by default: "prefixed with the `lnurlw://` scheme (LUD-17) **or
+bech32-encoded as an ordinary LNURL**". The bech32 form — `LNURL1…`, what
+every LNURL wallet has understood for years — was not implemented at all. That
+is the spec's opening promise going unmet: "a `WALLET` that does not know about
+`LNURLcash` still sees a normal withdraw link and can cash it out to a BOLT-11
+invoice as usual."
+
+So there are three now, cycled with button 1 on the unveil screen, because
+which one a given wallet accepts is a question a person holding the device can
+answer in ten seconds and no amount of reading answers at all.
+
+| Check | Expect |
+|---|---|
+| Unveil a note | opens on `LNURL`; the strip under the code reads `LNURL   BTN1 NEXT` |
+| Press button 1 | `LNURLW`, then `LINK`, then back to `LNURL` — the code visibly changes each time |
+| Press button 2 | back to the browse card, as any tap used to do |
+| Scan `LNURL` with a stock wallet | the wallet reaches the mint — **bench-run, see below** |
+| Scan `LINK` with the phone's camera app | the claim page opens in a browser |
+| Scan `LNURLW` with an LNURL-native wallet | a withdraw prompt, where the wallet implements LUD-17 |
+| Cycle repeatedly for a minute | the code still clears at ~60s from the **chord**, not from the last press |
+| A note on a very long mint host | the code still renders; the caption may be squeezed out, and that is the right way round |
+
+**The window is the row worth being awkward about.** Cycling redraws the
+secret but does not touch the deadline, so a bearer secret cannot be held on
+screen indefinitely by tapping. Verifying that means unveiling, pressing
+button 1 every few seconds, and watching the clock — it must clear about sixty
+seconds after the chord regardless.
+
+**Scanning is enough; claiming is not required.** A wallet that recognises the
+format shows a withdraw prompt, which answers the question — backing out there
+leaves the note unspent. Note that redeeming through a wallet leaves the device
+still reading `CONFIRMED`, since nothing tells it: that needs a `mark_spent`.
+
+> **Bench record — 2026-08-25.** Classic T-Display. A note on `moneyer.dev/w`
+> unveiled, shown as `LNURL`, scanned with **Wallet of Satoshi**. WoS returned
+> the mint's own words: `Invalid or already spent k1.` — which is
+> `lnurl_mint/db.py`'s error, not the wallet's.
+>
+> **That is the row passing, not failing.** For WoS to say it, the entire
+> chain had to work: the code decoded, the bech32 parsed as an LNURL, the
+> LNURL resolved to `moneyer.dev/w`, and the wallet made a LUD-03
+> `withdrawRequest` GET carrying the `k1` that the mint answered. The same
+> device, minutes earlier, could get no further than "that isn't an ln
+> invoice" — which is exactly the difference this section exists to close.
+>
+> What it does **not** show is a successful claim, because the note was dead
+> before it was scanned (see below). `LNURLW` and `LINK` are still unrun, as
+> is the 60-second window row.
+>
+> **The device was holding a note the mint had already retired**, and had no
+> way to know. That is inherent, and LUD-25 says so in as many words: "The
+> signature proves the note *was issued*, it can never prove the note is
+> *still outstanding*. A spent note keeps its valid signature forever, and no
+> revocation is visible offline." Only a paired host can tell the vault, via
+> `mark_spent`. Worth knowing that the mint deliberately does not distinguish
+> "spent" from "never heard of it" — one message covers both, so the endpoint
+> cannot be used as an oracle to probe for live `k1`s. So this note is either
+> spent or was rotated away; from outside, those look identical on purpose.
+>
+> Everything else here still rests on the encoder being checked against
+> BIP-173's own vectors and against strings from an independent implementation
+> of the spec, round-tripped back through a decoder written the same way
+> (`test/native/test_bech32.c`) — so the LNURL is known to be a *valid* LNURL
+> quite apart from any wallet's opinion of it.
+
+## 24. Forgetting spent notes — BENCH-RUN
+
+`delete` takes one id, and every gated command costs a physical two-second
+hold. So clearing a few dozen spent notes meant a few dozen deliberate holds,
+which is housekeeping nobody does — and the bench device duly reached 39 notes
+of which 25 were already spent, at which point `list_notes` had to be asked
+for smaller pages to answer at all.
+
+`prune_spent` is the same removal done once. It takes no parameters, cannot
+touch a `CONFIRMED` or `PENDING` note, and puts the **count** on the card
+where an amount would go.
+
+| Check | Expect |
+|---|---|
+| `{"cmd":"prune_spent"}` with spent notes present | a card reading `PRUNE SPENT` over the count and `notes` |
+| The count on the card | matches `list_notes`' own tally of `spent` — not the total |
+| Hold to approve | `{"ok":true,"removed":N,"remaining":M}`, and `M` is what `list_notes` then reports |
+| Every `CONFIRMED` note afterwards | still there, with its own amount, label and host |
+| Every `PENDING` note afterwards | still there |
+| Cancel with button 2 | `user_declined`, and **nothing** removed |
+| Let it time out | nothing removed |
+| Run it again immediately | `{"ok":true,"removed":0}` and **no card at all** |
+| Power-cycle afterwards | the notes are still gone; the index does not bring them back |
+| One note, singular | the card reads `note`, not `notes` |
+
+Two rows carry the weight.
+
+**No card on a second run.** Approving a no-op is how somebody learns to
+approve without reading, on a device where the next prompt hands over a bearer
+secret. The command answers `ok` with `removed: 0` and never reaches the
+screen.
+
+**Power-cycle afterwards.** The sweep rewrites the persisted index once for
+the whole pass rather than once per note — one chance to be interrupted
+instead of N — so the only way to know the removal actually stuck is to pull
+the power and count again. A sweep that lived only in RAM would look identical
+until the next boot.
+
+> **Bench record — 2026-08-25.** Classic T-Display, firmware
+> `0.0.7-8-g5f3462d`, holding **39 notes — 25 spent, 14 confirmed, 0 pending**.
+> Three runs, one per outcome:
+>
+> | Run | Answer | Notes after |
+> |---|---|---|
+> | Left unanswered | `{"ok":false,"error":"timeout"}` after 30.2s | 39 |
+> | Cancel button | `{"ok":false,"error":"user_declined"}` after 6.6s | 39 |
+> | Confirm button held | `{"ok":true,"removed":25,"remaining":14}` after 5.0s | 14 |
+>
+> On the approved run: every spent note gone, every live note present, and
+> every survivor carrying its own amount, label, host and state unchanged —
+> compared id by id against a census taken before the sweep, not by counting.
+>
+> **The removal stuck across a power cycle.** The board was reset and
+> re-censused: 14 notes, the same 14. That is the row the host tests
+> structurally cannot answer, and the one that would have caught a sweep
+> living only in RAM.
+>
+> **A second sweep raised no card.** With nothing to do it answered
+> `{"ok":true,"removed":0,"remaining":14}` in **0.11 seconds** — far inside
+> any confirm window, which is how a wire-only test can tell "did not prompt"
+> from "prompted and was approved fast".
+>
+> Two rows are still unrun, both cosmetic. Nobody has read the card itself, so
+> the claim that it says `PRUNE SPENT` over the count over `notes` still rests
+> on the preview renderer; and the singular `note` case needs a vault with
+> exactly one spent note in it. The PENDING-survives row was not exercised
+> either — this device had no PENDING notes — and rests on
+> `test/native/test_prune.c`.
+>
+> **A finding for anyone reading this expecting a tidier device.** The sweep
+> worked and 14 notes remained, of which 13 were dead test notes on
+> `example.com` and `127.0.0.1:8111` — worthless, unspendable, and `CONFIRMED`.
+> Nothing here can tell those from a real note: a `CONFIRMED` note is money by
+> the vault's own reckoning, whatever host it names. Clearing them means
+> `mark_spent` on each (one hold apiece) or `wipe` (one hold, everything). That
+> is not a gap in this command; a bulk removal of `CONFIRMED` notes is a way to
+> destroy money in one gesture, which is what `wipe` already is, behind a
+> stronger gate.

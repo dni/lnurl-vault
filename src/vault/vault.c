@@ -491,6 +491,67 @@ vault_err_t vault_delete(const char *id) {
     return remove_at((size_t)idx) ? VAULT_OK : VAULT_ERR_STORAGE_FULL;
 }
 
+size_t vault_count_spent(void) {
+    size_t n = 0;
+    for (size_t i = 0; i < g_note_count; i++) {
+        if (g_notes[i].state == NOTE_STATE_SPENT) {
+            n++;
+        }
+    }
+    return n;
+}
+
+vault_err_t vault_prune_spent(size_t *out_removed) {
+    if (out_removed) {
+        *out_removed = 0;
+    }
+    /* Refuse while the persisted index could not be read. We know notes may
+     * exist but not which ones, so "every SPENT note" is a set this vault
+     * cannot currently enumerate -- and rewriting the index from a list we
+     * know to be incomplete is how the rest of it would be lost. Same reason
+     * persist_index() refuses on its own. */
+    if (!g_index_known) {
+        return VAULT_ERR_STORAGE_FULL;
+    }
+
+    size_t write = 0;
+    size_t removed = 0;
+    bool blobs_ok = true;
+    for (size_t read = 0; read < g_note_count; read++) {
+        /* The ONLY state this removes. Written as an explicit equality rather
+         * than as "not CONFIRMED and not PENDING" so that a state added later
+         * is kept by default: a new kind of note this function has never
+         * heard of must survive it, not be swept up by it. */
+        if (g_notes[read].state == NOTE_STATE_SPENT) {
+            char id[VAULT_ID_BUF];
+            memcpy(id, g_notes[read].id, VAULT_ID_BUF);
+            if (g_storage && g_storage->delete_note) {
+                if (!g_storage->delete_note(id, g_storage->ctx)) {
+                    blobs_ok = false;
+                }
+            }
+            removed++;
+            continue;
+        }
+        if (write != read) {
+            g_notes[write] = g_notes[read];
+        }
+        write++;
+    }
+    g_note_count = write;
+    if (out_removed) {
+        *out_removed = removed;
+    }
+    if (removed == 0) {
+        return VAULT_OK; /* nothing moved, so nothing to persist */
+    }
+    /* Once, at the end. The index must stop naming every one of them, and a
+     * single rewrite is also a single chance to be interrupted rather than N.
+     * Written even if a blob delete failed: the notes are already gone from
+     * RAM, so an index that still names them is the worse of the two wrongs. */
+    return (persist_index() && blobs_ok) ? VAULT_OK : VAULT_ERR_STORAGE_FULL;
+}
+
 size_t vault_list(note_meta_t *out, size_t max) {
     size_t n = g_note_count < max ? g_note_count : max;
     for (size_t i = 0; i < n; i++) {
