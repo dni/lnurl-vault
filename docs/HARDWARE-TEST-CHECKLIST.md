@@ -371,9 +371,31 @@ The device must **never** erase to recover. On a full partition it reports
 > wrong phrase refused, correct phrase prompted then timed out. Note count
 > unchanged at 13 throughout. Via `bench.py`.
 >
-> **Granting a wipe: NOT YET BENCH-RUN**, deliberately — kept out of the
-> automated bench so no test run is one press from erasing a device. Also
-> **not bench-run**: reaching a genuinely full NVS partition to see
+> **Granting a wipe — bench-run 2026-08-25.** Classic T-Display holding 14
+> notes, all of them known-worthless test notes, erased at the owner's
+> explicit request. Run from a standalone script, **not** from `bench.py`:
+> the rule that granting a wipe stays out of the automated suite stands, and
+> is the reason this needed writing on purpose rather than just running.
+>
+> | Attempt | Answer | Notes after |
+> |---|---|---|
+> | Left unanswered | `{"ok":false,"error":"timeout"}` after 30.3s | 14 |
+> | `BOOT` held | `{"ok":true,"wiped":true}` after 7.3s | 0 |
+>
+> Afterwards: `note_count` 0 with `storage` still `ok` — an erased vault, not
+> a broken one. Power-cycled and re-read: still 0, so the erase stuck, and the
+> device still answered every command.
+>
+> **The device identity changed, which had never been observed before.**
+> `b8992dcf…7ea28e` before, `3d7ee0eb…1d87de` after. `docs/PROTOCOL.md`'s
+> `identify` section has always claimed this — "`wipe` destroys it along with
+> everything else, so a wiped vault is deliberately a *different* vault to any
+> client that had pinned it" — and `vault_nvs_wipe()` erases the whole NVS
+> partition, which is where the seed lives. True, and now checked rather than
+> reasoned. Any host that had pinned the old key will warn about a swapped
+> vault, which is the warning working.
+>
+> Still **not bench-run**: reaching a genuinely full NVS partition to see
 > `storage: "full"` in the wild. `list_notes` returning
 > `response_too_large` at around 30 notes *was* reproduced, which is issue #7
 > and the nearest thing to it.
