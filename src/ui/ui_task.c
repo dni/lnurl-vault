@@ -305,12 +305,27 @@ static void wipe(char *buf, size_t len) {
     }
 }
 
-/* Exports the selected note's secret and shows it as a QR. Resolves by the id
- * captured at selection, NOT browse position: a concurrent remote delete
- * compacts the array (vault.c's remove_at), so the index can point at a
- * different note by unveil time. Looking up by id discloses exactly the
- * selected note or nothing. Secret and URL are wiped once no longer needed. */
-static bool unveil(const char *browse_id) {
+/* Room for the longest form a note takes. The bech32 LNURL is the big one --
+ * about 177 characters for an ordinary mint, against the claim link's 138 --
+ * and note_url_build_as() refuses rather than truncates, so undersizing this
+ * shows up as a format that simply will not display. */
+#define UNVEIL_URL_BUF 320
+
+/* What the strip under the code says. The name of the form on screen, and
+ * that there is another one behind button 1 -- without which the cycling is
+ * a feature nobody discovers. Button 2 still dismisses, as any tap used to;
+ * it is not on the strip because the two together do not fit at a size worth
+ * reading, and leaving is the thing people already know how to do. */
+#define QR_CAPTION_BUF 32
+
+/* Exports the selected note's secret and shows it as a QR, in `format`.
+ *
+ * Resolves by the id captured at selection, NOT browse position: a concurrent
+ * remote delete compacts the array (vault.c's remove_at), so the index can
+ * point at a different note by unveil time. Looking up by id discloses exactly
+ * the selected note or nothing. Secret and URL are wiped once no longer
+ * needed. */
+static bool unveil(const char *browse_id, note_url_format_t format) {
     if (!browse_id || !browse_id[0]) {
         return false;
     }
@@ -329,20 +344,45 @@ static bool unveil(const char *browse_id) {
         return false;
     }
 
-    char url[256];
-    bool built = note_url_build_as(LNURLVAULT_QR_FORMAT, NULL, meta.host, k1, meta.amount_msat,
-                                    url, sizeof(url));
+    char url[UNVEIL_URL_BUF];
+    bool built = note_url_build_as(format, NULL, meta.host, k1, meta.amount_msat, url,
+                                    sizeof(url));
     wipe(k1, sizeof(k1));
     if (!built) {
         return false;
     }
 
-    bool shown = qr_display_show(url);
+    char caption[QR_CAPTION_BUF];
+    snprintf(caption, sizeof(caption), "%s   BTN1 NEXT", note_url_format_name(format));
+
+    bool shown = qr_display_show(url, caption);
     wipe(url, sizeof(url));
     if (shown) {
         screen_awake();
     }
     return shown;
+}
+
+/* Shows the note in the next form that will actually render.
+ *
+ * Tries each in turn rather than only the next one: a mint host long enough
+ * to push the bech32 form past what a QR version here can hold would
+ * otherwise make button 1 look dead on that note, on that form, and nowhere
+ * else -- which is the kind of fault nobody reproduces. Returns false only if
+ * NONE of them renders, which is the same condition the chord already treats
+ * as a failed unveil.
+ *
+ * `*format` is left on whatever ended up on screen. */
+static bool unveil_next_format(const char *browse_id, note_url_format_t *format) {
+    for (int step = 1; step <= NOTE_URL_FORMAT_COUNT; step++) {
+        const note_url_format_t next =
+            (note_url_format_t)(((int)*format + step) % NOTE_URL_FORMAT_COUNT);
+        if (unveil(browse_id, next)) {
+            *format = next;
+            return true;
+        }
+    }
+    return false;
 }
 
 /* Why the watchdog watches THIS task and not the transports.
@@ -511,6 +551,10 @@ static void ui_task_fn(void *arg) {
     int browse_index = -1;
     char browse_id[VAULT_ID_BUF] = {0}; /* identity of the selected note, for unveil() */
     int64_t browse_last_activity_us = 0;
+    /* Which encoding the unveil screen is showing. Reset to the build default
+     * on every fresh chord rather than carried between notes: the last note
+     * you handed over says nothing about which wallet the next person has. */
+    note_url_format_t qr_format = LNURLVAULT_QR_FORMAT;
 
     size_t idle_shown = show_idle();
     int64_t idle_checked_us = esp_timer_get_time();
@@ -593,7 +637,8 @@ static void ui_task_fn(void *arg) {
 
             case UI_BROWSE:
                 if (ev == BTN_EVENT_BOTH_CHORD) {
-                    if (unveil(browse_id)) {
+                    qr_format = LNURLVAULT_QR_FORMAT;
+                    if (unveil(browse_id, qr_format)) {
                         mode = UI_QR_SHOWN;
                     } else {
                         /* Note gone, export refused, or a URL too long for a
@@ -622,7 +667,32 @@ static void ui_task_fn(void *arg) {
                 break;
 
             case UI_QR_SHOWN:
-                if (ev == BTN_EVENT_1_TAP || ev == BTN_EVENT_2_TAP || ev == BTN_EVENT_BOTH_CHORD) {
+                /* Button 1 cycles the encoding; button 2 leaves. It used to be
+                 * that any tap left, which was fine when there was one form to
+                 * show and nothing to choose between.
+                 *
+                 * Three forms because no single one works everywhere: LUD-25
+                 * names lnurlw:// and bech32 LNURL, and neither of those opens
+                 * on a stock phone camera, which is what the claim link is
+                 * for. Which one a given wallet accepts is a question the
+                 * person holding the device can now answer by pressing a
+                 * button, instead of by rebuilding the firmware.
+                 *
+                 * Note what is deliberately NOT here: cycling does not touch
+                 * browse_last_activity_us. The secret leaves the screen at a
+                 * fixed deadline from the chord that unveiled it, however many
+                 * times it is redrawn, so this cannot become a way to hold a
+                 * bearer secret up indefinitely by tapping. Another chord is
+                 * one gesture away if the window runs out. */
+                if (ev == BTN_EVENT_1_TAP) {
+                    if (!unveil_next_format(browse_id, &qr_format)) {
+                        display_message(DISPLAY_STATE_DECLINED, "FAILED", "NOT SHOWN", NULL);
+                        vTaskDelay(pdMS_TO_TICKS(900));
+                        mode = UI_BROWSE;
+                        browse_last_activity_us = esp_timer_get_time();
+                        show_browse_note(browse_index, confirmed_position(browse_index));
+                    }
+                } else if (ev == BTN_EVENT_2_TAP || ev == BTN_EVENT_BOTH_CHORD) {
                     mode = UI_BROWSE;
                     browse_last_activity_us = esp_timer_get_time();
                     show_browse_note(browse_index, confirmed_position(browse_index));

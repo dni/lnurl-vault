@@ -14,6 +14,7 @@ void test_secret_leak_run(void);
 void test_response_bounds_run(void);
 void test_button_fsm_run(void);
 void test_note_url_run(void);
+void test_bech32_run(void);
 void test_ble_frame_run(void);
 void test_note_display_run(void);
 void test_card_render_run(void);
@@ -42,6 +43,7 @@ int main(void) {
     test_response_bounds_run();
     test_button_fsm_run();
     test_note_url_run();
+    test_bech32_run();
     test_ble_frame_run();
     test_note_display_run();
     test_card_render_run();

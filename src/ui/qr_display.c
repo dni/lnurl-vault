@@ -79,6 +79,7 @@
 #include "esp_lcd_panel_ops.h"
 #include <string.h>
 
+#include "font5x7.h"
 #include "qr_capacity.h"
 #include "qrcode.h"
 
@@ -90,7 +91,7 @@
  * rather than merely drawing badly. */
 static uint8_t g_qr_buf[1400];
 
-bool qr_display_show(const char *text) {
+bool qr_display_show(const char *text, const char *caption) {
     esp_lcd_panel_handle_t panel = display_panel_handle();
     if (!display_ready() || !panel || !text || !text[0]) {
         return false;
@@ -163,6 +164,14 @@ bool qr_display_show(const char *text) {
     int x0 = 0, y0 = 0;
     qr_origin(qrcode.size, scale, screen_w, screen_h, &x0, &y0);
 
+    /* With a caption, stop spending the spare height on centring and give it
+     * all to one strip under the code. The square keeps its size and its
+     * quiet zone -- only where it sits changes. */
+    const int caption_h = (caption && caption[0]) ? (screen_h - qr_px) : 0;
+    if (caption_h > 0) {
+        y0 = 0;
+    }
+
     for (int py = 0; py < qr_px; py++) {
         /* Quiet zone is part of the square, so module coordinates are offset
          * by it. Previously module (0,0) was drawn at the square's own
@@ -183,6 +192,33 @@ bool qr_display_show(const char *text) {
      * glitch on a device whose whole job here is to be trusted at a glance. */
     display_fill_rect(0, 0, screen_w, screen_h, QR_WHITE);
     esp_lcd_panel_draw_bitmap(panel, x0, y0, x0 + qr_px, y0 + qr_px, buf);
+
+    /* Black on the code's own white, so the strip reads as part of the same
+     * object rather than as a bar stuck under it. Largest scale the strip
+     * holds, which on the narrow panel is smaller than a card's readable
+     * minimum -- deliberately: this is a label on something you are already
+     * holding up to a camera, not a figure anyone decides money on. */
+    if (caption_h > 0) {
+        int cscale = caption_h / FONT5X7_HEIGHT;
+        if (cscale > FONT5X7_MIN_READABLE_SCALE) {
+            cscale = FONT5X7_MIN_READABLE_SCALE;
+        }
+        while (cscale > 1 && font5x7_text_width(caption, cscale) > screen_w) {
+            cscale--;
+        }
+        if (cscale >= 1) {
+            const int tw = font5x7_text_width(caption, cscale);
+            const int th = FONT5X7_HEIGHT * cscale;
+            int cx = (screen_w - tw) / 2;
+            if (cx < 0) {
+                cx = 0;
+            }
+            const int cy = qr_px + (caption_h - th) / 2;
+            if (cy >= qr_px && cy + th <= screen_h) {
+                display_text(cx, cy, caption, cscale, QR_BLACK, QR_WHITE);
+            }
+        }
+    }
 
     held = buf;
     return true;

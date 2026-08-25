@@ -41,6 +41,7 @@ SRC = ../../src/vault/sha256.c \
       ../../src/proto/button_fsm.c \
       ../../src/proto/screen_sleep.c \
       ../../src/proto/note_url.c \
+      ../../src/proto/bech32.c \
       ../../src/proto/ble_frame.c \
       ../../src/proto/note_display.c \
       ../../src/ui/font5x7.c \
@@ -64,6 +65,7 @@ SRC = ../../src/vault/sha256.c \
       test_response_bounds.c \
       test_button_fsm.c \
       test_note_url.c \
+      test_bech32.c \
       test_ble_frame.c \
       test_note_display.c \
       test_card_render.c \

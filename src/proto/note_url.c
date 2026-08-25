@@ -1,5 +1,7 @@
 #include "note_url.h"
 
+#include "bech32.h"
+
 #include <stdio.h>
 
 bool note_url_build(const char *host, const char *k1_hex, uint64_t amount_msat, char *out,
@@ -34,10 +36,56 @@ bool note_url_build(const char *host, const char *k1_hex, uint64_t amount_msat, 
     return true;
 }
 
+const char *note_url_format_name(note_url_format_t format) {
+    switch (format) {
+        case NOTE_URL_LUD17:
+            return "LNURLW";
+        case NOTE_URL_CLAIM:
+            return "LINK";
+        case NOTE_URL_BECH32:
+            return "LNURL";
+        default:
+            return "?";
+    }
+}
+
+/* The plain https withdraw URL LUD-25 bech32-encodes: the same string the
+ * lnurlw:// form carries, under the scheme an LNURL actually decodes to.
+ * Built into a local buffer and handed straight to bech32, so the URL itself
+ * never reaches the caller -- what they asked for is the note, and the note
+ * is the LNURL1 string. */
+#define BECH32_URL_MAX 232
+
+static bool build_bech32(const char *host, const char *k1_hex, uint64_t amount_msat, char *out,
+                          size_t outcap) {
+    char url[BECH32_URL_MAX];
+    const int written =
+        snprintf(url, sizeof(url), "https://%s?k1=%s&amount=%llu", host, k1_hex,
+                 (unsigned long long)amount_msat);
+    if (written < 0 || (size_t)written >= sizeof(url)) {
+        return false;
+    }
+    return bech32_encode_upper("lnurl", (const uint8_t *)url, (size_t)written, out, outcap);
+}
+
 bool note_url_build_as(note_url_format_t format, const char *claim_base, const char *host,
                         const char *k1_hex, uint64_t amount_msat, char *out, size_t outcap) {
     if (format == NOTE_URL_LUD17) {
         return note_url_build(host, k1_hex, amount_msat, out, outcap);
+    }
+    if (format == NOTE_URL_BECH32) {
+        if (!out || outcap == 0) {
+            return false;
+        }
+        out[0] = '\0';
+        if (!host || !host[0] || !k1_hex || !k1_hex[0]) {
+            return false;
+        }
+        if (!build_bech32(host, k1_hex, amount_msat, out, outcap)) {
+            out[0] = '\0';
+            return false;
+        }
+        return true;
     }
     if (!out || outcap == 0) {
         return false;

@@ -36,10 +36,40 @@ bool note_url_build(const char *host, const char *k1_hex, uint64_t amount_msat, 
  * -- the wallet is a hash-router SPA, so this is also just its normal route
  * shape. Putting k1 in a query string would hand every note to the first
  * access log it touched. */
+/* NOTE_URL_BECH32 is the other encoding LUD-25 names: "prefixed with the
+ * lnurlw:// scheme (LUD-17) or bech32-encoded as an ordinary LNURL,
+ * <withdraw LNURL>?k1=<P or secret>&amount=<msat> *is* the bearer note".
+ *
+ * It is the one an ordinary wallet's scanner actually takes. LNURL1... has
+ * been the LNURL wire form for years; lnurlw:// is newer and support for it
+ * is patchy, and the claim link is an https URL, which a wallet expecting an
+ * invoice rejects outright -- observed, with Wallet of Satoshi, which reports
+ * it as "not an ln invoice". That is the spec's own backward-compatibility
+ * promise going unmet: "a WALLET that does not know about LNURLcash still
+ * sees a normal withdraw link and can cash it out to a BOLT-11 invoice as
+ * usual".
+ *
+ * It costs nothing to carry. The string is longer -- about 177 characters
+ * against the claim link's 138 -- but it is uppercase bech32, which the QR
+ * encoder packs in alphanumeric mode at 5.5 bits a character instead of byte
+ * mode's 8, so the code comes out about the same size.
+ *
+ * All three are reachable on the unveil screen, one button press apart (see
+ * src/ui/ui_task.c). None of them is right for every wallet, and which one a
+ * given wallet takes is a question the bench answers in ten seconds and no
+ * amount of reading answers at all. */
 typedef enum {
     NOTE_URL_LUD17,
     NOTE_URL_CLAIM,
+    NOTE_URL_BECH32,
 } note_url_format_t;
+
+/* How many formats there are, for anything cycling them. */
+#define NOTE_URL_FORMAT_COUNT 3
+
+/* Short, screen-sized name for a format -- "LNURL", "LINK", "LNURLW" -- so
+ * the unveil screen can say which one is showing. Never NULL. */
+const char *note_url_format_name(note_url_format_t format);
 
 /* Base of the claim link, up to and including the fragment marker. Override
  * at build time to point at a different wallet. */
@@ -47,9 +77,12 @@ typedef enum {
 #define LNURLVAULT_CLAIM_BASE "https://wallet.lnurlcash.com/#/claim"
 #endif
 
-/* Which format the unveil screen uses. Claim by default: see above. */
+/* Which format the unveil screen STARTS on. Bech32 by default since the
+ * bench found that a stock wallet is the common case and the claim link
+ * cannot serve it; the other two are one button press away on the unveil
+ * screen, so this is a starting point rather than a decision. */
 #ifndef LNURLVAULT_QR_FORMAT
-#define LNURLVAULT_QR_FORMAT NOTE_URL_CLAIM
+#define LNURLVAULT_QR_FORMAT NOTE_URL_BECH32
 #endif
 
 /* `claim_base` may be NULL for LNURLVAULT_CLAIM_BASE. Same failure contract
