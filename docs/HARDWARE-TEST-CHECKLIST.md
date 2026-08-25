@@ -811,7 +811,7 @@ a second bug, and it is a rather good detector for it.
 > `board_display_backlight()`; only the classic T-Display's backlight pin has
 > ever been exercised at all, and neither has been watched going out.
 
-## 22. The redesign, and the boot sequence — NOT YET BENCH-RUN
+## 22. The redesign, and the boot sequence — PARTIALLY BENCH-RUN
 
 Two changes with one cause. Every screen was a full field of a saturated
 primary with black or white text on it, chosen so a state would be
@@ -879,11 +879,18 @@ discloses. The band shrinking the content area is what surfaced it. It was
 always wrong, and it is fixed here rather than separately, because separating
 it would mean landing a card layout that is known to drop that line.
 
-> **Not yet bench-run.** Every row above comes from the preview renderer and
-> the pixel assertions in `test/native/test_card_render.c`, which now check
-> the relationship — a card wears its colour as a band, an outcome as a field
-> — rather than any literal value, so the palette can be retuned without
-> rewriting them. A framebuffer cannot tell you whether `#EAE6DC` on
-> `#14120F` is legible in daylight, whether the boot animation reads as
-> deliberate or as slow, or whether two seconds is too long to wait for a
-> device you just plugged in.
+> **Bench record — 2026-08-25.** Classic T-Display, firmware
+> `0.0.7-4-g74452ce-dirty` — the redesign built from this branch before the
+> documentation commit, so identical firmware source to what is here. Flashed,
+> then reset deliberately so the boot sequence could be watched from the
+> start. Both were seen on glass and reported as looking right.
+>
+> That is a judgement on the whole, **not a pass on the rows above**, none of
+> which was checked off individually. In particular nobody has yet looked at a
+> card in daylight, forced the `FAIL` state, or put a seven-digit amount on
+> the glass to see whether the id line survives beside it. Those stay open.
+>
+> Everything else here still comes from the preview renderer and the pixel
+> assertions in `test/native/test_card_render.c`, which check the relationship
+> — a card wears its colour as a band, an outcome as a field — rather than any
+> literal value, so the palette can be retuned without rewriting them.
