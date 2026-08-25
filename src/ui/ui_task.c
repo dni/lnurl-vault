@@ -223,6 +223,11 @@ static void show_browse_note(int browse_index, int position) {
     screen_awake();
 }
 
+static void show_browse_note(int browse_index, int position) {
+    draw_browse_note(browse_index, position);
+    screen_awake();
+}
+
 /* PENDING notes have no settled value and cannot be browsed or exported, so
  * they are not what the resting screen counts. */
 static size_t count_confirmed_locked(void) {
