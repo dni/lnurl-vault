@@ -297,4 +297,14 @@ bool board_button_2_pressed(void) {
     return gpio_get_level(PIN_BUTTON_2) == 0;
 }
 
+/* UNKNOWN, deliberately. This file already says the rotation here is
+ * unverified, and which side a button lands on is downstream of that -- so a
+ * side claimed from the pin numbers would be a guess wearing a fact's
+ * clothing, and pointing an owner at the wrong button is worse than not
+ * pointing at all. The card falls back to naming BTN1 until someone raises a
+ * confirm card on this board and presses the left one. */
+board_confirm_side_t board_confirm_side(void) {
+    return BOARD_CONFIRM_SIDE_UNKNOWN;
+}
+
 #endif /* LNURLVAULT_BOARD_T_DISPLAY_S3 */

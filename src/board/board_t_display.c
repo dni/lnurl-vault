@@ -243,4 +243,14 @@ bool board_button_2_pressed(void) {
     return gpio_get_level(PIN_BUTTON_2) == 0;
 }
 
+/* Bench-verified on this board, 2026-08-25, by raising a real confirm card and
+ * pressing the left button: it came back user_declined, so the left one is
+ * BUTTON 2 and confirm is on the right. Not derivable from the pin numbers --
+ * where a button sits relative to the SCREEN depends on the rotation and
+ * mirroring this file establishes, which were themselves settled empirically
+ * (see the orientation notes above). */
+board_confirm_side_t board_confirm_side(void) {
+    return BOARD_CONFIRM_SIDE_RIGHT;
+}
+
 #endif /* LNURLVAULT_BOARD_T_DISPLAY */
