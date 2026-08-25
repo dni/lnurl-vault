@@ -371,9 +371,31 @@ The device must **never** erase to recover. On a full partition it reports
 > wrong phrase refused, correct phrase prompted then timed out. Note count
 > unchanged at 13 throughout. Via `bench.py`.
 >
-> **Granting a wipe: NOT YET BENCH-RUN**, deliberately — kept out of the
-> automated bench so no test run is one press from erasing a device. Also
-> **not bench-run**: reaching a genuinely full NVS partition to see
+> **Granting a wipe — bench-run 2026-08-25.** Classic T-Display holding 14
+> notes, all of them known-worthless test notes, erased at the owner's
+> explicit request. Run from a standalone script, **not** from `bench.py`:
+> the rule that granting a wipe stays out of the automated suite stands, and
+> is the reason this needed writing on purpose rather than just running.
+>
+> | Attempt | Answer | Notes after |
+> |---|---|---|
+> | Left unanswered | `{"ok":false,"error":"timeout"}` after 30.3s | 14 |
+> | `BOOT` held | `{"ok":true,"wiped":true}` after 7.3s | 0 |
+>
+> Afterwards: `note_count` 0 with `storage` still `ok` — an erased vault, not
+> a broken one. Power-cycled and re-read: still 0, so the erase stuck, and the
+> device still answered every command.
+>
+> **The device identity changed, which had never been observed before.**
+> `b8992dcf…7ea28e` before, `3d7ee0eb…1d87de` after. `docs/PROTOCOL.md`'s
+> `identify` section has always claimed this — "`wipe` destroys it along with
+> everything else, so a wiped vault is deliberately a *different* vault to any
+> client that had pinned it" — and `vault_nvs_wipe()` erases the whole NVS
+> partition, which is where the seed lives. True, and now checked rather than
+> reasoned. Any host that had pinned the old key will warn about a swapped
+> vault, which is the warning working.
+>
+> Still **not bench-run**: reaching a genuinely full NVS partition to see
 > `storage: "full"` in the wild. `list_notes` returning
 > `response_too_large` at around 30 notes *was* reproduced, which is issue #7
 > and the nearest thing to it.
@@ -538,6 +560,42 @@ known to work. Section 7a is why.
 >
 > On both mints the device's `list_notes` lineage agreed with the mint at
 > every step and nothing was left `PENDING`.
+
+> **Bench record — 2026-08-25, fw `0.0.7-5-g4870adc`.** Classic T-Display,
+> `/dev/cu.usbserial-5B310132921`, against `lnurl-mint` at current `main`
+> backed by `fake_cln.py`. **8 passed, 0 failed, 1 skipped** — `import_secret`,
+> **rotate after import**, **split**, **merge** (21000 msat out against 21000
+> in, value conserved), **rotate**, **melt**, nothing left `PENDING`.
+>
+> The `mint` row was skipped, and not by choice: `lnurl-mint`'s comment
+> feature now advertises LUD-21 `verify` **only** when the payRequest carried a
+> valid `comment` (`router.py`'s `get_pay_callback`). This harness mints over
+> `verify` with no comment, so it polls for a settlement it will never be told
+> about and reports "never settled". The mint is right — degrading visibly
+> rather than silently is the whole point of that change — and the harness is
+> what is out of date. The fix is to mint with comment protection, which
+> removes the polling entirely: a wallet that sends `comment = sha256(secret)`
+> already knows the k1 before it pays and never needs `verify` to learn a
+> preimage. Until then, drive this section with `--seed-note`.
+>
+> Two things this run found that a green suite would not have:
+>
+>  - `list_notes` at `limit: 20` now returns `response_too_large` on a device
+>    holding 33 notes. `h` joined the metadata in #107, ~70 bytes a note, and
+>    20 no longer fit one response. The device is right to refuse rather than
+>    truncate; this harness asked for 20, swallowed the refusal, and reported a
+>    note that was plainly there as "not on device". Fixed here by halving the
+>    limit on that error and raising instead of returning a short list. A fixed
+>    page size was never safe anyway — `label` and `host` are variable-length.
+>
+>  - Two runs were lost before this one: three approvals timed out, and a
+>    fourth came back `user_declined` from a press on button 2. That was the
+>    operator not knowing the gesture, **not** a missing hint -- `make
+>    preview` renders `HOLD BTN1 2s` on the 240x135 confirm card, with and
+>    without a label, so #105 landed that fix and it works. Recorded because
+>    the first instinct on three silent timeouts was to suspect the card, and
+>    the preview renderer answered it in seconds without touching the board.
+>    That is what it is for.
 >
 > The whole session cost far more approvals than it should have, for a reason
 > worth recording: the approval is a **two-second hold**, nobody driving it
