@@ -297,7 +297,7 @@ relevant file's own header comment as a starting point if it does.
 `src/vault/` and `src/proto/` (the note state machine, SHA-256, hex, base64,
 JSON reader/writer, command dispatcher, button gesture state machine, and
 `lnurlw://` URL builder) are pure portable C with no ESP-IDF dependency at
-all, and are additionally exercised by `test/native/` — **767/767
+all, and are additionally exercised by `test/native/` — **933/933
 assertions pass** — independent of the ESP32 build. This is the security-
 and protocol-critical logic, including the debounce/tap/chord logic gating
 every plaintext-secret disclosure and the OTA signature-verification/
@@ -676,6 +676,18 @@ step's `find` patterns are the first thing to check.
   miscount. The font is a hand-transcribed 5x7 bitmap; it renders and scans on
   hardware (see `docs/HARDWARE-TEST-CHECKLIST.md`), and moving to LVGL for
   richer text remains a possible future step.
+- **The rest of the screens now say something too.** An outcome is
+  `APPROVED` / `DECLINED` / `NO ANSWER` in words, naming what it was about,
+  rather than a flat rectangle. Boot says what the device is and which build.
+  At rest it says how many notes it holds and that a tap will show them —
+  deliberately not what they are worth. When a button was already down as the
+  prompt appeared the card says `LET GO FIRST`, since a held button answers
+  nothing until it has been seen released (`approval.h`).
+- **No countdown on the confirm prompt.** The window is 30 seconds and
+  nothing on screen shows it draining. There is no room for it on the 240x135
+  panel without taking a row from something that matters more, and the
+  `NO ANSWER` card covers the confusion that actually mattered — a prompt that
+  vanished with no explanation.
 - **The QR encoder is a required external dependency**, not included in
   this repo — see "Build & flash" above. Nothing in `src/ui/qr_display.c`
   will compile until it's vendored (confirmed both PlatformIO `lib_deps`
@@ -712,7 +724,7 @@ needs the system cJSON library — `pacman -S cjson` or
 cd test/native && make test
 ```
 
-This actually runs in this environment — 767 assertions across SHA-256
+This actually runs in this environment — 933 assertions across SHA-256
 known-answer vectors, JSON reader/writer round-trips (including escaping and
 the overflow-detection path), the full vault state machine (legal and
 illegal state transitions, split/merge parent lineage, the id-collision
@@ -729,7 +741,34 @@ all-zero placeholder key all fail closed), and the full `ota_begin`/
 "flash" (happy path, bad signature, declined/timed-out approval, a
 wrong-offset chunk that doesn't kill the session, no-active-session errors,
 an early finish, a corrupted transfer caught at the finish-time re-verify,
-and recovery via a fresh `ota_begin` after an abort).
+and recovery via a fresh `ota_begin` after an abort), and — since the
+screens became testable — what actually reaches the panel: that every line a
+confirm card promises is drawn on both real geometries, that nothing is drawn
+off the glass or into the progress bar's band, and that no line reaches the
+panel edge.
+
+**Screen previews** (no board, no PlatformIO):
+
+```sh
+cd test/native && make preview      # PNGs in test/native/preview/
+```
+
+Renders every card the firmware can draw — idle, browse, each confirm verb,
+the outcome states, and the awkward cases (a seven-figure amount, a label
+longer than the panel, a sub-sat note) — at both real panel geometries, as
+PNGs you can open.
+
+They are drawn by `src/ui/display.c` itself against a framebuffer, not by a
+second implementation that would drift from it: `test/native/hostgfx/`
+stands in for the four ESP-IDF pieces that file uses, so what comes out is
+what the glass gets, at the same width, height and font. `make test` uses the
+same harness to assert about pixels (`test_card_render.c`).
+
+This exists because every display fault this project has shipped was a layout
+fault, none was reachable from the build, and each was found by a person
+squinting at a board — one of them only from a photograph. It found a live
+regression on its first run; see
+[section 19](docs/HARDWARE-TEST-CHECKLIST.md) of the hardware checklist.
 
 **Hardware verification** (needs a flashed board):
 
@@ -748,8 +787,8 @@ and recovery via a fresh `ota_begin` after an abort).
    (including a message deliberately larger than one MTU, to exercise
    reassembly), and confirm the notified response reassembles correctly.
 4. Exercise on-device browsing with at least two `CONFIRMED` notes: tap to
-   enter browse mode (watch it blink out position 1), tap again (blinks
-   position 2), hold both buttons together (~200ms) to unveil — confirm a
+   enter browse mode (the card names the note and its position), tap again
+   for the next one, hold both buttons together (~200ms) to unveil — confirm a
    QR appears, and scan it with a stock phone camera: it should open the
    wallet with that note claimable (the payload is an https claim link by
    default — see `docs/PROTOCOL.md`'s "On-device note browsing", and issue

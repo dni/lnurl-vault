@@ -38,6 +38,12 @@ int display_height(void);
 
 void display_set_state(display_state_t state);
 
+/* Exposed so anything drawing onto a state's background, or checking what was
+ * drawn there, gets the same answer rather than a second copy of the mapping.
+ * The ink is not a constant -- see palette.h. */
+uint16_t display_state_color(display_state_t state);
+uint16_t display_state_ink(display_state_t state);
+
 /* Fills an axis-aligned rectangle. Out-of-bounds rectangles are dropped
  * rather than clipped: a caller computing a negative origin has a bug, and
  * silently drawing something slightly wrong on a device that shows bearer
@@ -54,28 +60,38 @@ void display_fill_rect(int x, int y, int w, int h, uint16_t color);
 #define DISPLAY_MAX_TEXT_SCALE FONT5X7_MAX_SCALE
 void display_text(int x, int y, const char *text, int scale, uint16_t fg, uint16_t bg);
 
-/* Draws a note's detail full-screen, on `state`'s background: says which
- * note, and for how much.
+/* Draws a note's detail full-screen on `state`'s background: which note, and
+ * for how much. Until this existed the screen was a flat colour, which makes
+ * the physical gate a formality rather than a control (issue #9).
  *
- * Until this existed the screen was a flat colour and nothing else, so the
- * owner was asked to physically approve handing over a bearer secret without
- * being told either -- which makes the physical gate a formality rather than
- * a control (issue #9). The amount is drawn largest because it is the field
- * where a mistake costs money.
+ * The amount arrives split (see note_display.h) and its digits get the whole
+ * width at the largest scale that fits, with the unit on the line below: the
+ * first version drew the lot at one scale and a person on real hardware could
+ * not read it.
  *
- * The amount arrives split (see note_display.h): the digits are drawn at the
- * largest scale the panel width allows, with the unit small beside them on the
- * same line. That is not decoration -- " sats" is five characters of a line
- * that has to fit in 240 pixels, and giving them back to the digits is the
- * difference between an amount being readable and merely being present. The
- * first version of this drew the whole string at one scale and a person on
- * real hardware could not read it.
+ * `action` is the verb, drawn first -- without it, disclosing one note and
+ * wiping every note presented identically. `hint` is the gesture, drawn last
+ * against the bar; the approval is a two-second HOLD (approval.h) and nothing
+ * on screen used to say so, so people tapped and concluded it was dead.
  *
- * Layout is derived from the panel at runtime and leaves the lower band free
- * for display_progress(). Any argument may be NULL, and that line is skipped.
- */
-void display_note_detail(display_state_t state, const char *amount_num,
-                          const char *amount_unit, const char *label, const char *id);
+ * Layout comes from the panel at runtime and leaves the lower band for
+ * display_progress(). Any argument may be NULL and that line is skipped; the
+ * amount is fitted to what the lines below leave, so adding one shrinks the
+ * digits rather than pushing a line off the bottom. */
+void display_note_detail(display_state_t state, const char *action, const char *amount_num,
+                          const char *amount_unit, const char *label, const char *id,
+                          const char *hint);
+
+/* A large title and up to two smaller lines, centred as a block on `state`'s
+ * colour: an outcome, the boot screen, or what the vault holds at rest. All
+ * of those were a flat colour, which means nothing to anyone who does not
+ * already know the scheme -- and a blank idle screen got pressed at, on a
+ * device where a press starts browsing bearer secrets.
+ *
+ * The title takes the largest scale that fits the width and the lines below.
+ * Any argument may be NULL and that line is skipped. */
+void display_message(display_state_t state, const char *title, const char *line1,
+                     const char *line2);
 
 /* Draws the approval hold as a filling bar, 0..1000 parts per thousand (see
  * approval.h). Idempotent and cheap enough to call every poll tick: it

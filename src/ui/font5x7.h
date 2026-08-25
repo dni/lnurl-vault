@@ -73,4 +73,23 @@ int font5x7_text_width(const char *text, int scale);
  * here. */
 int font5x7_fit_scale(const char *text, int avail_w, int max_scale);
 
+/* One constant, used both to reserve a line's space and to advance past it.
+ * Those disagreeing by one pixel put the fourth line at y=103 against a usable
+ * 102, so it was computed, reserved for and silently dropped. */
+#define FONT5X7_CARD_GAP 3
+
+/* Largest scale for the amount that still leaves room for `lines_below`
+ * readable-minimum lines under it, starting at `y`. 0 means draw no amount at
+ * all rather than an unreadable one.
+ *
+ * Which lines get reserved has been wrong in both directions: reserving for
+ * everything pinned the digits to 21px, which a person on hardware could not
+ * read; reserving for nothing let the unit/label line eat the gesture hint's
+ * row. Priority is the verb, legible digits, the unit and the gesture, then
+ * the rest -- so callers reserve two and let the id drop.
+ *
+ * Whether the result reaches the glass is test_card_render.c's job. */
+int font5x7_card_amount_scale(const char *amount_num, int avail_w, int usable_h,
+                              int y, int lines_below);
+
 #endif

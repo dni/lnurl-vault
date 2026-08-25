@@ -16,6 +16,10 @@ void vault_lock_acquire(void) {
     xSemaphoreTake(g_mutex, portMAX_DELAY);
 }
 
+bool vault_lock_try_acquire(void) {
+    return xSemaphoreTake(g_mutex, 0) == pdTRUE;
+}
+
 void vault_lock_release(void) {
     xSemaphoreGive(g_mutex);
 }

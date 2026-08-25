@@ -1,6 +1,8 @@
 #ifndef LNURLVAULT_VAULT_LOCK_H
 #define LNURLVAULT_VAULT_LOCK_H
 
+#include <stdbool.h>
+
 /* src/vault/vault.c is deliberately plain portable C with no synchronization
  * of its own — it's shared with the native test binary, which is single-
  * threaded. On firmware, vault_* functions are now called from more than
@@ -32,5 +34,11 @@
 void vault_lock_init(void);
 void vault_lock_acquire(void);
 void vault_lock_release(void);
+
+/* Takes the lock if it is free, false if not. For callers that would rather
+ * skip this pass than wait -- the idle screen's note count is advisory, and
+ * acquire() has no timeout, so polling it once a second would put the one
+ * task that must always make progress behind a lock it cannot give up on. */
+bool vault_lock_try_acquire(void);
 
 #endif
