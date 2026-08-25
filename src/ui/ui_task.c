@@ -25,6 +25,7 @@
 #include <string.h>
 
 #include "approval.h"
+#include "board.h"
 #include "note_display.h"
 #include "buttons.h"
 #include "button_fsm.h"
@@ -61,8 +62,54 @@ typedef struct {
 /* The gesture, said out loud on the card. approval.h makes approving a
  * two-second hold of button 1; nothing on screen used to mention either the
  * hold or the button, which left tapping -- and concluding the device was
- * dead -- as the obvious thing to try. */
-#define CONFIRM_HINT "HOLD BTN1 2s"
+ * dead -- as the obvious thing to try.
+ *
+ * Naming the button was not enough. The two buttons carry no labels a person
+ * can see, so "BTN1" only helps someone who already knows which one it is,
+ * and the natural reach is for the left -- which on the classic board is
+ * cancel. That cost two bench runs of section 17 with this hint on screen and
+ * correct throughout: three approvals timed out, and a fourth came back
+ * user_declined from a press on the wrong button.
+ *
+ * So say the side instead, where the board knows it (board_confirm_side).
+ * "RIGHT" needs no lookup and no prior knowledge, and it is the one fact the
+ * owner is actually missing while holding the thing. A board that has not had
+ * its side established on a bench keeps the old wording rather than guess:
+ * pointing someone at the wrong button is worse than making them work it out.
+ */
+#define CONFIRM_HINT_UNKNOWN_SIDE "HOLD BTN1 2s"
+#define CONFIRM_HINT_WITH_GUIDE "HOLD 2s"
+
+/* display.c cannot ask board.h -- the native tests compile it without any
+ * board file -- so the side is pushed down once, at startup, the same way
+ * display_set_state pushes the palette. */
+static void publish_confirm_side(void) {
+    switch (board_confirm_side()) {
+        case BOARD_CONFIRM_SIDE_LEFT:
+            display_set_confirm_side(DISPLAY_CONFIRM_SIDE_LEFT);
+            break;
+        case BOARD_CONFIRM_SIDE_RIGHT:
+            display_set_confirm_side(DISPLAY_CONFIRM_SIDE_RIGHT);
+            break;
+        case BOARD_CONFIRM_SIDE_UNKNOWN:
+        default:
+            display_set_confirm_side(DISPLAY_CONFIRM_SIDE_UNKNOWN);
+            break;
+    }
+}
+
+static const char *confirm_hint(void) {
+    switch (board_confirm_side()) {
+        case BOARD_CONFIRM_SIDE_LEFT:
+        case BOARD_CONFIRM_SIDE_RIGHT:
+            /* The card draws both buttons with the right one filled, so the
+             * words do not have to name a side as well. */
+            return CONFIRM_HINT_WITH_GUIDE;
+        case BOARD_CONFIRM_SIDE_UNKNOWN:
+        default:
+            return CONFIRM_HINT_UNKNOWN_SIDE;
+    }
+}
 
 /* While a button already down when the prompt appeared has not been seen
  * released -- nothing it does counts until then (approval.h), and the owner
@@ -452,7 +499,7 @@ static confirm_result_t service_remote_confirm(const remote_confirm_request_t *r
      * clears that, so drawing first would tell every owner to let go. */
     approval_state_t state = approval_poll(&ap, buttons_raw_1(), buttons_raw_2(), now);
     bool waiting = approval_waiting_for_release(&ap);
-    draw_confirm_card(req, waiting ? RELEASE_HINT : CONFIRM_HINT);
+    draw_confirm_card(req, waiting ? RELEASE_HINT : confirm_hint());
     display_progress(0);
 
     uint16_t drawn = 0;
@@ -465,7 +512,7 @@ static confirm_result_t service_remote_confirm(const remote_confirm_request_t *r
         const bool now_waiting = approval_waiting_for_release(&ap);
         if (state == APPROVAL_PENDING && now_waiting != waiting) {
             waiting = now_waiting;
-            draw_confirm_card(req, waiting ? RELEASE_HINT : CONFIRM_HINT);
+            draw_confirm_card(req, waiting ? RELEASE_HINT : confirm_hint());
             display_progress(drawn);
         }
 
@@ -734,6 +781,7 @@ void ui_task_init(void) {
     if (!g_request_q) {
         g_request_q = xQueueCreate(4, sizeof(remote_confirm_request_t));
     }
+    publish_confirm_side();
 }
 
 void ui_task_start(void) {

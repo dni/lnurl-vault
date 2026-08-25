@@ -142,4 +142,26 @@ void board_buttons_init(void);
 bool board_button_1_pressed(void);
 bool board_button_2_pressed(void);
 
+/* Which side of the screen the CONFIRM button is physically on, as the owner
+ * reads it.
+ *
+ * "BTN1" is the name the firmware uses and it is worth nothing to someone
+ * holding the device: the two buttons are unlabelled, and the natural reach
+ * is for the left one, which on the classic board is cancel. That is not
+ * hypothetical -- it cost two bench runs of section 17, three approvals
+ * timing out and a fourth coming back `user_declined`, with the hint on
+ * screen and correct the whole time.
+ *
+ * The value is per board because it depends on where the buttons sit AND on
+ * the rotation the panel is driven at, and those are decided in board files.
+ * It is a claim about physical hardware, so it belongs to the board that was
+ * put on a bench rather than to the UI. */
+typedef enum {
+    BOARD_CONFIRM_SIDE_UNKNOWN = 0,
+    BOARD_CONFIRM_SIDE_LEFT,
+    BOARD_CONFIRM_SIDE_RIGHT,
+} board_confirm_side_t;
+
+board_confirm_side_t board_confirm_side(void);
+
 #endif
