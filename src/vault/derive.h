@@ -27,17 +27,23 @@
  *
  * ---------------------------------------------------------------------------
  * EVERY LEVEL IS HARDENED, and that is a deliberate divergence from the
- * section as drafted, which hardens 139' and i' but not d1..d4. It is the
- * whole reason this module is ~200 lines of arithmetic rather than an
- * elliptic-curve port.
+ * section as drafted in TWO places: the draft hardens 139' and i' but not
+ * d1..d4, and its cashHashingKey is 139'/0 where this uses 139'/0'. The
+ * second one matters as much as the first -- it changes cashHashingKey,
+ * therefore d1..d4, therefore every secret, so a wallet following the draft
+ * and this firmware do not find each other's notes even once the d1..d4
+ * question is settled. It is also the whole reason this module is arithmetic
+ * rather than an elliptic-curve port.
  *
  * BIP-32's unhardened CKDpriv hashes serP(point(kpar)) -- the PARENT PUBLIC
  * KEY -- so computing one requires a secp256k1 point multiplication. This
- * firmware carries no EC code at all: it has SHA-256 (sha256.c) and, because
- * OTA signature checking already needs them, SHA-512 and HMAC-SHA512
- * (monocypher-ed25519.c). Hardened CKDpriv needs exactly those plus 256-bit
- * modular addition, which is what bn_add_mod_n below is. Unhardened levels
- * would put a full EC implementation into the reference vault's firmware.
+ * firmware carries NO secp256k1 (it does carry curve25519, in monocypher,
+ * for Ed25519 OTA signature checks -- different curve, nothing reusable
+ * here). What it has for this is SHA-256 (sha256.c) plus SHA-512 and
+ * HMAC-SHA512, which come linked in with monocypher-ed25519.c for those OTA
+ * checks. Hardened CKDpriv needs exactly those plus 256-bit modular
+ * addition, which is what bn_add_mod_n below is. Unhardened levels would put
+ * a secp256k1 implementation into the reference vault's firmware.
  *
  * Nothing is lost by hardening. Unhardened derivation buys one thing: deriving
  * child PUBLIC keys without the private key. A note secret has no public
