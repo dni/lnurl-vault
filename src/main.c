@@ -13,6 +13,7 @@
 
 #include "ble_gatt.h"
 #include "board.h"
+#include "serial_cdc.h"
 #include "buttons.h"
 #include "cmd_lock.h"
 #include "crash_crumb.h"
@@ -102,6 +103,30 @@ static bool capability_report(capability_report_t *out) {
     out->serial = true;
     out->ble = true;
     return true;
+}
+
+/* get_info's `drops`, for whichever link is asking -- see dispatcher.h's
+ * transport_drops_fn.
+ *
+ * Answers only for transports that actually count. serial_cdc.c is compiled
+ * on the S3 alone, and the classic board's UART transport has no drop paths
+ * of its own to report -- so on that board a serial client gets no field
+ * rather than three zeroes nothing ever measured. A client can tell "this
+ * link has lost nothing" from "this build cannot say" only if the second one
+ * stays silent. */
+static bool transport_drops(dispatch_source_t source, transport_drops_t *out) {
+    switch (source) {
+#ifdef LNURLVAULT_BOARD_T_DISPLAY_S3
+        case DISPATCH_SOURCE_SERIAL:
+            serial_cdc_drops(out);
+            return true;
+#endif
+        case DISPATCH_SOURCE_BLE:
+            ble_gatt_drops(out);
+            return true;
+        default:
+            return false;
+    }
 }
 
 /* This device's identity key (#69). Generated once, kept in NVS, never
@@ -316,6 +341,7 @@ void app_main(void) {
         .input_report = input_report,
         .capabilities = capability_report,
         .identity_seed = identity_seed,
+        .transport_drops = transport_drops,
     };
     dispatcher_init(&deps);
 
