@@ -245,6 +245,18 @@ static void handle_get_info(char *out, size_t outcap) {
     if (g_deps.free_heap) {
         jw_uint64(&w, "free_heap_bytes", g_deps.free_heap());
     }
+    /* What this link has thrown away, so a session that died can be told from
+     * one that was never answered -- see dispatcher.h's transport_drops_fn.
+     * Reported for the transport this very command came in on, which is also
+     * the one whose numbers the asker can act on. */
+    transport_drops_t drops;
+    if (g_deps.transport_drops && g_deps.transport_drops(g_source, &drops)) {
+        jw_begin_obj(&w, "drops");
+        jw_uint64(&w, "rx", drops.rx);
+        jw_uint64(&w, "tx", drops.tx);
+        jw_uint64(&w, "tx_stalled", drops.tx_stalled);
+        jw_end_obj(&w);
+    }
     /* Loud about storage it cannot read, rather than presenting as an empty
      * working vault -- see dispatcher.h's storage_state_fn.
      *

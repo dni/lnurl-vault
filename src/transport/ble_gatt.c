@@ -120,6 +120,16 @@ static uint8_t g_tx_buf[TX_BUF_SIZE]; /* [0..1]=LE length header, [2..]=JSON pay
 static size_t g_tx_len = 0;
 static size_t g_tx_sent = 0;
 
+/* What this link has thrown away, reported by get_info -- see dispatcher.h's
+ * transport_drops_fn. Unlocked for the same reason serial_cdc.c's are: rx is
+ * written only by the NimBLE host task, tx and tx_stalled only by
+ * ble_cmd_task, and a 32-bit aligned load cannot tear on this core. */
+static transport_drops_t g_drops;
+
+void ble_gatt_drops(transport_drops_t *out) {
+    *out = g_drops;
+}
+
 /* How long to wait for the client to enable notifications before giving up
  * on a response. A client normally subscribes before sending anything, but
  * nothing in the protocol requires it, and the response to a command sent
@@ -144,6 +154,7 @@ static void send_response(void) {
         vTaskDelay(pdMS_TO_TICKS(20));
     }
     if (!g_tx_notify_enabled || g_conn_handle == BLE_HS_CONN_HANDLE_NONE) {
+        g_drops.tx++;
         ESP_LOGW(TAG, "no subscriber for a %u-byte response; dropping it", (unsigned)g_tx_len);
         return;
     }
@@ -157,6 +168,9 @@ static void send_response(void) {
     int64_t give_up_at_us = esp_timer_get_time() + (int64_t)TX_GIVE_UP_MS * 1000;
     while (g_tx_sent < g_tx_len) {
         if (g_conn_handle == BLE_HS_CONN_HANDLE_NONE) {
+            /* tx_stalled, not tx: some of this response is already on the
+             * air, so the far end may hold a torn line rather than nothing. */
+            g_drops.tx_stalled++;
             ESP_LOGW(TAG, "link dropped with %u bytes of a response unsent",
                      (unsigned)(g_tx_len - g_tx_sent));
             return;
@@ -172,6 +186,7 @@ static void send_response(void) {
             continue;
         }
         if (esp_timer_get_time() > give_up_at_us) {
+            g_drops.tx_stalled++;
             ESP_LOGW(TAG, "notify stuck (rc=%d), giving up after %u/%u bytes", rc,
                      (unsigned)g_tx_sent, (unsigned)g_tx_len);
             return;
@@ -228,6 +243,7 @@ static void on_message(const char *msg, size_t len, void *ctx) {
     item.len = len;
     memcpy(item.data, msg, len + 1); /* + NUL */
     if (xQueueSend(g_cmd_q, &item, 0) != pdTRUE) {
+        g_drops.rx++;
         ESP_LOGW(TAG, "command queue full, dropping a %u-byte command", (unsigned)len);
     }
 }
@@ -250,6 +266,7 @@ static int rx_chr_access(uint16_t conn_handle, uint16_t attr_handle,
     uint8_t chunk[512];
     uint16_t copied = 0;
     if (ble_hs_mbuf_to_flat(ctxt->om, chunk, sizeof(chunk), &copied) != 0) {
+        g_drops.rx++;
         ESP_LOGW(TAG, "write larger than %u bytes; dropping and resyncing",
                  (unsigned)sizeof(chunk));
         ble_frame_reset(&g_rx);

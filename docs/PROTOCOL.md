@@ -175,6 +175,37 @@ only channel: `last_reset_reason` (`poweron`, `panic`, `sw`, …), `boot_count`,
 `last_boot_unexpected` (bool), and `last_cmd_in_flight` (the command in flight
 at the crash, if any).
 
+`drops` counts the messages **the link this command arrived on** has given up
+on since boot, and exists because every one of those is otherwise invisible:
+
+```json
+"drops":{"rx":0,"tx":0,"tx_stalled":1}
+```
+
+| Field | Meaning |
+|---|---|
+| `rx` | commands dropped before the dispatcher ever saw them — the transport's queue was full, or a write was too large to reassemble |
+| `tx` | responses dropped before a byte went out — the queue was full, or (BLE) nothing was subscribed to be notified |
+| `tx_stalled` | responses abandoned part-written, after the transport stopped making progress. The client may hold a **torn** line rather than nothing |
+
+All three present the same way at the far end: a command that never resolves.
+The client's own timeout fires, and a client that treats that as fatal — as
+`lnurl-wallet` does — tears the session down, leaving "the vault
+disconnected" as the whole of what anyone can report. These numbers survive
+the reconnect, so asking `get_info` afterwards says which path swallowed it.
+
+That matters most over WebSerial on the T-Display-S3, where the firmware's own
+warnings for these three go to UART0 and a host on the USB-C cable cannot see
+them at all.
+
+Counters are cumulative since boot and there is no way to reset them: one a
+client could zero is one that disagrees with the next client.
+
+The object is **absent** for a transport that keeps no tally of its own — the
+classic board's UART has no drop paths — rather than reporting three zeroes
+nothing measured. A missing `drops` means "this build cannot say", never "this
+link has lost nothing".
+
 ### `identify`
 
 Challenge-response over a per-device key, so a client can tell one vault from

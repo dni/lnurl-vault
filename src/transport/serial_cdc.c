@@ -108,6 +108,20 @@ typedef struct {
 
 static QueueHandle_t g_rx_queue;
 
+/* What this link has thrown away, reported by get_info -- see
+ * dispatcher.h's transport_drops_fn.
+ *
+ * No lock, and none needed: each counter has exactly one writer task (rx from
+ * tud_task, tx from serial_rx_task, tx_stalled from serial_tx_task), and a
+ * 32-bit aligned load cannot tear on this core. A reader can therefore be a
+ * moment out of date but never wrong, which is the whole of what a diagnostic
+ * counter owes anybody. */
+static transport_drops_t g_drops;
+
+void serial_cdc_drops(transport_drops_t *out) {
+    *out = g_drops;
+}
+
 /* Generous on purpose: test_serial.py's own docstring documents this
  * device having a real, unexplained ~2s+ baseline response latency even
  * when nothing is actually stuck, so a short cap here gives up on
@@ -145,6 +159,7 @@ static void serial_tx_task(void *arg) {
                  * below, when actually stalled. */
                 tinyusb_cdcacm_write_flush(item.itf, 0);
             } else if (esp_timer_get_time() > give_up_at_us) {
+                g_drops.tx_stalled++;
                 ESP_LOGW(TAG, "tx stalled, giving up after %u/%u bytes",
                          (unsigned)sent, (unsigned)item.len);
                 break;
@@ -190,6 +205,7 @@ static void serial_rx_task(void *arg) {
         tx.len = resp_len;
         memcpy(tx.data, g_resp_buf, resp_len);
         if (xQueueSend(g_tx_queue, &tx, 0) != pdTRUE) {
+            g_drops.tx++;
             ESP_LOGW(TAG, "tx queue full, dropping a %u-byte response", (unsigned)tx.len);
         }
     }
@@ -223,6 +239,7 @@ static void handle_rx(int itf, cdcacm_event_t *event) {
                     item.len = g_line_len;
                     memcpy(item.data, g_line_buf, g_line_len + 1); /* + NUL */
                     if (xQueueSend(g_rx_queue, &item, 0) != pdTRUE) {
+                        g_drops.rx++;
                         ESP_LOGW(TAG, "rx queue full, dropping a %u-byte command",
                                  (unsigned)item.len);
                     }
