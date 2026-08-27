@@ -105,7 +105,16 @@ approval_state_t approval_poll(approval_t *a, bool approve_pressed, bool cancel_
 }
 
 bool approval_waiting_for_release(const approval_t *a) {
-    return a->state == APPROVAL_PENDING && (a->approve_stale || a->cancel_stale);
+    /* The approve button only. A stale CANCEL line changes nothing the owner
+     * can see: the bar still fills, the hold still grants (see
+     * test_a_wedged_cancel_line_does_not_block_a_real_approval), and the only
+     * thing lost is the ability to refuse. Reporting it here put "LET GO
+     * FIRST" on the card for the whole prompt on any board whose cancel pin
+     * reads permanently pressed -- the ESP32-S3, see board_t_display_s3.c --
+     * so every gated command on that board instructed its owner to do the one
+     * thing that guaranteed a timeout, while the gesture that would have
+     * worked was never named. */
+    return a->state == APPROVAL_PENDING && a->approve_stale;
 }
 
 uint16_t approval_progress_permille(const approval_t *a, int64_t now_us) {

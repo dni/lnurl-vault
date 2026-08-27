@@ -331,6 +331,41 @@ static void test_a_wedged_cancel_line_does_not_block_a_real_approval(void) {
               "a real hold still approves past a permanently wedged cancel line");
 }
 
+/* The other half of that board's story, and the half nobody checked.
+ *
+ * The logic above is fine: the wedged line is ignored and a hold still
+ * approves. What the owner is TOLD was not. approval_waiting_for_release()
+ * used to report either button being stale, cancel_stale never clears on a pin
+ * that never reads released, and ui_task.c draws RELEASE_HINT -- "LET GO
+ * FIRST" -- whenever it is true. So every gated command on an S3 showed a card
+ * instructing its owner to let go, for the whole 30 seconds, and never once
+ * named the two-second hold that would have worked. Doing as the screen said
+ * guaranteed the timeout.
+ *
+ * Reported from the field as "I can connect in the wallet but rotating
+ * fails", which is exactly what this looks like from the other end. */
+static void test_a_wedged_cancel_does_not_ask_the_owner_to_let_go(void) {
+    approval_t a;
+    int64_t now = 1000000;
+    approval_begin(&a, now, 30000);
+
+    /* Cancel wedged low since before the prompt, button 1 untouched -- the S3
+     * sitting there waiting to be approved. */
+    run(&a, false, true, &now, 200 * 1000);
+    UL_CHECK(!approval_waiting_for_release(&a),
+              "a wedged cancel line must not put LET GO FIRST on the card");
+
+    /* And the hint still has to work for the case it was written for: a
+     * button 1 held over from the last prompt really does stop the bar. */
+    approval_t b;
+    approval_begin(&b, now, 30000);
+    run(&b, true, false, &now, 200 * 1000);
+    UL_CHECK(approval_waiting_for_release(&b),
+              "an approve button held over from the last prompt still says so");
+    run(&b, false, false, &now, 100 * 1000);
+    UL_CHECK(!approval_waiting_for_release(&b), "and stops saying so once released");
+}
+
 /* Both stuck at once must still lapse rather than resolve either way. */
 static void test_both_stuck_lapses(void) {
     approval_t a;
@@ -402,6 +437,7 @@ void test_approval_run(void) {
     test_a_still_held_approve_button_cannot_approve_the_next_prompt();
     test_cancel_after_release_still_works();
     test_a_wedged_cancel_line_does_not_block_a_real_approval();
+    test_a_wedged_cancel_does_not_ask_the_owner_to_let_go();
     test_both_stuck_lapses();
     test_a_brief_glitch_does_not_cancel();
     test_a_glitch_does_not_interrupt_a_hold();

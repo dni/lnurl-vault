@@ -48,6 +48,26 @@ static bool capability_stub(capability_report_t *out) {
     return true;
 }
 
+/* get_info's `drops`: what the link a command arrived on has thrown away.
+ * Each transport keeps its own tally, so this answers per source -- see
+ * src/proto/dispatcher.h's transport_drops_fn. */
+static bool g_drops_available = true;
+static bool drops_stub(dispatch_source_t source, transport_drops_t *out) {
+    if (!g_drops_available) {
+        return false;
+    }
+    switch (source) {
+        case DISPATCH_SOURCE_SERIAL:
+            *out = (transport_drops_t){.rx = 1, .tx = 2, .tx_stalled = 3};
+            return true;
+        case DISPATCH_SOURCE_BLE:
+            *out = (transport_drops_t){.rx = 40, .tx = 50, .tx_stalled = 60};
+            return true;
+        default:
+            return false;
+    }
+}
+
 /* identify: challenge-response over the device key (#69). */
 static bool g_identity_available = true;
 static const uint8_t IDENTITY_SEED[IDENTITY_SEED_LEN] = {
@@ -165,6 +185,59 @@ static void test_get_info_reports_capabilities(void) {
     UL_CHECK(strstr(out, "\"capabilities\"") == NULL,
               "an undescribed board claims nothing rather than claiming nothing works");
 
+    dispatcher_deps_t plain = {.rng = rng_basic, .confirm_export = confirm_stub};
+    dispatcher_init(&plain);
+}
+
+/* The case this field exists for: a session that died mid-rotate. Every drop
+ * path in both transports abandons a message and tells the host nothing, so
+ * from the far end all of them look like a device that stopped answering --
+ * the command never resolves, the client times out, and lnurl-wallet treats
+ * that as fatal and tears the session down. "It disconnected" is then the
+ * whole of the bug report. These three numbers survive the reconnect and say
+ * which path swallowed it, over the same cable the failure happened on --
+ * which matters most on the S3, whose own log goes to a UART the host cannot
+ * see. */
+static void test_get_info_reports_transport_drops(void) {
+    char out[512];
+
+    dispatcher_deps_t deps = {
+        .rng = rng_basic, .confirm_export = confirm_stub, .transport_drops = drops_stub};
+    dispatcher_init(&deps);
+    g_drops_available = true;
+
+    dispatcher_set_source(DISPATCH_SOURCE_SERIAL);
+    dispatcher_handle("{\"cmd\":\"get_info\"}", out, sizeof(out));
+    UL_CHECK(strstr(out, "\"drops\"") != NULL, "get_info carries a drops object");
+    UL_CHECK(strstr(out, "\"rx\":1") != NULL && strstr(out, "\"tx\":2") != NULL &&
+                  strstr(out, "\"tx_stalled\":3") != NULL,
+              "a command lost, a response lost and a response half-sent are counted apart");
+
+    /* Asked over BLE, answered about BLE. A vault with two links that reported
+     * one link's tally as the other's would send somebody chasing a cable that
+     * was never at fault. */
+    dispatcher_set_source(DISPATCH_SOURCE_BLE);
+    dispatcher_handle("{\"cmd\":\"get_info\"}", out, sizeof(out));
+    UL_CHECK(strstr(out, "\"rx\":40") != NULL && strstr(out, "\"tx_stalled\":60") != NULL,
+              "the answer is about the link that asked");
+
+    /* A transport with no tally of its own -- the classic board's UART, which
+     * has no drop paths -- says nothing rather than three zeroes nothing ever
+     * measured. "This link has lost nothing" and "this build cannot say" are
+     * different answers and a client has to be able to tell them apart. */
+    dispatcher_set_source(DISPATCH_SOURCE_LOCAL);
+    dispatcher_handle("{\"cmd\":\"get_info\"}", out, sizeof(out));
+    UL_CHECK(strstr(out, "\"drops\"") == NULL,
+              "a transport that counts nothing claims nothing");
+
+    /* Same for a build with no hook wired at all. */
+    g_drops_available = false;
+    dispatcher_set_source(DISPATCH_SOURCE_SERIAL);
+    dispatcher_handle("{\"cmd\":\"get_info\"}", out, sizeof(out));
+    UL_CHECK(strstr(out, "\"drops\"") == NULL, "and neither does a build without the hook");
+
+    g_drops_available = true;
+    dispatcher_set_source(DISPATCH_SOURCE_LOCAL); /* restore default for later tests */
     dispatcher_deps_t plain = {.rng = rng_basic, .confirm_export = confirm_stub};
     dispatcher_init(&plain);
 }
@@ -382,5 +455,6 @@ void test_dispatcher_run(void) {
 
     test_get_info_reports_input_health();
     test_get_info_reports_capabilities();
+    test_get_info_reports_transport_drops();
     test_identify_answers_a_challenge();
 }

@@ -223,6 +223,43 @@ typedef bool (*capability_report_fn)(capability_report_t *out);
  * the key does and does not prove. */
 typedef bool (*identity_seed_fn)(uint8_t seed[IDENTITY_SEED_LEN]);
 
+/* Transport a command arrived on. reset is refused over BLE (an unauthenticated
+ * central could otherwise reboot-loop the device); set under cmd_lock before
+ * dispatcher_handle(). Defaults to LOCAL, which allows reset, so native tests
+ * need no change. */
+typedef enum { DISPATCH_SOURCE_LOCAL = 0, DISPATCH_SOURCE_SERIAL, DISPATCH_SOURCE_BLE } dispatch_source_t;
+void dispatcher_set_source(dispatch_source_t source);
+
+/* Messages a transport gave up on, reported by get_info as `drops`.
+ *
+ * Both transports have places where a message is abandoned and the host is
+ * never told: a full queue, or a write that stops making progress. From the
+ * far end all three look identical to a device that simply stopped answering
+ * -- the command never resolves, the client's own timeout fires, and
+ * lnurl-wallet treats a client-side timeout as fatal and tears the session
+ * down. "It disconnected" is all anybody can report, which is not enough to
+ * tell a wedged link from a wedged queue.
+ *
+ * Counting them makes the difference legible over the same cable the failure
+ * happened on: reconnect, ask get_info, and the numbers name which path
+ * swallowed it. That matters because on the ESP32-S3 the log these already
+ * write goes to UART0, which a host on the USB-C cable cannot see at all.
+ *
+ * Cumulative since boot, never reset -- a counter a client can zero is one
+ * that disagrees with the next client. */
+typedef struct {
+    uint32_t rx;         /* commands dropped before the dispatcher saw them */
+    uint32_t tx;         /* responses dropped before a byte went out */
+    uint32_t tx_stalled; /* responses abandoned part-written */
+} transport_drops_t;
+
+/* Optional: fills in the counters for the transport a command arrived on --
+ * the caller passes the source so a device with two links does not report one
+ * link's health as the other's. False (or NULL) omits the field, which is
+ * what a transport with no drop paths of its own should do rather than
+ * claiming a clean three zeros it has not measured. */
+typedef bool (*transport_drops_fn)(dispatch_source_t source, transport_drops_t *out);
+
 typedef struct {
     vault_rng_fn rng;
     export_confirm_fn confirm_export;
@@ -255,16 +292,10 @@ typedef struct {
     input_report_fn input_report;
     capability_report_fn capabilities;
     identity_seed_fn identity_seed;
+    transport_drops_fn transport_drops;
 } dispatcher_deps_t;
 
 void dispatcher_init(const dispatcher_deps_t *deps);
-
-/* Transport a command arrived on. reset is refused over BLE (an unauthenticated
- * central could otherwise reboot-loop the device); set under cmd_lock before
- * dispatcher_handle(). Defaults to LOCAL, which allows reset, so native tests
- * need no change. */
-typedef enum { DISPATCH_SOURCE_LOCAL = 0, DISPATCH_SOURCE_SERIAL, DISPATCH_SOURCE_BLE } dispatch_source_t;
-void dispatcher_set_source(dispatch_source_t source);
 
 /* Parses one complete JSON command object and writes a NUL-terminated JSON
  * response into out (outcap bytes) — always writes something valid, even a
