@@ -5,7 +5,8 @@ offline "banknote" scheme [lnurl-wallet](https://github.com/dni/lnurl-wallet) an
 [lnurl-mint](https://github.com/dni/lnurl-mint) implement on top of plain LUD-03
 `withdrawRequest`. The device generates note secrets from a hardware RNG,
 discloses only their SHA-256 hash until a mint confirms a rotate/split/merge
-succeeded, stores notes through their `pending → confirmed → spent`
+succeeded (or an authenticated device-bound mint receipt settles), stores
+notes through their `pending → confirmed → spent`
 lifecycle, and gates every plaintext-secret export behind a physical
 button press. It talks to a paired browser session over WebSerial (native
 USB-CDC) or BLE — see [`docs/PROTOCOL.md`](docs/PROTOCOL.md) for the wire
