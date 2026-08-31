@@ -297,8 +297,8 @@ which is the same class of failure as the truncation this replaced.
 ### `new_secret`
 
 Generates one fresh secret on-device, stores it `PENDING`, and discloses
-only its hash. Used for **rotate** (one parent) and **merge** (many
-parents).
+only its hash. Used for **rotate** (one parent), **merge** (many parents),
+and device-bound minting (no parents).
 
 ```json
 {"cmd":"new_secret","parent_ids":["a1b2c3d4"],"label":"optional"}
@@ -320,8 +320,11 @@ Generates two fresh secrets sharing the same parent lineage, for **split**.
 
 Commits a `PENDING` note to `CONFIRMED` once the companion has authenticated
 the mint's success response. For rotate/split/merge that is the successful
-mutation response. For bound minting it is the settled LUD-21 receipt whose
-`h`, exact net `amount`, invoice and LUD-25 signature all match the quote.
+mutation response. For the additive device-bound mint extension it is the
+settled receipt whose `h`, exact net `amount`, invoice and LUD-25 signature
+all match the quote. A bare LUD-21 settlement response does not authenticate
+which device hash received the value and is not enough to confirm a pending
+vault note.
 
 **`host` is the withdraw endpoint's base URL, path included** —
 `mint.example/w`, not `mint.example`. Despite the field's name it is not a
@@ -372,9 +375,10 @@ front of the user should say it too.
 
 ### `import_secret`
 
-Registers an externally-known secret directly as `CONFIRMED` — for a note
-received from someone else, or a fresh Lightning payment preimage from
-minting a new note.
+Registers an externally-known secret directly as `CONFIRMED` — normally for
+a note received from someone else. It also supports recovery of historical
+preimage-backed mint notes, but current mint creation must use the mandatory
+comment commitment described below.
 
 ```json
 {"cmd":"import_secret","k1":"<64-hex secret>","host":"mint.example/w","amount_msat":21000,"label":"optional"}
@@ -631,21 +635,27 @@ to the mint itself.
 3. Once the mint's payment settles (poll `verify` if offered): `mark_spent(old)`
 
 **Minting** (preferred bound-receipt flow):
-1. Before requesting an invoice, `new_secret()` → `id, h`. The secret is
+1. Require a mint payRequest with `commentAllowed >= 64`.
+2. Before requesting an invoice, `new_secret()` → `id, h`. The secret is
    durably `PENDING` on the vault and never enters the browser.
-2. Request `GET payCallback?amount=<gross_msat>&h=<h>`.
-3. Before showing or paying it, require `mintToHash:true`, `verify`, and a
-   `mint` commitment whose `h` and exact net `amount` match the request.
-4. Poll `verify`. On settlement, require the same invoice, `h` and `amount`,
+3. Request `GET payCallback?amount=<gross_msat>&comment=<h>&h=<h>`. The
+   `comment` is the current LUD-25 requirement; the identical `h` negotiates
+   the ForgeSworn/Moneyer receipt extension.
+4. Before showing or paying it, require `mintToHash:true`, `verify`, and a
+   `mint` commitment whose `h` matches and whose exact net `amount` is inside
+   the mint's advertised fee band (msat-exact through whole-sat-rounded).
+5. Poll `verify`. On settlement, require the same invoice, `h` and `amount`,
    plus a valid LUD-25 `sig` under the pinned mint key.
-5. `confirm(id, amount, host, sig)`. No `export_secret`, preimage import, or
+6. `confirm(id, amount, host, sig)`. No `export_secret`, preimage import, or
    rotate is involved.
 
 If the payRequest or quote does not offer that additive receipt, discard the
-unpaid staged output and use the compatible legacy flow: pay the ordinary
-invoice, `import_secret(P, ...)`, then immediately **rotate** it. This keeps
-current dni/reference mints working unchanged while receipt-aware mints avoid
-ever making the payment preimage the vault's note secret.
+unpaid staged output. A compatible current-LUD-25 fallback may create a fresh
+secret in the companion, request a **new** invoice with
+`comment=sha256(secret)`, pay it, import that bound secret, then immediately
+**rotate** it under device custody. The payment preimage remains settlement
+proof and is never imported as the note. A mint without `commentAllowed >= 64`
+must be refused before any invoice is paid.
 
 **Receiving a note from someone else** (offline handoff): `import_secret`
 with the received `k1`, then immediately **rotate** it, closing the window
