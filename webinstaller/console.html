@@ -262,8 +262,9 @@
     for the full protocol and
     <a href="https://github.com/dni/lnurl-vault/blob/main/README.md">README.md</a>
     for known flakiness on the serial link — a command occasionally getting
-    no response is a documented, real hardware issue, not a bug in this
-    page.
+    no response is a documented, real hardware issue. The console keeps the
+    stream locked after a timeout until the late response arrives or you
+    reconnect, so a delayed reply cannot be mistaken for the next command.
   </footer>
 </main>
 
@@ -383,13 +384,19 @@
   let writer = null;
   let reader = null;
   let readLoopPromise = null;
+  let streamInSync = true;
+  let timedOutRequest = null;
   const pending = []; // FIFO of {resolve, timer} — protocol is one response per command, in order.
+
+  function updateSendAvailability() {
+    sendBtn.disabled = !port || !streamInSync || pending.length > 0;
+  }
 
   function setConnected(connected) {
     statusDot.classList.toggle("connected", connected);
     statusText.textContent = connected ? "Connected" : "Not connected";
     connectBtn.textContent = connected ? "Disconnect" : "Connect";
-    sendBtn.disabled = !connected;
+    updateSendAvailability();
   }
 
   async function readLoop() {
@@ -428,27 +435,57 @@
     if (waiter) {
       clearTimeout(waiter.timer);
       waiter.resolve({ raw: line, parsed });
+      updateSendAvailability();
+    } else if (timedOutRequest) {
+      // No newer command can be sent while the stream is out of sync, so
+      // this line can only be the timed-out command's late reply. Keeping
+      // that tombstone is what stops the old reply being handed to a newer
+      // command as if it belonged there.
+      const late = timedOutRequest;
+      timedOutRequest = null;
+      streamInSync = true;
+      sendStatus.textContent = "Late reply received; the stream is synchronised again.";
+      addLogEntry(late.obj.cmd, late.obj, { raw: line, parsed, late: true });
+      updateSendAvailability();
+    } else {
+      // Preserve unsolicited/leftover bytes instead of hiding the best
+      // evidence available when diagnosing a torn serial stream.
+      addLogEntry("unmatched line", null, { raw: line, parsed, unmatched: true });
     }
-    // No matching waiter: a late arrival for a request this page already
-    // gave up on. Nothing to correlate it to — see README.md on this
-    // device's documented late/dropped-response flakiness.
   }
 
   function sendCommand(obj, timeoutMs = 8000) {
     return new Promise((resolve, reject) => {
-      const entry = { resolve, timer: null };
-      entry.timer = setTimeout(() => {
-        const idx = pending.indexOf(entry);
-        if (idx >= 0) pending.splice(idx, 1);
-        resolve({ raw: null, parsed: null, timedOut: true });
-      }, timeoutMs);
+      const entry = { resolve, timer: null, obj };
       pending.push(entry);
-      writer.write(JSON.stringify(obj) + "\n").catch((err) => {
-        clearTimeout(entry.timer);
-        const idx = pending.indexOf(entry);
-        if (idx >= 0) pending.splice(idx, 1);
-        reject(err);
-      });
+      updateSendAvailability();
+      writer.write(JSON.stringify(obj) + "\n")
+        .then(() => {
+          // Start the response clock only once the browser has accepted the
+          // write. Starting it before writer.write() settles can report a
+          // device timeout for a command still stuck in browser backpressure.
+          if (!pending.includes(entry)) return; // an exceptionally fast reply already arrived
+          entry.timer = setTimeout(() => {
+            const idx = pending.indexOf(entry);
+            if (idx >= 0) pending.splice(idx, 1);
+            timedOutRequest = entry;
+            streamInSync = false;
+            sendStatus.textContent = "Reply overdue. Wait for it, or reconnect before sending anything else.";
+            updateSendAvailability();
+            resolve({ raw: null, parsed: null, timedOut: true });
+          }, timeoutMs);
+        })
+        .catch((err) => {
+          clearTimeout(entry.timer);
+          const idx = pending.indexOf(entry);
+          if (idx >= 0) pending.splice(idx, 1);
+          if (timedOutRequest === entry) {
+            timedOutRequest = null;
+            streamInSync = true;
+          }
+          updateSendAvailability();
+          reject(err);
+        });
     });
   }
 
@@ -462,6 +499,8 @@
       encoder.readable.pipeTo(port.writable).catch(() => {});
       writer = encoder.writable.getWriter();
       readLoopPromise = readLoop();
+      streamInSync = true;
+      timedOutRequest = null;
       setConnected(true);
     } catch (err) {
       if (err.name !== "NotFoundError") alert(`Couldn't connect: ${err.message}`);
@@ -469,6 +508,13 @@
   }
 
   async function disconnect() {
+    for (const entry of pending.splice(0)) {
+      clearTimeout(entry.timer);
+      entry.resolve({ raw: null, parsed: null, disconnected: true });
+    }
+    timedOutRequest = null;
+    streamInSync = false;
+    updateSendAvailability();
     try {
       if (reader) await reader.cancel();
       if (writer) { await writer.close(); }
@@ -478,6 +524,7 @@
       // best-effort teardown
     }
     port = writer = reader = readLoopPromise = null;
+    streamInSync = true;
     setConnected(false);
   }
 
@@ -542,9 +589,20 @@
       case "get_info":
         return kv([
           ["Firmware", esc(resp.fw_version)],
+          ["Board", resp.board !== undefined ? esc(resp.board) : undefined],
+          ["Storage", resp.storage !== undefined ? esc(resp.storage) : undefined],
           ["Notes", resp.note_count],
           ["Pending", resp.pending_count],
           ["Free heap", resp.free_heap_bytes !== undefined ? `${resp.free_heap_bytes.toLocaleString()} bytes` : undefined],
+          ["Confirm input", resp.inputs?.confirm !== undefined ? esc(resp.inputs.confirm) : undefined],
+          ["Cancel input", resp.inputs?.cancel !== undefined ? esc(resp.inputs.cancel) : undefined],
+          ["RX drops", resp.drops?.rx],
+          ["TX drops", resp.drops?.tx],
+          ["TX stalls", resp.drops?.tx_stalled],
+          ["Previous reset", resp.last_reset_reason !== undefined ? esc(resp.last_reset_reason) : undefined],
+          ["Boot count", resp.boot_count],
+          ["Previous boot unexpected", resp.last_boot_unexpected],
+          ["Last command in flight", resp.last_cmd_in_flight !== undefined ? esc(resp.last_cmd_in_flight) : undefined],
         ]);
       case "list_notes":
         return notesTable(resp.notes);
@@ -576,10 +634,24 @@
     const time = new Date().toLocaleTimeString();
 
     let badge, body, raw;
-    if (result.timedOut) {
+    if (result.disconnected) {
+      badge = `<span class="badge err">disconnected</span>`;
+      body = `<p class="status-text">The connection closed before a reply arrived.</p>`;
+      raw = "(connection closed)";
+    } else if (result.timedOut) {
       badge = `<span class="badge err">no response</span>`;
-      body = `<p class="status-text">Timed out waiting for a reply. See README.md's Status section — a command occasionally getting no response is a known, unresolved hardware issue on this link.</p>`;
+      body = `<p class="status-text">Timed out waiting for a reply. Sending another command now could attach this reply to the wrong request, so the console is waiting for the late line. Reconnect if it never arrives.</p>`;
       raw = "(nothing arrived)";
+    } else if (result.late) {
+      badge = `<span class="badge pending">late reply</span>`;
+      body = result.parsed && typeof result.parsed === "object"
+        ? formatBody(cmd, result.parsed)
+        : `<p class="status-text">The late response wasn't valid JSON. Its raw bytes are preserved below.</p>`;
+      raw = result.raw ?? "";
+    } else if (result.unmatched) {
+      badge = `<span class="badge pending">unmatched</span>`;
+      body = `<p class="status-text">The device sent a line when no command was waiting. It may be a leftover response from before this page connected; the raw bytes are preserved below.</p>`;
+      raw = result.raw ?? "";
     } else if (!result.parsed || typeof result.parsed !== "object") {
       badge = `<span class="badge err">unparseable</span>`;
       body = `<p class="status-text">Response wasn't valid JSON.</p>`;
@@ -602,7 +674,7 @@
         ${body}
         <details class="raw">
           <summary>Raw JSON</summary>
-          <pre>&gt; ${esc(JSON.stringify(obj))}\n&lt; ${esc(raw ?? "")}</pre>
+          <pre>${obj ? `&gt; ${esc(JSON.stringify(obj))}\n` : ""}&lt; ${esc(raw ?? "")}</pre>
         </details>
       </div>`;
     log.prepend(wrap);
@@ -624,7 +696,7 @@
     } catch (err) {
       sendStatus.textContent = `Send failed: ${err.message}`;
     } finally {
-      sendBtn.disabled = !port;
+      updateSendAvailability();
     }
   });
 </script>

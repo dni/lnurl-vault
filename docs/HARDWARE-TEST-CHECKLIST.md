@@ -93,6 +93,20 @@ be a tag, or a `git describe` string for a local build.
 > v0.0.4 reports `fw_version` exactly `0.0.4`, so the version reaches the wire
 > from the tag and not from a hardcoded literal.
 
+### S3 partial-response recovery — NOT YET BENCH-RUN
+
+The S3's bounded USB-CDC writer can abandon a reply after a prefix has already
+left. Current firmware repairs the missing line boundary before any later
+reply, so a receiver should see `torn-prefix`, then a complete JSON line —
+never both glued into one unparseable line. `get_info` after reconnect should
+show `drops.tx_stalled` incremented.
+
+The exact partial-write/stall/recovery sequence is covered by the portable
+`test_line_tx.c`, including a second stall while trying to send the recovery
+delimiter. **It is NOT YET BENCH-RUN on the S3.** A useful bench run needs to
+induce or observe an actual TX stall; ordinary successful commands only prove
+the unchanged happy path.
+
 ## 3. Host transport — BLE
 
 Connect, subscribe, and exercise both a read and a command that **writes to

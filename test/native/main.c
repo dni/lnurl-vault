@@ -19,6 +19,7 @@ void test_ble_frame_run(void);
 void test_note_display_run(void);
 void test_card_render_run(void);
 void test_line_proto_run(void);
+void test_line_tx_run(void);
 void test_approval_run(void);
 void test_screen_sleep_run(void);
 void test_input_health_run(void);
@@ -49,6 +50,7 @@ int main(void) {
     test_note_display_run();
     test_card_render_run();
     test_line_proto_run();
+    test_line_tx_run();
     test_approval_run();
     test_screen_sleep_run();
     test_input_health_run();

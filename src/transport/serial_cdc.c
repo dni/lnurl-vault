@@ -53,6 +53,14 @@
  *    only assembles a complete line and hands it to serial_rx_task over
  *    g_rx_queue; dispatcher_handle() (and the vault_lock around it) moved
  *    there, off tud_task() entirely.
+ * 5. A bounded write that gives up after sending a response prefix has
+ *    damaged the newline framing as well as lost one reply. Sending the next
+ *    JSON immediately glues it to that prefix, so the host reports an
+ *    "unparseable" line and loses a second reply that was otherwise intact.
+ *    line_tx.c now remembers a partial abandonment and sends a standalone
+ *    newline before the next response. If even that delimiter cannot be
+ *    queued, the new response is dropped whole rather than corrupting the
+ *    stream further.
  *
  * Even with all of the above, hardware testing (test/hardware/
  * test_serial.py) had shown real, intermittent flakiness — occasional
@@ -77,6 +85,8 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
 #include "freertos/task.h"
+#include "line_proto.h"
+#include "line_tx.h"
 #include "tinyusb.h"
 #include "tusb_cdc_acm.h"
 #include "vault_lock.h"
@@ -88,9 +98,9 @@ static const char *TAG = "serial_cdc";
 #define TX_QUEUE_DEPTH 4
 #define RX_QUEUE_DEPTH 4
 
-static char g_line_buf[LINE_BUF_SIZE];
-static size_t g_line_len = 0;
 static char g_resp_buf[RESP_BUF_SIZE];
+static line_proto_t g_line_rx;
+static line_tx_t g_line_tx;
 
 typedef struct {
     int itf;
@@ -111,15 +121,17 @@ static QueueHandle_t g_rx_queue;
 /* What this link has thrown away, reported by get_info -- see
  * dispatcher.h's transport_drops_fn.
  *
- * No lock, and none needed: each counter has exactly one writer task (rx from
- * tud_task, tx from serial_rx_task, tx_stalled from serial_tx_task), and a
- * 32-bit aligned load cannot tear on this core. A reader can therefore be a
- * moment out of date but never wrong, which is the whole of what a diagnostic
- * counter owes anybody. */
+ * No lock, and none needed: each stored counter has exactly one writer task
+ * (rx from tud_task, queued tx drops from serial_rx_task, and write-time tx /
+ * tx_stalled drops from serial_tx_task), and a 32-bit aligned load cannot tear
+ * on this core. A reader can therefore be a moment out of date but never
+ * wrong, which is the whole of what a diagnostic counter owes anybody. */
 static transport_drops_t g_drops;
+static uint32_t g_tx_before_byte_drops;
 
 void serial_cdc_drops(transport_drops_t *out) {
     *out = g_drops;
+    out->tx += g_tx_before_byte_drops;
 }
 
 /* Generous on purpose: test_serial.py's own docstring documents this
@@ -131,9 +143,38 @@ void serial_cdc_drops(transport_drops_t *out) {
  * for why an unbounded wait isn't safe either. */
 #define TX_GIVE_UP_US (8 * 1000 * 1000)
 
+typedef struct {
+    int itf;
+    int64_t give_up_at_us;
+} serial_write_ctx_t;
+
+static size_t serial_write(void *ctx, const uint8_t *data, size_t len) {
+    serial_write_ctx_t *serial = (serial_write_ctx_t *)ctx;
+    return tinyusb_cdcacm_write_queue(serial->itf, data, len);
+}
+
+static void serial_flush(void *ctx) {
+    serial_write_ctx_t *serial = (serial_write_ctx_t *)ctx;
+    /* Non-blocking: just kicks transmission of what's staged so far. A
+     * blocking flush from TinyUSB's own callback deadlocks, and doing one on
+     * every chunk from this task was also measured to make latency worse. */
+    tinyusb_cdcacm_write_flush(serial->itf, 0);
+}
+
+static bool serial_wait_for_space(void *ctx) {
+    serial_write_ctx_t *serial = (serial_write_ctx_t *)ctx;
+    if (esp_timer_get_time() > serial->give_up_at_us) {
+        return false;
+    }
+    /* No room queued this pass; give tud_task() a moment to drain its FIFO
+     * before retrying. */
+    vTaskDelay(pdMS_TO_TICKS(2));
+    return true;
+}
+
 /* Runs on its own task, never nested inside TinyUSB's rx callback — see
- * this file's header comment for why that distinction is what makes the
- * blocking flush below safe here when it wasn't in handle_rx(). */
+ * this file's header comment for why that distinction makes the bounded
+ * wait/retry loop below safe when it wasn't in handle_rx(). */
 static void serial_tx_task(void *arg) {
     (void)arg;
     /* static: tx_item_t is ~4.1KB (RESP_BUF_SIZE-sized data[]) — as a plain
@@ -146,30 +187,22 @@ static void serial_tx_task(void *arg) {
         if (xQueueReceive(g_tx_queue, &item, portMAX_DELAY) != pdTRUE) {
             continue;
         }
-        size_t sent = 0;
-        int64_t give_up_at_us = esp_timer_get_time() + TX_GIVE_UP_US;
-        while (sent < item.len) {
-            size_t queued =
-                tinyusb_cdcacm_write_queue(item.itf, item.data + sent, item.len - sent);
-            sent += queued;
-            if (queued > 0) {
-                /* Non-blocking: just kicks transmission of what's staged so
-                 * far. A blocking flush here on every iteration was tried
-                 * and made things worse (see header comment) — only wait,
-                 * below, when actually stalled. */
-                tinyusb_cdcacm_write_flush(item.itf, 0);
-            } else if (esp_timer_get_time() > give_up_at_us) {
-                g_drops.tx_stalled++;
-                ESP_LOGW(TAG, "tx stalled, giving up after %u/%u bytes",
-                         (unsigned)sent, (unsigned)item.len);
-                break;
-            } else {
-                /* No room queued this pass; give tud_task() a moment to
-                 * drain the ring buffer before retrying. */
-                vTaskDelay(pdMS_TO_TICKS(2));
-            }
+        serial_write_ctx_t serial = {
+            .itf = item.itf,
+            .give_up_at_us = esp_timer_get_time() + TX_GIVE_UP_US,
+        };
+        line_tx_result_t result =
+            line_tx_send(&g_line_tx, item.data, item.len, serial_write,
+                         serial_flush, serial_wait_for_space, &serial);
+        if (result == LINE_TX_DROPPED_PARTIAL) {
+            g_drops.tx_stalled++;
+            ESP_LOGW(TAG, "tx stalled after a partial %u-byte response; framing repair armed",
+                     (unsigned)item.len);
+        } else if (result == LINE_TX_DROPPED) {
+            g_tx_before_byte_drops++;
+            ESP_LOGW(TAG, "tx stalled before a %u-byte response; dropping it whole",
+                     (unsigned)item.len);
         }
-        tinyusb_cdcacm_write_flush(item.itf, 0);
     }
 }
 
@@ -198,7 +231,6 @@ static void serial_rx_task(void *arg) {
         vault_lock_release();
         cmd_lock_release();
         size_t resp_len = strlen(g_resp_buf);
-        g_resp_buf[resp_len++] = '\n';
 
         static tx_item_t tx;
         tx.itf = item.itf;
@@ -208,6 +240,19 @@ static void serial_rx_task(void *arg) {
             g_drops.tx++;
             ESP_LOGW(TAG, "tx queue full, dropping a %u-byte response", (unsigned)tx.len);
         }
+    }
+}
+
+static void queue_line(const char *line, void *ctx) {
+    int itf = (int)(intptr_t)ctx;
+    static rx_item_t item;
+    item.itf = itf;
+    item.len = strlen(line);
+    memcpy(item.data, line, item.len + 1); /* + NUL */
+    if (xQueueSend(g_rx_queue, &item, 0) != pdTRUE) {
+        g_drops.rx++;
+        ESP_LOGW(TAG, "rx queue full, dropping a %u-byte command",
+                 (unsigned)item.len);
     }
 }
 
@@ -225,35 +270,7 @@ static void handle_rx(int itf, cdcacm_event_t *event) {
         if (tinyusb_cdcacm_read(itf, chunk, sizeof(chunk), &rx_size) != ESP_OK || rx_size == 0) {
             return;
         }
-        for (size_t i = 0; i < rx_size; i++) {
-            char c = (char)chunk[i];
-            if (c == '\n' || c == '\r') {
-                if (g_line_len > 0) {
-                    g_line_buf[g_line_len] = '\0';
-
-                    /* static: this task (TinyUSB's own) never re-enters
-                     * handle_rx() concurrently with itself, so a static buffer
-                     * here is safe, same reasoning as tx_item_t above. */
-                    static rx_item_t item;
-                    item.itf = itf;
-                    item.len = g_line_len;
-                    memcpy(item.data, g_line_buf, g_line_len + 1); /* + NUL */
-                    if (xQueueSend(g_rx_queue, &item, 0) != pdTRUE) {
-                        g_drops.rx++;
-                        ESP_LOGW(TAG, "rx queue full, dropping a %u-byte command",
-                                 (unsigned)item.len);
-                    }
-                    g_line_len = 0;
-                }
-                continue;
-            }
-            if (g_line_len + 1 < LINE_BUF_SIZE) {
-                g_line_buf[g_line_len++] = c;
-            }
-            /* else: silently drop overlong line content; g_line_len resets on
-             * the next newline and the dispatcher will see a truncated (likely
-             * malformed -> bad_request) line rather than the device wedging. */
-        }
+        line_proto_feed(&g_line_rx, chunk, rx_size, queue_line, (void *)(intptr_t)itf);
     }
 }
 
@@ -262,6 +279,8 @@ void serial_cdc_start(void) {
     xTaskCreate(serial_tx_task, "serial_tx", 4096, NULL, 5, NULL);
     g_rx_queue = xQueueCreate(RX_QUEUE_DEPTH, sizeof(rx_item_t));
     xTaskCreate(serial_rx_task, "serial_rx", 4096, NULL, 5, NULL);
+    line_proto_init(&g_line_rx);
+    line_tx_init(&g_line_tx);
 
     const tinyusb_config_t tusb_cfg = {
         .device_descriptor = NULL,
