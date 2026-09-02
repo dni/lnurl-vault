@@ -296,6 +296,27 @@ knowing about even though they're now fixed:
   device or the app let go of it. **Not yet bench-run**: there is no S3 on
   the bench, and the reporter is the test.
 
+  **Two more things, learnt from the S3 firmwares that are stable.** A
+  survey of Blockstream Jade, Arduino-ESP32, MicroPython and CircuitPython
+  found the DWC2 mode split two against two (Jade and CircuitPython on DMA,
+  Arduino and MicroPython on slave), so the mode switch above is a fair
+  experiment rather than the answer, but three of the four pin or vendor
+  their exact TinyUSB, where this repo's `^1.4` took whatever the registry
+  had newest on the day. `src/idf_component.yml` now pins both components
+  to the versions the S3 build was checked against; TinyUSB 0.18.0, the
+  exact component hash Jade ships, also builds clean on this toolchain and
+  is the fallback if 0.21 in slave mode is not enough, at the cost of
+  lacking the OUT-endpoint zero-length-packet fix MicroPython had to
+  cherry-pick onto it. And MicroPython's CDC driver clears its TX FIFO
+  when the host drops DTR, because bytes queued for a client that has
+  closed the port come out as the first thing the *next* client reads: a
+  stale, torn tail, which is the second field sample above to the byte.
+  `serial_cdc.c` now does the same on DTR down and up, abandons a reply
+  still being written under a closed port, and counts opens and closes in
+  `usb.port_opens` / `usb.port_closes`. The wallet closes the port on every
+  timeout, so those two counters are what will say whether its disconnects
+  are its own. Also not yet bench-run.
+
   The device console now also stops after a client-side timeout until that
   late line arrives or the owner reconnects. Previously it removed the timed
   out request from its FIFO immediately, so a delayed reply could be handed to

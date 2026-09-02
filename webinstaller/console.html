@@ -603,6 +603,8 @@
           ["USB unconfigured", resp.usb?.unconfigured],
           ["USB suspends", resp.usb?.suspends],
           ["USB resumes", resp.usb?.resumes],
+          ["USB port opens", resp.usb?.port_opens],
+          ["USB port closes", resp.usb?.port_closes],
           ["USB TX transfers", resp.usb?.tx_xfers],
           ["Previous reset", resp.last_reset_reason !== undefined ? esc(resp.last_reset_reason) : undefined],
           ["Boot count", resp.boot_count],

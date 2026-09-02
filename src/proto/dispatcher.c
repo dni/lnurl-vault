@@ -286,6 +286,8 @@ static void handle_get_info(char *out, size_t outcap) {
         jw_uint64(&w, "unconfigured", usb.unconfigured);
         jw_uint64(&w, "suspends", usb.suspends);
         jw_uint64(&w, "resumes", usb.resumes);
+        jw_uint64(&w, "port_opens", usb.port_opens);
+        jw_uint64(&w, "port_closes", usb.port_closes);
         jw_uint64(&w, "tx_xfers", usb.tx_xfers);
         jw_end_obj(&w);
     }

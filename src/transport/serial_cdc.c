@@ -176,6 +176,42 @@ void tud_cdc_tx_complete_cb(uint8_t itf) {
     g_usb.tx_xfers++;
 }
 
+/* The host opening and closing the port, as the bus shows it: DTR up and
+ * down. Counted for get_info's `usb`, and acted on.
+ *
+ * A host that closes the port will never read what is queued for it. Left
+ * in TinyUSB's TX ring, those bytes come out as the first thing the *next*
+ * open receives: a stale, torn tail glued in front of the answer to that
+ * client's first command, which is exactly the shape of one field sample
+ * (a get_info reply missing its first 256 bytes). So on close the ring is
+ * cleared, and any reply still being written is abandoned: g_link_generation
+ * is what serial_write() compares against. On open the ring is cleared
+ * again, for anything queued in between while nobody was listening.
+ * MicroPython's CDC driver clears its TX FIFO on DTR low for the same
+ * reason (micropython/micropython 8d3597ca5).
+ *
+ * Runs on the TinyUSB task. tud_cdc_n_write_clear() takes the ring's write
+ * mutex, the same one serial_tx_task's writes take, so the two cannot
+ * interleave inside the ring. Edge-detected: hosts raise DTR and RTS in
+ * separate requests, each of which fires this callback. */
+static volatile uint32_t g_link_generation;
+static bool g_dtr;
+
+static void handle_line_state(int itf, cdcacm_event_t *event) {
+    bool dtr = event->line_state_changed_data.dtr;
+    if (dtr == g_dtr) {
+        return;
+    }
+    g_dtr = dtr;
+    if (dtr) {
+        g_usb.port_opens++;
+    } else {
+        g_usb.port_closes++;
+        g_link_generation++;
+    }
+    tud_cdc_n_write_clear((uint8_t)itf);
+}
+
 /* Generous on purpose: test_serial.py's own docstring documents this
  * device having a real, unexplained ~2s+ baseline response latency even
  * when nothing is actually stuck, so a short cap here gives up on
@@ -188,10 +224,21 @@ void tud_cdc_tx_complete_cb(uint8_t itf) {
 typedef struct {
     int itf;
     int64_t give_up_at_us;
+    uint32_t generation; /* g_link_generation when this response began */
 } serial_write_ctx_t;
+
+/* False once the host has closed the port under this response -- see
+ * handle_line_state(). Queueing the rest would only stock the ring with a
+ * stale tail for the next client to trip over. */
+static bool host_still_there(const serial_write_ctx_t *serial) {
+    return g_link_generation == serial->generation;
+}
 
 static size_t serial_write(void *ctx, const uint8_t *data, size_t len) {
     serial_write_ctx_t *serial = (serial_write_ctx_t *)ctx;
+    if (!host_still_there(serial)) {
+        return 0;
+    }
     return tinyusb_cdcacm_write_queue(serial->itf, data, len);
 }
 
@@ -205,7 +252,7 @@ static void serial_flush(void *ctx) {
 
 static bool serial_wait_for_space(void *ctx) {
     serial_write_ctx_t *serial = (serial_write_ctx_t *)ctx;
-    if (esp_timer_get_time() > serial->give_up_at_us) {
+    if (!host_still_there(serial) || esp_timer_get_time() > serial->give_up_at_us) {
         return false;
     }
     /* No room queued this pass; give tud_task() a moment to drain its FIFO
@@ -232,11 +279,20 @@ static void serial_tx_task(void *arg) {
         serial_write_ctx_t serial = {
             .itf = item.itf,
             .give_up_at_us = esp_timer_get_time() + TX_GIVE_UP_US,
+            .generation = g_link_generation,
         };
         line_tx_result_t result =
             line_tx_send(&g_line_tx, item.data, item.len, serial_write,
                          serial_flush, serial_wait_for_space, &serial);
-        if (result == LINE_TX_DROPPED_PARTIAL) {
+        if (result != LINE_TX_OK && !host_still_there(&serial)) {
+            /* Not a drop the link is charged with: the host closed the port
+             * under this reply, and it is counted where that belongs, in
+             * `usb.port_closes`. line_tx has armed its framing repair if
+             * any of it had already left, which is all the next client
+             * needs. */
+            ESP_LOGW(TAG, "host closed the port under a %u-byte response; abandoned",
+                     (unsigned)item.len);
+        } else if (result == LINE_TX_DROPPED_PARTIAL) {
             g_drops.tx_stalled++;
             ESP_LOGW(TAG, "tx stalled after a partial %u-byte response; framing repair armed",
                      (unsigned)item.len);
@@ -342,7 +398,7 @@ void serial_cdc_start(void) {
         .rx_unread_buf_sz = 256,
         .callback_rx = &handle_rx,
         .callback_rx_wanted_char = NULL,
-        .callback_line_state_changed = NULL,
+        .callback_line_state_changed = &handle_line_state,
         .callback_line_coding_changed = NULL,
     };
     err = tusb_cdc_acm_init(&acm_cfg);

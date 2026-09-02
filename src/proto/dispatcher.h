@@ -270,9 +270,14 @@ typedef bool (*transport_drops_fn)(dispatch_source_t source, transport_drops_t *
  * reload) configures it again, so `configured` above 1 means the link was
  * torn down and rebuilt at USB level, not merely dropped by an app. A bus
  * idle for 3 ms is a suspend, and on a board that senses no VBUS a pulled
- * cable looks the same. `tx_xfers` counts CDC transfers the controller
- * reported complete: a host that received fewer bytes than that implies has
- * a loss below the firmware, where no drop counter can see it.
+ * cable looks the same. `port_opens` and `port_closes` are the host raising
+ * and dropping DTR: an application opening and closing the port, which is
+ * what a wallet that tears its session down on every timeout does -- so
+ * `port_closes` climbing while `configured` stays at 1 is the app letting
+ * go, and `configured` climbing is the bus being rebuilt. `tx_xfers` counts
+ * CDC transfers the controller reported complete: a host that received
+ * fewer bytes than that implies has a loss below the firmware, where no
+ * drop counter can see it.
  *
  * Cumulative since boot, never reset, for the reason `drops` gives. */
 typedef struct {
@@ -280,6 +285,8 @@ typedef struct {
     uint32_t unconfigured; /* host withdrew it (SET_CONFIGURATION 0, VBUS lost) */
     uint32_t suspends;     /* bus idle: port suspended, or the cable went */
     uint32_t resumes;
+    uint32_t port_opens;   /* DTR raised: an application opened the port */
+    uint32_t port_closes;  /* DTR dropped: it closed the port, or went away */
     uint32_t tx_xfers;     /* CDC IN transfers the controller reported complete */
 } usb_link_t;
 
