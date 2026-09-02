@@ -158,6 +158,9 @@ def run(dev):
         check("get_info response has note_count", "note_count" in resp, str(resp))
         check("get_info response has pending_count", "pending_count" in resp, str(resp))
 
+    resp = dev.send({"cmd": "get_info", "tag": "t1"}, wait=W)
+    check("a tagged get_info echoes its tag", resp is not None and resp.get("tag") == "t1", str(resp))
+
     resp = dev.send({"cmd": "list_notes"}, wait=W)
     check("list_notes responds at all", resp is not None, str(resp))
     if resp is not None:

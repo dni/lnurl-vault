@@ -20,10 +20,33 @@ per line out (`\n`-terminated). The device's native USB presents as a
 standard CDC-ACM serial device — no drivers, `navigator.serial` opens it
 directly.
 
-The protocol has no request IDs. A client may keep one command in flight at a
-time, but after its own timeout it must not send another on the same stream
-until the late line arrives or the connection is reopened. Otherwise a late
-reply is indistinguishable from the new command's reply.
+A command may carry a `tag`: a non-empty string of at most 32 characters,
+which the device echoes verbatim as `tag` on the reply, whatever the reply is
+(a success, an error, or each page of `list_notes`):
+
+```json
+{"cmd":"get_info","tag":"a1"}
+{"ok":true,"fw_version":"0.0.12",...,"tag":"a1"}
+```
+
+The tag is what lets a client survive a lost or torn reply without tearing
+the session down. Without one, a reply that never arrives is indistinguishable
+from a slow one, and a late reply from the reply to the next command, so a
+client's own timeout had to be fatal. With one, a client can keep the stream
+open after a timeout, retire the straggler by its tag when it does show up,
+and retry an idempotent command (`get_info`, `list_notes`, `identify`) whose
+reply arrived unparseable. Commands are still answered one at a time, in order.
+
+A `tag` that is not a string, is empty, or is longer than 32 characters is
+refused with `bad_request`, and that refusal carries no tag: a tag echoed
+truncated or coerced would match nothing the client sent. A line that could
+not be parsed as JSON at all is answered without a tag for the same reason.
+
+A client that sends no tags sees the wire exactly as before. For it the old
+rule stands: one command in flight at a time, and after its own timeout it
+must not send another on the same stream until the late line arrives or the
+connection is reopened, because a late reply is then indistinguishable from
+the new command's reply.
 
 If USB-CDC stops accepting bytes after a response has partly left the device,
 the firmware abandons that reply after a bounded wait and records
