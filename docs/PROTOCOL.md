@@ -218,6 +218,31 @@ classic board's UART has no drop paths — rather than reporting three zeroes
 nothing measured. A missing `drops` means "this build cannot say", never "this
 link has lost nothing".
 
+`usb` reports what the native USB bus itself has done since boot, as distinct
+from what the firmware gave up on:
+
+```json
+"usb":{"configured":1,"unconfigured":0,"suspends":0,"resumes":0,"tx_xfers":12}
+```
+
+| Field | Meaning |
+|---|---|
+| `configured` | the host finished enumerating the device and applied a configuration. Once per boot in a healthy session; **more than once means the link was torn down and rebuilt at USB level** (a bus reset, a re-plug, a driver reload), not merely closed by an app |
+| `unconfigured` | the host withdrew the configuration, or VBUS was lost on a board that senses it |
+| `suspends` | the bus went idle for 3 ms: the host suspended the port, or, on a board that senses no VBUS, the cable went |
+| `resumes` | the bus came back from suspend |
+| `tx_xfers` | CDC IN transfers the USB controller reported complete. A host that received fewer bytes than those transfers carried has a loss **below** the firmware, where no `drops` counter can see it |
+
+This exists because "it keeps disconnecting" is indistinguishable, from the
+far end, between a host that re-enumerated the vault and a wallet that closed
+the port on its own timeout. Unlike `drops` it is **not** per link: a BLE
+client is exactly who is still connected to ask why the serial link keeps
+dying. Cumulative since boot, never reset.
+
+The object is **absent** on a board with no native USB. The classic T-Display
+sits behind a USB-UART bridge chip the firmware cannot observe, so it says
+nothing rather than five zeroes.
+
 ### `identify`
 
 Challenge-response over a per-device key, so a client can tell one vault from

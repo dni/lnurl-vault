@@ -17,4 +17,10 @@ void serial_cdc_start(void);
  * cannot include. */
 void serial_cdc_drops(transport_drops_t *out);
 
+/* Fills in what the USB bus itself has done since boot -- see dispatcher.h's
+ * usb_link_fn. drops is what this file gave up on; this is what the host and
+ * the controller did around it, which a report of "it keeps disconnecting"
+ * cannot otherwise distinguish from an app that closed the port. */
+void serial_cdc_usb_link(usb_link_t *out);
+
 #endif

@@ -134,6 +134,48 @@ void serial_cdc_drops(transport_drops_t *out) {
     out->tx += g_tx_before_byte_drops;
 }
 
+/* What the bus itself has done, reported by get_info as `usb` -- see
+ * dispatcher.h's usb_link_fn. These are TinyUSB's weak default callbacks,
+ * overridden here; TinyUSB invokes every one of them from its own task, so
+ * each counter has one writer and the same no-lock reasoning as g_drops
+ * holds. esp_tinyusb defines the mount pair itself only when its MSC class
+ * is compiled in, which this build never enables -- and the linker would say
+ * so if that changed, rather than one silently winning. */
+static usb_link_t g_usb;
+
+void serial_cdc_usb_link(usb_link_t *out) {
+    *out = g_usb;
+}
+
+/* SET_CONFIGURATION with a non-zero value: the host has finished enumerating
+ * this device. Once per boot in a healthy session; more than that means the
+ * link was torn down and rebuilt at USB level. */
+void tud_mount_cb(void) {
+    g_usb.configured++;
+}
+
+void tud_umount_cb(void) {
+    g_usb.unconfigured++;
+}
+
+void tud_suspend_cb(bool remote_wakeup_en) {
+    (void)remote_wakeup_en;
+    g_usb.suspends++;
+}
+
+void tud_resume_cb(void) {
+    g_usb.resumes++;
+}
+
+/* One completed IN transfer on the CDC data endpoint. In slave mode that is
+ * however much of the TX ring was pending when the transfer was armed, up to
+ * the ring's 512 bytes; it was one 64-byte packet in the DMA mode this build
+ * has moved away from (see sdkconfig.defaults.esp32s3). */
+void tud_cdc_tx_complete_cb(uint8_t itf) {
+    (void)itf;
+    g_usb.tx_xfers++;
+}
+
 /* Generous on purpose: test_serial.py's own docstring documents this
  * device having a real, unexplained ~2s+ baseline response latency even
  * when nothing is actually stuck, so a short cap here gives up on

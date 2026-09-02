@@ -242,6 +242,52 @@ static void test_get_info_reports_transport_drops(void) {
     dispatcher_init(&plain);
 }
 
+/* get_info's `usb`: what the bus did, as distinct from what the firmware
+ * dropped -- see src/proto/dispatcher.h's usb_link_fn. */
+static bool g_usb_available = true;
+static bool usb_link_stub(usb_link_t *out) {
+    if (!g_usb_available) {
+        return false;
+    }
+    *out = (usb_link_t){
+        .configured = 3, .unconfigured = 2, .suspends = 5, .resumes = 4, .tx_xfers = 77};
+    return true;
+}
+
+/* A tester whose wallet "keeps disconnecting" cannot tell a host that tore
+ * the device down and re-enumerated it from an app that closed the port and
+ * opened it again. The bus counters can: a second configuration is a rebuilt
+ * link, a suspend with no resume is a cable that went. */
+static void test_get_info_reports_usb_link(void) {
+    char out[512];
+
+    dispatcher_deps_t deps = {
+        .rng = rng_basic, .confirm_export = confirm_stub, .usb_link = usb_link_stub};
+    dispatcher_init(&deps);
+    g_usb_available = true;
+
+    /* Not per source, unlike drops: the link still standing is the one that
+     * gets to ask about the one that keeps falling over. */
+    dispatcher_set_source(DISPATCH_SOURCE_BLE);
+    dispatcher_handle("{\"cmd\":\"get_info\"}", out, sizeof(out));
+    UL_CHECK(strstr(out, "\"usb\"") != NULL, "get_info carries a usb object whichever link asks");
+    UL_CHECK(strstr(out, "\"configured\":3") != NULL && strstr(out, "\"unconfigured\":2") != NULL &&
+                 strstr(out, "\"suspends\":5") != NULL && strstr(out, "\"resumes\":4") != NULL &&
+                 strstr(out, "\"tx_xfers\":77") != NULL,
+             "enumerations, suspends and completed transfers are counted apart");
+
+    /* A board with no native USB -- the classic board, behind a bridge chip
+     * the firmware cannot see -- says nothing rather than five zeroes. */
+    g_usb_available = false;
+    dispatcher_handle("{\"cmd\":\"get_info\"}", out, sizeof(out));
+    UL_CHECK(strstr(out, "\"usb\"") == NULL, "a board with no native USB claims nothing");
+
+    g_usb_available = true;
+    dispatcher_set_source(DISPATCH_SOURCE_LOCAL); /* restore default for later tests */
+    dispatcher_deps_t plain = {.rng = rng_basic, .confirm_export = confirm_stub};
+    dispatcher_init(&plain);
+}
+
 static void test_get_info_reports_input_health(void) {
     char out[512];
 
@@ -456,5 +502,6 @@ void test_dispatcher_run(void) {
     test_get_info_reports_input_health();
     test_get_info_reports_capabilities();
     test_get_info_reports_transport_drops();
+    test_get_info_reports_usb_link();
     test_identify_answers_a_challenge();
 }

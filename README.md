@@ -260,6 +260,42 @@ knowing about even though they're now fixed:
   underlying TinyUSB stall, and requires an S3 bench run before being called
   a hardware fix.
 
+  **The first field report against that firmware measured the loss, and it
+  is below `serial_cdc.c` entirely.** Two damaged `get_info` replies from an
+  external tester's S3 over WebSerial, reconstructed against the 406-byte
+  reply v0.0.11 sends, were missing bytes 256..319 in one case and 0..255 in
+  the other, with everything either side intact. Both are 64-byte-aligned:
+  one full-speed USB bulk packet vanished from the middle of a reply and the
+  reply carried on, and `drops` read zero throughout, which is consistent
+  rather than contradictory: nothing in this firmware can see a packet the
+  USB stack lost after `write_queue()` accepted the bytes. The S3 builds had
+  been getting esp_tinyusb's default Buffer DMA mode for TinyUSB's DWC2
+  driver since that default appeared (esp_tinyusb 1.5; `sdkconfig.defaults.
+  esp32s3` never said either way and the generated sdkconfig is not
+  tracked). In that mode TinyUSB's CDC writer pops one 64-byte packet from
+  the 512-byte TX ring into an endpoint buffer *before* the controller has
+  accepted the transfer, so a transfer refused at that moment loses exactly
+  that packet, silently, and the next one goes out as normal — the shape of
+  the report. Slave/IRQ mode reads the ring straight into the hardware FIFO
+  as one multi-packet transfer and has no such path; it is also the older
+  path, the one every ESP32-S2/S3 TinyUSB build used before the option
+  existed. `CONFIG_TINYUSB_MODE_SLAVE=y` now selects it. What this does
+  **not** do is name the trigger: read against the resolved TinyUSB 0.21.0
+  source, the claim/busy protocol around that transfer looks sound in steady
+  state, and the one refusal path found (an endpoint closed by a bus reset)
+  should cost a whole reply rather than one packet. So this is the strongest
+  lead, one line to revert, and not a proven fix. Upstream TinyUSB has three
+  `usbd` fixes from August 2026 in no release yet (a completion event dropped
+  by a full queue wedging its endpoint for good; a refused transfer treated
+  as fatal; bus reset split into two edges), any of which could be the next
+  thing to pull. The second sample, a reply missing its first four packets,
+  is what a port closed and reopened mid-reply looks like, which a wallet
+  that times out and reconnects would do on its own; `get_info` now carries
+  a `usb` object (`configured`, `unconfigured`, `suspends`, `resumes`,
+  `tx_xfers`) so the next report can say whether the host re-enumerated the
+  device or the app let go of it. **Not yet bench-run**: there is no S3 on
+  the bench, and the reporter is the test.
+
   The device console now also stops after a client-side timeout until that
   late line arrives or the owner reconnects. Previously it removed the timed
   out request from its FIFO immediately, so a delayed reply could be handed to

@@ -129,6 +129,20 @@ static bool transport_drops(dispatch_source_t source, transport_drops_t *out) {
     }
 }
 
+/* get_info's `usb` -- see dispatcher.h's usb_link_fn. Only the S3 has a
+ * native USB link the firmware can see; the classic board sits behind a
+ * bridge chip that reports nothing, so that build says nothing rather than
+ * five zeroes nobody measured. */
+static bool usb_link(usb_link_t *out) {
+#ifdef LNURLVAULT_BOARD_T_DISPLAY_S3
+    serial_cdc_usb_link(out);
+    return true;
+#else
+    (void)out;
+    return false;
+#endif
+}
+
 /* This device's identity key (#69). Generated once, kept in NVS, never
  * disclosed -- only what it derives. */
 static uint8_t g_identity_seed[IDENTITY_SEED_LEN];
@@ -342,6 +356,7 @@ void app_main(void) {
         .capabilities = capability_report,
         .identity_seed = identity_seed,
         .transport_drops = transport_drops,
+        .usb_link = usb_link,
     };
     dispatcher_init(&deps);
 
