@@ -107,6 +107,48 @@ delimiter. **It is NOT YET BENCH-RUN on the S3.** A useful bench run needs to
 induce or observe an actual TX stall; ordinary successful commands only prove
 the unchanged happy path.
 
+### S3 packet-aligned loss, DWC2 slave mode, and the `usb` counters — NOT YET BENCH-RUN
+
+A field report against v0.0.11 (an external tester's T-Display S3, over
+WebSerial, from a wallet) produced two damaged `get_info` replies. Reconstructed
+against the 406-byte reply that firmware sends:
+
+| sample | bytes present | bytes missing |
+|---|---|---|
+| `"height":1cel":"ok"` | 0..255 and 320..405 | 256..319 |
+| `< 70},"transports"...` | 256..405 | 0..255 |
+
+Every boundary is a multiple of 64, one full-speed USB bulk packet. The first
+sample lost exactly the fifth packet and the reply carried on; `drops` read
+zero throughout, which is consistent: the loss is below `serial_cdc.c`. That
+firmware was built with esp_tinyusb's default Buffer DMA mode for the DWC2
+driver, in which TinyUSB's CDC writer pops one 64-byte packet from the TX ring
+into an endpoint buffer before the controller accepts the transfer, so a
+refused transfer costs exactly one packet, silently. Current firmware selects
+slave/IRQ mode instead (`CONFIG_TINYUSB_MODE_SLAVE`), where the ring feeds the
+hardware FIFO directly and that path does not exist. See README.md's Status
+section for the reasoning and what remains unproven.
+
+The second sample is the shape of a port closed and reopened mid-reply, which
+a wallet that times out and reconnects would do on its own. `get_info` now
+carries a `usb` object so the two can be told apart.
+
+Pass, on an S3 with a host attached:
+
+- `get_info` over WebSerial carries `usb`, with `configured` at 1 after a
+  clean boot and `tx_xfers` climbing by at least one per reply.
+- `bench.py` against the S3 completes with no torn or unparseable line across
+  a run of at least fifty commands. Compare the count of unparseable lines
+  against a v0.0.11 run on the same host if one is available.
+- After the wallet or console reports a disconnect, `get_info` on reconnect:
+  `configured` still 1 means the app closed the port; 2 or more means the host
+  re-enumerated the device. Record which.
+- The classic T-Display, over its bridge chip, carries **no** `usb` object.
+
+**It is NOT YET BENCH-RUN.** There is no S3 on the bench; this is being tested
+by the reporter. The mode change is a one-line Kconfig switch and reverts the
+same way if it makes things worse.
+
 ## 3. Host transport — BLE
 
 Connect, subscribe, and exercise both a read and a command that **writes to

@@ -3,3 +3,28 @@
 
 # Native USB-CDC for WebSerial, via the chip's USB-OTG peripheral.
 CONFIG_TINYUSB_CDC_ENABLED=y
+
+# --- DWC2 driver mode: Slave/IRQ, not Buffer DMA ---------------------------
+# esp_tinyusb 1.5 added a Buffer DMA mode for its TinyUSB DWC2 driver and made
+# it the default, so every S3 build since inherited it without anyone choosing
+# it (this file never mentioned it; the generated sdkconfig is not tracked).
+#
+# A field report against v0.0.11 -- an external tester's T-Display S3 over
+# WebSerial -- showed a 406-byte get_info reply arrive with bytes 256..319
+# missing and everything either side intact: exactly one full-speed bulk
+# packet, on a packet boundary, with every firmware-side drop counter at zero.
+# That is loss below serial_cdc.c, inside TinyUSB or on the bus.
+#
+# In DMA mode TinyUSB's CDC writer pops one 64-byte packet out of the TX ring
+# into an endpoint buffer *before* the controller has accepted the transfer.
+# A transfer refused at that point loses exactly that packet, silently, and
+# the rest of the reply carries on -- the shape of the report. In slave mode
+# the ring is read straight into the hardware FIFO as one multi-packet
+# transfer and that path does not exist. Slave mode is also the older path,
+# the one every ESP32-S2/S3 TinyUSB build used before the option appeared.
+#
+# The trigger has not been pinned from source, so this is the strongest lead
+# rather than a proven fix: see README.md's Status section, and the `usb`
+# counters get_info reports so the next field report can tell bus-level loss
+# from an app that closed the port.
+CONFIG_TINYUSB_MODE_SLAVE=y

@@ -257,6 +257,19 @@ static void handle_get_info(char *out, size_t outcap) {
         jw_uint64(&w, "tx_stalled", drops.tx_stalled);
         jw_end_obj(&w);
     }
+    /* What the bus did, as distinct from what the firmware dropped -- see
+     * dispatcher.h's usb_link_fn. Not per source: whichever link is still
+     * standing is the one that gets to ask. */
+    usb_link_t usb;
+    if (g_deps.usb_link && g_deps.usb_link(&usb)) {
+        jw_begin_obj(&w, "usb");
+        jw_uint64(&w, "configured", usb.configured);
+        jw_uint64(&w, "unconfigured", usb.unconfigured);
+        jw_uint64(&w, "suspends", usb.suspends);
+        jw_uint64(&w, "resumes", usb.resumes);
+        jw_uint64(&w, "tx_xfers", usb.tx_xfers);
+        jw_end_obj(&w);
+    }
     /* Loud about storage it cannot read, rather than presenting as an empty
      * working vault -- see dispatcher.h's storage_state_fn.
      *

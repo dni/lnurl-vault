@@ -260,6 +260,35 @@ typedef struct {
  * claiming a clean three zeros it has not measured. */
 typedef bool (*transport_drops_fn)(dispatch_source_t source, transport_drops_t *out);
 
+/* What the native USB link itself has been through since boot, reported by
+ * get_info as `usb`. `drops` says what the firmware gave up on; this says
+ * what the bus did around it, which the far end cannot tell apart from a
+ * wallet that simply closed the port -- and "it keeps disconnecting" was the
+ * whole of the report that prompted it.
+ *
+ * A host that re-enumerates the device (a bus reset, a re-plug, a driver
+ * reload) configures it again, so `configured` above 1 means the link was
+ * torn down and rebuilt at USB level, not merely dropped by an app. A bus
+ * idle for 3 ms is a suspend, and on a board that senses no VBUS a pulled
+ * cable looks the same. `tx_xfers` counts CDC transfers the controller
+ * reported complete: a host that received fewer bytes than that implies has
+ * a loss below the firmware, where no drop counter can see it.
+ *
+ * Cumulative since boot, never reset, for the reason `drops` gives. */
+typedef struct {
+    uint32_t configured;   /* host applied a configuration: enumeration done */
+    uint32_t unconfigured; /* host withdrew it (SET_CONFIGURATION 0, VBUS lost) */
+    uint32_t suspends;     /* bus idle: port suspended, or the cable went */
+    uint32_t resumes;
+    uint32_t tx_xfers;     /* CDC IN transfers the controller reported complete */
+} usb_link_t;
+
+/* Optional: fills in the native USB link's counters. False (or NULL) omits the
+ * field, which is what a board with no native USB should do. Unlike
+ * transport_drops_fn this is not per source, on purpose: a client on the
+ * other link is the one still connected to ask why this one keeps dying. */
+typedef bool (*usb_link_fn)(usb_link_t *out);
+
 typedef struct {
     vault_rng_fn rng;
     export_confirm_fn confirm_export;
@@ -293,6 +322,7 @@ typedef struct {
     capability_report_fn capabilities;
     identity_seed_fn identity_seed;
     transport_drops_fn transport_drops;
+    usb_link_fn usb_link;
 } dispatcher_deps_t;
 
 void dispatcher_init(const dispatcher_deps_t *deps);
