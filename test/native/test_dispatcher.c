@@ -288,6 +288,68 @@ static void test_get_info_reports_usb_link(void) {
     dispatcher_init(&plain);
 }
 
+/* The wire carried no request id, so a client's own timeout had to be fatal:
+ * a late reply to the last command could not be told from the reply to the
+ * next, and the only safe move was to tear the session down. That is what
+ * turned every torn line into "the vault disconnected". A tag the device
+ * echoes on every reply -- success, error, and every page of a listing --
+ * lets a client keep the stream, retire the straggler by its tag, and retry
+ * an idempotent command whose reply arrived torn. */
+static void test_tag_is_echoed_on_every_reply(void) {
+    char out[1024];
+    char tag[64];
+
+    dispatcher_deps_t plain = {.rng = rng_basic, .confirm_export = confirm_stub};
+    dispatcher_init(&plain);
+
+    dispatcher_handle("{\"cmd\":\"get_info\",\"tag\":\"a1\"}", out, sizeof(out));
+    UL_CHECK(json_get_str(out, "tag", tag, sizeof(tag)) && strcmp(tag, "a1") == 0,
+             "a tagged command's reply carries the tag");
+    bool ok = false;
+    UL_CHECK(json_get_bool(out, "ok", &ok) && ok, "and is otherwise the same reply");
+
+    dispatcher_handle("{\"cmd\":\"no_such_command\",\"tag\":\"e7\"}", out, sizeof(out));
+    UL_CHECK(json_get_str(out, "tag", tag, sizeof(tag)) && strcmp(tag, "e7") == 0,
+             "an error reply carries it too: a refusal has to be matched as well");
+
+    dispatcher_handle("{\"cmd\":\"list_notes\",\"tag\":\"page\"}", out, sizeof(out));
+    UL_CHECK(json_get_str(out, "tag", tag, sizeof(tag)) && strcmp(tag, "page") == 0,
+             "so does a listing page, which closes through its own writer");
+
+    /* Escaping survives the round trip: the tag comes back as the client
+     * sent it, not as the bytes that happened to represent it. */
+    dispatcher_handle("{\"cmd\":\"get_info\",\"tag\":\"q\\\"t\"}", out, sizeof(out));
+    UL_CHECK(json_get_str(out, "tag", tag, sizeof(tag)) && strcmp(tag, "q\"t") == 0,
+             "a tag with a quote in it is echoed as the client sent it");
+
+    dispatcher_handle("{\"cmd\":\"get_info\"}", out, sizeof(out));
+    UL_CHECK(strstr(out, "\"tag\"") == NULL, "an untagged command gets the wire as before");
+
+    /* A tag the device could not echo as given is refused, not echoed
+     * truncated or coerced: a mangled tag matches nothing the client sent. */
+    char err[32];
+    dispatcher_handle("{\"cmd\":\"get_info\",\"tag\":5}", out, sizeof(out));
+    UL_CHECK(json_get_str(out, "error", err, sizeof(err)) && strcmp(err, "bad_request") == 0 &&
+                 strstr(out, "\"tag\"") == NULL,
+             "a tag that is not a string is refused, and the refusal carries none");
+    dispatcher_handle("{\"cmd\":\"get_info\",\"tag\":\"\"}", out, sizeof(out));
+    UL_CHECK(json_get_str(out, "error", err, sizeof(err)) && strcmp(err, "bad_request") == 0,
+             "an empty tag is refused: it could correlate nothing");
+    dispatcher_handle("{\"cmd\":\"get_info\",\"tag\":\"0123456789012345678901234567890123\"}", out,
+                      sizeof(out));
+    UL_CHECK(json_get_str(out, "error", err, sizeof(err)) && strcmp(err, "bad_request") == 0,
+             "a 34-character tag is refused rather than truncated");
+    dispatcher_handle("{\"cmd\":\"get_info\",\"tag\":\"01234567890123456789012345678901\"}", out,
+                      sizeof(out));
+    UL_CHECK(json_get_str(out, "tag", tag, sizeof(tag)) && strlen(tag) == 32,
+             "32 characters, the documented limit, is accepted");
+
+    /* The tag is per command: a later untagged command must not inherit it. */
+    dispatcher_handle("{\"cmd\":\"get_info\",\"tag\":\"once\"}", out, sizeof(out));
+    dispatcher_handle("{\"cmd\":\"get_info\"}", out, sizeof(out));
+    UL_CHECK(strstr(out, "\"tag\"") == NULL, "a tag does not leak into the next command's reply");
+}
+
 static void test_get_info_reports_input_health(void) {
     char out[512];
 
@@ -503,5 +565,6 @@ void test_dispatcher_run(void) {
     test_get_info_reports_capabilities();
     test_get_info_reports_transport_drops();
     test_get_info_reports_usb_link();
+    test_tag_is_echoed_on_every_reply();
     test_identify_answers_a_challenge();
 }

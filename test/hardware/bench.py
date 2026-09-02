@@ -110,6 +110,9 @@ def run_serial(dev, b):
     print("\n-- transport and protocol --")
     info = dev.cmd({"cmd": "get_info"})
     b.check("get_info round-trips", info is not None and info.get("ok"))
+    tagged = dev.cmd({"cmd": "get_info", "tag": "bench"})
+    b.check("a tagged command's reply carries the tag",
+            tagged is not None and tagged.get("tag") == "bench")
     if not info:
         return
 

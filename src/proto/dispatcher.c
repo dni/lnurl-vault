@@ -39,8 +39,27 @@ void dispatcher_set_source(dispatch_source_t source) {
  * quietly stops being true when someone adds a field. */
 static void write_error(char *out, size_t outcap, const char *code, const char *message);
 
-static void finish(json_writer_t *w, char *out, size_t outcap) {
+/* The client's `tag`, echoed on whatever reply this command gets -- see
+ * docs/PROTOCOL.md's "Transports" section for what it buys a client. Set at
+ * the top of dispatcher_handle() for the whole of one command, which
+ * cmd_lock already makes the only one in flight. Empty means the command
+ * carried none, and then nothing is echoed: a client that never sends tags
+ * sees the wire exactly as before. */
+#define TAG_MAX_LEN 32
+static char g_tag[TAG_MAX_LEN + 1];
+
+/* Every top-level reply closes through here, so the tag lands on all of
+ * them alike: a success, an error, and each page of a listing. A client
+ * that cannot find its tag on a line has not been answered by that line. */
+static void end_response(json_writer_t *w) {
+    if (g_tag[0]) {
+        jw_str(w, "tag", g_tag);
+    }
     jw_end_obj(w);
+}
+
+static void finish(json_writer_t *w, char *out, size_t outcap) {
+    end_response(w);
     if (!jw_ok(w)) {
         /* Re-initialises the writer over the same buffer, so the partial
          * response is discarded rather than appended to. */
@@ -57,7 +76,7 @@ static void write_error(char *out, size_t outcap, const char *code, const char *
     if (message) {
         jw_str(&w, "message", message);
     }
-    jw_end_obj(&w);
+    end_response(&w);
 }
 
 static const char *vault_err_code(vault_err_t e) {
@@ -366,7 +385,7 @@ static bool build_listing(char *out, size_t outcap, size_t offset, size_t count,
     if (offset + count < total) {
         jw_uint64(&w, "next_offset", offset + count);
     }
-    jw_end_obj(&w);
+    end_response(&w);
     return jw_ok(&w);
 }
 
@@ -1066,6 +1085,21 @@ static void handle_prune_spent(const char *line, char *out, size_t outcap) {
 }
 
 void dispatcher_handle(const char *line, char *out, size_t outcap) {
+    /* First, before anything can answer, so that even a refusal carries the
+     * tag -- a client correlating replies needs the refusal matched too. A
+     * tag that cannot be echoed as given (not a string, empty, or over
+     * TAG_MAX_LEN) is refused outright rather than echoed truncated, which
+     * would match nothing the client sent. */
+    g_tag[0] = '\0';
+    if (json_has(line, "tag")) {
+        if (!json_get_str(line, "tag", g_tag, sizeof(g_tag)) || g_tag[0] == '\0') {
+            g_tag[0] = '\0';
+            write_error(out, outcap, "bad_request",
+                        "tag must be a non-empty string of at most 32 characters");
+            return;
+        }
+    }
+
     char cmd[32];
     bool found_cmd = json_get_str(line, "cmd", cmd, sizeof(cmd));
     if (!found_cmd) {
