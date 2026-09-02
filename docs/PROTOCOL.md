@@ -20,6 +20,18 @@ per line out (`\n`-terminated). The device's native USB presents as a
 standard CDC-ACM serial device — no drivers, `navigator.serial` opens it
 directly.
 
+The protocol has no request IDs. A client may keep one command in flight at a
+time, but after its own timeout it must not send another on the same stream
+until the late line arrives or the connection is reopened. Otherwise a late
+reply is indistinguishable from the new command's reply.
+
+If USB-CDC stops accepting bytes after a response has partly left the device,
+the firmware abandons that reply after a bounded wait and records
+`drops.tx_stalled`. Before a later reply it emits a standalone newline to
+restore framing, so the torn prefix and the later valid JSON cannot be glued
+into one line. This repairs the stream; it does not make the abandoned reply
+successful, and the original command remains indeterminate to its caller.
+
 ### BLE (NimBLE GATT)
 
 One custom service, two characteristics (see `src/transport/ble_gatt.c` for

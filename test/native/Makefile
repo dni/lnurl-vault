@@ -49,6 +49,7 @@ SRC = ../../src/vault/sha256.c \
       ../../src/ui/boot_screen.c \
       hostgfx/hostgfx.c \
       ../../src/proto/line_proto.c \
+      ../../src/proto/line_tx.c \
       ../../src/proto/approval.c \
       ../../src/proto/input_health.c \
       ../../src/ui/qr_capacity.c \
@@ -70,6 +71,7 @@ SRC = ../../src/vault/sha256.c \
       test_note_display.c \
       test_card_render.c \
       test_line_proto.c \
+      test_line_tx.c \
       test_approval.c \
       test_screen_sleep.c \
       test_input_health.c \

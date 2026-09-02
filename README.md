@@ -247,6 +247,26 @@ knowing about even though they're now fixed:
   consistent with the original description. The two ruled-out theories
   above still stand.
 
+  **A source-confirmed framing bug in that failure path is now fixed, but is
+  not yet bench-run.** When the bounded TX loop abandoned a reply after some
+  bytes had already been queued, it left no newline behind. The next intact
+  JSON reply was appended directly to that prefix, turning one lost reply
+  into the console's later "unparseable" line as well. The portable
+  `line_tx.c` state machine now remembers a partial abandonment and sends a
+  standalone newline before any later reply; if the delimiter itself cannot
+  be queued, it drops the new reply whole rather than contaminating it.
+  Native tests reproduce the partial-write/stall/recovery sequence byte for
+  byte. This restores framing after a loss; it does not explain or remove the
+  underlying TinyUSB stall, and requires an S3 bench run before being called
+  a hardware fix.
+
+  The device console now also stops after a client-side timeout until that
+  late line arrives or the owner reconnects. Previously it removed the timed
+  out request from its FIFO immediately, so a delayed reply could be handed to
+  the next command as if it belonged there; an unmatched late line was hidden
+  altogether. The console preserves both late and unmatched raw lines now and
+  renders `get_info`'s `drops` and reset diagnostics directly.
+
   **A live hardware session pointed at the read side, not the write side**:
   responses, once they start, arrive fast — the delay is in the device
   seeming slow to notice a command in the first place. Reading

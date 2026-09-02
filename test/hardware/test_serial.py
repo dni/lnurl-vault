@@ -25,11 +25,12 @@ cJSON entirely. A different, real issue remains: responses are consistently
 DELAYED by more than ~2 seconds after the command is sent (not lost — they
 arrive intact, just late), most likely a TinyUSB CDC-ACM write-flush/task-
 scheduling issue in src/transport/serial_cdc.c, unrelated to JSON parsing.
-Device.send() below therefore keeps reading past a short wait rather than
-giving up, and never discards bytes that arrive between checks (an earlier
-version called reset_input_buffer() before every write, which — combined
-with this latency — tore genuine delayed responses apart and looked like
-corruption; it wasn't).
+The suite never discards bytes between reads (an earlier version called
+reset_input_buffer() before every write, which — combined with this latency
+— tore genuine delayed responses apart and looked like corruption; it
+wasn't). The protocol has no request IDs, though, so once a response times
+out the suite must stop: carrying that late line into the next call would
+mislabel it as the next command's response.
 """
 import argparse
 import json
@@ -46,6 +47,10 @@ except ImportError:
 ESPRESSIF_VID = 0x303A
 
 
+class StreamOutOfSyncError(RuntimeError):
+    """The next response can no longer be correlated to one command."""
+
+
 def find_port():
     for p in list_ports.comports():
         if p.vid == ESPRESSIF_VID:
@@ -54,15 +59,17 @@ def find_port():
 
 
 class Device:
-    """Keeps a persistent read buffer across calls so a response that
-    arrives late (after send()'s own wait window gave up) is still there,
-    intact, for the NEXT call instead of being silently discarded — see the
-    module docstring on why that matters here."""
+    """Keeps bytes intact while one command is in flight.
+
+    A timeout makes the stream ambiguous, so no later command is sent on the
+    same open connection. See the module docstring and docs/PROTOCOL.md.
+    """
 
     def __init__(self, port, timeout):
         self.ser = serial.Serial(port, baudrate=115200, timeout=0.05)
         self.port_timeout = timeout
         self.buf = b""
+        self.in_sync = True
         time.sleep(1.5)  # let the port settle before the first write — the
         # very first command sent right after opening the port can otherwise
         # go unheard (observed directly: identical bad_request-triggering
@@ -79,22 +86,36 @@ class Device:
                     return
 
     def send_raw(self, text, wait):
-        """Sends `text` + a trailing newline, then reads for up to `wait`
-        seconds (on top of whatever was already buffered from a previous
-        call's late arrival). Returns one line of bytes (without the
-        newline), or b"" if none showed up in time."""
+        """Sends one line and returns its response line within `wait` seconds.
+
+        Raises StreamOutOfSyncError rather than allowing another command when
+        the response is overdue or unmatched bytes precede this request.
+        """
+        if not self.in_sync:
+            raise StreamOutOfSyncError(
+                "a previous response timed out; close and reopen the connection"
+            )
+        if self.buf:
+            self.in_sync = False
+            raise StreamOutOfSyncError(
+                "unmatched serial bytes were buffered before the next command; "
+                "close and reopen the connection"
+            )
         self.ser.write((text + "\n").encode())
         self.ser.flush()
+        self._drain(time.time() + wait)
         if b"\n" not in self.buf:
-            self._drain(time.time() + wait)
-        if b"\n" not in self.buf:
-            return b""
+            self.in_sync = False
+            raise StreamOutOfSyncError(
+                f"response timed out after {wait:.1f}s; no further command was sent "
+                "because a late reply would be indistinguishable from it"
+            )
         line, self.buf = self.buf.split(b"\n", 1)
         return line
 
     def send(self, cmd_obj, wait=2.0):
         """Sends a JSON-encoded command object and returns the parsed JSON
-        response, or None if nothing came back within `wait` seconds."""
+        response. A timeout raises StreamOutOfSyncError."""
         raw = self.send_raw(json.dumps(cmd_obj), wait)
         if not raw:
             return None
@@ -188,7 +209,10 @@ def main():
     print(f"Connecting to {port}...\n")
     dev = Device(port, args.timeout)
     try:
-        run(dev)
+        try:
+            run(dev)
+        except StreamOutOfSyncError as err:
+            check("serial stream remained correlated", False, str(err))
     finally:
         dev.close()
 
