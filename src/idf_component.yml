@@ -6,8 +6,20 @@
 # instead (see src/transport/serial_uart.c), and asking the component manager
 # for esp_tinyusb there fails the build outright rather than being ignored.
 dependencies:
+  # Pinned exactly, both of them. A caret range here meant every CI build took
+  # whatever the registry had newest, so the USB stack under a firmware that
+  # holds bearer secrets could change between two releases without a commit
+  # in this repo -- and did: TinyUSB rewrote its CDC path twice between the
+  # 0.18 that Jade and MicroPython ship and the 0.21 our S3 builds had been
+  # resolving. These are the versions the S3 build in README.md's Status
+  # section was made and checked against; bumping them is a deliberate,
+  # reviewed change, not a side effect of the date.
   espressif/esp_tinyusb:
-    version: "^1.4"
+    version: "==1.7.6~2"
+    rules:
+      - if: "target in [esp32s3, esp32s2, esp32p4]"
+  espressif/tinyusb:
+    version: "==0.21.0~1"
     rules:
       - if: "target in [esp32s3, esp32s2, esp32p4]"
   espressif/cjson: "^1.7.19"

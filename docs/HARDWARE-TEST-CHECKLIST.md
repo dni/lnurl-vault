@@ -143,6 +143,13 @@ Pass, on an S3 with a host attached:
 - After the wallet or console reports a disconnect, `get_info` on reconnect:
   `configured` still 1 means the app closed the port; 2 or more means the host
   re-enumerated the device. Record which.
+- Close the port from the console mid-session and open it again:
+  `port_closes` and `port_opens` each go up by one, and the first line the
+  console receives after reopening is a complete JSON reply to its own first
+  command, never a stale tail of a reply meant for the previous session.
+- The USB stack is pinned in `src/idf_component.yml`; the build log's
+  dependency resolution shows `espressif/tinyusb (0.21.0~1)` and
+  `espressif/esp_tinyusb (1.7.6~2)`, and nothing newer.
 - The classic T-Display, over its bridge chip, carries **no** `usb` object.
 
 **It is NOT YET BENCH-RUN.** There is no S3 on the bench; this is being tested

@@ -222,7 +222,7 @@ link has lost nothing".
 from what the firmware gave up on:
 
 ```json
-"usb":{"configured":1,"unconfigured":0,"suspends":0,"resumes":0,"tx_xfers":12}
+"usb":{"configured":1,"unconfigured":0,"suspends":0,"resumes":0,"port_opens":1,"port_closes":0,"tx_xfers":12}
 ```
 
 | Field | Meaning |
@@ -231,6 +231,8 @@ from what the firmware gave up on:
 | `unconfigured` | the host withdrew the configuration, or VBUS was lost on a board that senses it |
 | `suspends` | the bus went idle for 3 ms: the host suspended the port, or, on a board that senses no VBUS, the cable went |
 | `resumes` | the bus came back from suspend |
+| `port_opens` | the host raised DTR: an application opened the port |
+| `port_closes` | the host dropped DTR: it closed the port, or went away. **`port_closes` climbing while `configured` stays at 1 is an application letting go of the port**, which is what a client that treats its own timeout as fatal does; `configured` climbing is the bus being rebuilt. Closing the port also discards anything still queued for that client, so the next one to open it never receives a stale tail of a reply meant for its predecessor |
 | `tx_xfers` | CDC IN transfers the USB controller reported complete. A host that received fewer bytes than those transfers carried has a loss **below** the firmware, where no `drops` counter can see it |
 
 This exists because "it keeps disconnecting" is indistinguishable, from the

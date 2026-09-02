@@ -249,8 +249,13 @@ static bool usb_link_stub(usb_link_t *out) {
     if (!g_usb_available) {
         return false;
     }
-    *out = (usb_link_t){
-        .configured = 3, .unconfigured = 2, .suspends = 5, .resumes = 4, .tx_xfers = 77};
+    *out = (usb_link_t){.configured = 3,
+                        .unconfigured = 2,
+                        .suspends = 5,
+                        .resumes = 4,
+                        .port_opens = 9,
+                        .port_closes = 8,
+                        .tx_xfers = 77};
     return true;
 }
 
@@ -273,8 +278,11 @@ static void test_get_info_reports_usb_link(void) {
     UL_CHECK(strstr(out, "\"usb\"") != NULL, "get_info carries a usb object whichever link asks");
     UL_CHECK(strstr(out, "\"configured\":3") != NULL && strstr(out, "\"unconfigured\":2") != NULL &&
                  strstr(out, "\"suspends\":5") != NULL && strstr(out, "\"resumes\":4") != NULL &&
+                 strstr(out, "\"port_opens\":9") != NULL &&
+                 strstr(out, "\"port_closes\":8") != NULL &&
                  strstr(out, "\"tx_xfers\":77") != NULL,
-             "enumerations, suspends and completed transfers are counted apart");
+             "enumerations, suspends, port opens and closes, and completed transfers are "
+             "counted apart");
 
     /* A board with no native USB -- the classic board, behind a bridge chip
      * the firmware cannot see -- says nothing rather than five zeroes. */
