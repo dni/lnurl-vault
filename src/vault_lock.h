@@ -32,6 +32,12 @@
  * and nothing else. Never across a wait for a human, a display animation,
  * or anything else ui_task might be in the middle of. */
 void vault_lock_init(void);
+
+/* Waits as long as it takes and cannot fail, so callers need no error path.
+ * It is not silent about it though: a task still waiting after a few seconds
+ * logs an error naming itself, because a violation of the rule above wedges
+ * every transport at once and is otherwise indistinguishable, from outside
+ * the device, from a crash or a dead cable. See vault_lock.c. */
 void vault_lock_acquire(void);
 void vault_lock_release(void);
 
