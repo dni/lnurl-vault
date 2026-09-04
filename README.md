@@ -379,13 +379,43 @@ could still turn up something new; each fix above is documented in the
 relevant file's own header comment as a starting point if it does.
 
 `src/vault/` and `src/proto/` (the note state machine, SHA-256, hex, base64,
-JSON reader/writer, command dispatcher, button gesture state machine, and
-`lnurlw://` URL builder) are pure portable C with no ESP-IDF dependency at
-all, and are additionally exercised by `test/native/` — **933/933
-assertions pass** — independent of the ESP32 build. This is the security-
+JSON reader/writer, command dispatcher, button gesture state machine,
+`lnurlw://` URL builder, and the BIP-32 note-secret derivation) are pure
+portable C with no ESP-IDF dependency at all, and are additionally exercised
+by `test/native/` — **1512/1512 assertions pass** — independent of the ESP32
+build. This is the security-
 and protocol-critical logic, including the debounce/tap/chord logic gating
 every plaintext-secret disclosure and the OTA signature-verification/
 sequencing state machine (see "OTA firmware updates" below).
+
+## Seed-recoverable note secrets
+
+Note secrets come from the hardware RNG today, which means a seed phrase backs
+up nothing: restore onto a fresh device and every outstanding note is gone,
+with nothing to say so until someone tries to redeem one. LUD-25's answer is
+to derive them, under `m/139'/d1/d2/d3/d4/i'` where `d1..d4` come from hashing
+the mint's host.
+
+`src/vault/derive.c` implements **the last step of that path and nothing
+else**, and that is deliberate. `d1..d4` are raw uint32 used exactly as they
+fall out of the hash, and BIP-32 reads any index at or above 2^31 as hardened,
+so roughly half of them are not — and an unhardened child needs a secp256k1
+point multiplication. This firmware carries no secp256k1 at all. It does not
+need to: every unhardened level sits at or above `m/139'/d1/d2/d3/d4`, so a
+host that holds the seed derives that node once per mint and provisions the
+device with the 64 bytes. Beneath it there is only `i'`, which is HMAC-SHA512
+and a 256-bit modular addition, both of which are already linked.
+
+The cost is that whoever derives a node can derive every note secret this
+vault will ever hold at that mint. It is provisioning material — one mint's
+subtree, not the wallet — and the host doing it is the wallet that holds the
+seed anyway.
+
+The module is verified against BIP-32's own published test vectors and against
+`lnurlcash-conformance`'s LUD-25 vectors, so a secret derived here is
+byte-identical to one the reference wallet derives. **It is not yet wired
+in**: `vault.c` still draws note secrets from the RNG, and provisioning a node
+needs a protocol command, NVS storage and a bench run.
 
 ## Architecture
 
