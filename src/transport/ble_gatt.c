@@ -95,6 +95,30 @@ static volatile uint16_t g_conn_handle = BLE_HS_CONN_HANDLE_NONE;
 static volatile bool g_tx_notify_enabled = false;
 static uint16_t g_tx_val_handle;
 
+/* Bumped on every connect and disconnect, so a response can tell the link it
+ * was built for from whatever is on the air by the time it is being written.
+ *
+ * `g_conn_handle != BLE_HS_CONN_HANDLE_NONE` is not that test. A client that
+ * drops while send_response() is part-way through a chunked reply, with a new
+ * one connecting before the loop next looks, leaves the handle valid again --
+ * a different client's handle -- and the remaining chunks go to them. The new
+ * client receives mid-stream chunks with no [2-byte length] header, so its
+ * reassembly desyncs and its own first reply arrives glued to the tail of
+ * someone else's. Worse, that tail is whatever the previous client asked for,
+ * and export_secret's reply carries a plaintext bearer secret.
+ *
+ * The RX direction has always guarded this (see ble_frame_reset() in the
+ * disconnect handler, and the comment there); TX did not. serial_cdc.c calls
+ * the same idea g_link_generation, for the same reason. */
+static volatile uint32_t g_link_generation;
+
+/* True while the link this response was built for is still the one on the
+ * air. Both halves matter: the handle going NONE catches a plain drop, and
+ * the generation catches a drop that has already been replaced. */
+static bool same_link(uint32_t generation) {
+    return g_conn_handle != BLE_HS_CONN_HANDLE_NONE && g_link_generation == generation;
+}
+
 /* Reassembly of the [2-byte LE length][payload] framing lives in
  * src/proto/ble_frame.c, not here, so it can be driven a byte at a time by
  * test/native/test_ble_frame.c. It used to be inline in rx_chr_access()
@@ -148,12 +172,16 @@ void ble_gatt_drops(transport_drops_t *out) {
  * possible at all: the mbufs it is waiting on are freed by the host task, so
  * retrying from inside a host callback could only ever spin against itself. */
 static void send_response(void) {
+    /* Captured before the first wait, not after: a client that drops and is
+     * replaced while we are still waiting for a subscriber must not be sent
+     * the previous client's answer either. */
+    const uint32_t generation = g_link_generation;
     int64_t deadline_us = esp_timer_get_time() + (int64_t)TX_SUBSCRIBE_WAIT_MS * 1000;
-    while (!g_tx_notify_enabled && g_conn_handle != BLE_HS_CONN_HANDLE_NONE &&
+    while (!g_tx_notify_enabled && same_link(generation) &&
            esp_timer_get_time() < deadline_us) {
         vTaskDelay(pdMS_TO_TICKS(20));
     }
-    if (!g_tx_notify_enabled || g_conn_handle == BLE_HS_CONN_HANDLE_NONE) {
+    if (!g_tx_notify_enabled || !same_link(generation)) {
         g_drops.tx++;
         ESP_LOGW(TAG, "no subscriber for a %u-byte response; dropping it", (unsigned)g_tx_len);
         return;
@@ -167,9 +195,11 @@ static void send_response(void) {
 
     int64_t give_up_at_us = esp_timer_get_time() + (int64_t)TX_GIVE_UP_MS * 1000;
     while (g_tx_sent < g_tx_len) {
-        if (g_conn_handle == BLE_HS_CONN_HANDLE_NONE) {
+        if (!same_link(generation)) {
             /* tx_stalled, not tx: some of this response is already on the
-             * air, so the far end may hold a torn line rather than nothing. */
+             * air, so the far end may hold a torn line rather than nothing.
+             * Abandoning the rest is the point -- see g_link_generation for
+             * who the remaining chunks would otherwise have gone to. */
             g_drops.tx_stalled++;
             ESP_LOGW(TAG, "link dropped with %u bytes of a response unsent",
                      (unsigned)(g_tx_len - g_tx_sent));
@@ -339,12 +369,17 @@ static int gap_event_handler(struct ble_gap_event *event, void *arg) {
     switch (event->type) {
         case BLE_GAP_EVENT_CONNECT:
             if (event->connect.status == 0) {
+                /* Before the handle is published, so a send_response() that
+                 * looks between the two never sees a new client's handle
+                 * still carrying the old generation. */
+                g_link_generation++;
                 g_conn_handle = event->connect.conn_handle;
             } else {
                 start_advertising(); /* connection attempt failed; resume advertising */
             }
             return 0;
         case BLE_GAP_EVENT_DISCONNECT:
+            g_link_generation++;
             g_conn_handle = BLE_HS_CONN_HANDLE_NONE;
             g_tx_notify_enabled = false;
             /* A half-received message belongs to the connection that was
