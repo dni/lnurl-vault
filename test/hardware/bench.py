@@ -80,6 +80,8 @@ class Device:
         # rather than raised: see cmd(). Set before _wait_ready(), which goes
         # through cmd() and so can append to it.
         self.malformed = []
+        # (command, seconds, answered) per round trip — see cmd().
+        self.latencies = []
         self.ready = self._wait_ready(settle)
 
     def _wait_ready(self, settle):
@@ -118,16 +120,34 @@ class Device:
             self.port.timeout = prev
             # A half-written line caught while the board was still coming up is
             # boot noise, not a torn reply, and must not be reported as one at
-            # the end of the run.
+            # the end of the run. The probes' own round trips go with it: they
+            # time a board that was still booting, which is not what the
+            # latency summary is asking about.
             self.malformed.clear()
+            self.latencies.clear()
 
     def cmd(self, payload, wait=45):
         self.port.reset_input_buffer()
+        # Before the write, not after: the round trip being measured is the
+        # command leaving to the reply arriving, and the write is part of it.
+        t0 = time.monotonic()
         self.port.write((json.dumps(payload) + "\n").encode())
         deadline = time.monotonic() + wait
         base = self.port.timeout
         try:
-            return self._read_reply(deadline, base)
+            reply = self._read_reply(deadline, base)
+            # Timed because "it feels slow" has been an unmeasured claim for
+            # weeks: serial_cdc.c sizes its 8s give-up around a "real,
+            # unexplained ~2s+ baseline response latency" quoted from
+            # test_serial.py, and nothing in this harness has ever recorded a
+            # round trip to confirm or refute it. get_info is an in-RAM read
+            # and a JSON build, so a healthy link should answer in
+            # milliseconds. A number here decides whether there is a speed
+            # problem underneath the timeout symptoms or never was one.
+            self.latencies.append(
+                (str(payload.get("cmd", "?")), time.monotonic() - t0, reply is not None)
+            )
+            return reply
         finally:
             self.port.timeout = base
 
@@ -436,6 +456,38 @@ def run_ble(dev, b):
     asyncio.run(main())
 
 
+# Commands that are *meant* to be slow: they wait out the on-device confirm
+# window by design, so averaging them in would swamp the number this summary
+# exists to produce.
+GATED_CMDS = {"export_secret", "wipe"}
+
+
+def report_latency(timings):
+    """Says what a round trip actually costs, rather than leaving it to folklore.
+
+    `serial_cdc.c` sizes its 8s give-up around a "real, unexplained ~2s+
+    baseline response latency" quoted from test_serial.py, and nothing has ever
+    measured it here. `get_info` is an in-RAM read and a JSON build, so tens of
+    milliseconds is the honest expectation; anything near a second means the
+    delay is in the transport rather than the work, and every timeout tuned
+    around it has been tuned around a bug.
+    """
+    ordinary = [(c, s) for c, s, answered in timings if answered and c not in GATED_CMDS]
+    if not ordinary:
+        return
+    xs = sorted(s for _, s in ordinary)
+    pct = lambda p: xs[min(len(xs) - 1, int(len(xs) * p))]  # noqa: E731
+    slowest = max(ordinary, key=lambda t: t[1])
+    print(f"\nround trip over {len(xs)} answered commands, confirm-gated ones excluded:")
+    print(f"  min {xs[0] * 1000:.0f}ms   median {pct(0.5) * 1000:.0f}ms   "
+          f"p95 {pct(0.95) * 1000:.0f}ms   max {xs[-1] * 1000:.0f}ms")
+    print(f"  slowest: {slowest[0]!r} at {slowest[1] * 1000:.0f}ms")
+    if pct(0.5) > 0.5:
+        print("  NOTE: a median past 500ms is the transport, not the work. This is the "
+              "baseline latency\n        serial_cdc.c's TX_GIVE_UP_US was sized around, "
+              "and it has never been explained.")
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--port", required=True, help="e.g. /dev/ttyUSB0")
@@ -453,8 +505,10 @@ def main():
             b.skip("BLE transport", "pass --ble to include it")
     finally:
         torn = list(dev.malformed)
+        timings = list(dev.latencies)
         dev.close()
     rc = b.report()
+    report_latency(timings)
     # Said after the pass/fail tally because it reframes it: a run whose
     # failures are all "no reply" against a link that also tore N replies is
     # reporting one transport fault, not N unrelated protocol bugs.
