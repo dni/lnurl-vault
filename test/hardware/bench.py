@@ -68,7 +68,7 @@ class Bench:
 class Device:
     """One held-open serial connection to the vault."""
 
-    def __init__(self, port, baud=115200):
+    def __init__(self, port, baud=115200, settle=30.0):
         self.port = serial.Serial()
         self.port.port = port
         self.port.baudrate = baud
@@ -76,12 +76,50 @@ class Device:
         self.port.dtr = False
         self.port.rts = False
         self.port.open()
-        # Opening reset the board. Wait it out and drop the boot chatter.
-        time.sleep(3.5)
-        self.port.reset_input_buffer()
         # Lines that arrived looking like a reply but would not parse. Kept
-        # rather than raised: see cmd().
+        # rather than raised: see cmd(). Set before _wait_ready(), which goes
+        # through cmd() and so can append to it.
         self.malformed = []
+        self.ready = self._wait_ready(settle)
+
+    def _wait_ready(self, settle):
+        """Waits for the board to finish rebooting, rather than guessing at it.
+
+        Opening the port drives DTR/RTS through a USB-UART bridge's auto-reset
+        circuit, so for the first moment the board is booting, not listening,
+        and a command written to it is simply gone. This used to be a flat
+        `time.sleep(3.5)` -- a constant standing in for something that is a
+        property of whichever board is plugged in and its reset circuit. On a
+        classic T-Display it is too short, so the first command after open was
+        dropped on every run (issue #120). bench.py got away with it because
+        its opening get_info is a check allowed to fail; e2e_mint.py treated
+        the same silence as fatal and died before its first step.
+
+        Probing costs nothing when the device is already up, since the first
+        probe answers, and it adapts to a slower board instead of making every
+        run pay a worst-case constant.
+        """
+        # The reset itself needs a moment: probing into a board still in its
+        # bootloader only burns a probe.
+        time.sleep(1.0)
+        prev = self.port.timeout
+        # Short reads, so an unanswered probe costs about a second rather than
+        # the full command timeout before the next attempt.
+        self.port.timeout = 1.0
+        try:
+            deadline = time.monotonic() + settle
+            while time.monotonic() < deadline:
+                self.port.reset_input_buffer()
+                r = self.cmd({"cmd": "get_info"}, wait=2)
+                if r and r.get("ok"):
+                    return True
+            return False
+        finally:
+            self.port.timeout = prev
+            # A half-written line caught while the board was still coming up is
+            # boot noise, not a torn reply, and must not be reported as one at
+            # the end of the run.
+            self.malformed.clear()
 
     def cmd(self, payload, wait=45):
         self.port.reset_input_buffer()
