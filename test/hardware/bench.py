@@ -79,6 +79,9 @@ class Device:
         # Opening reset the board. Wait it out and drop the boot chatter.
         time.sleep(3.5)
         self.port.reset_input_buffer()
+        # Lines that arrived looking like a reply but would not parse. Kept
+        # rather than raised: see cmd().
+        self.malformed = []
 
     def cmd(self, payload, wait=45):
         self.port.reset_input_buffer()
@@ -87,7 +90,28 @@ class Device:
         while time.monotonic() < deadline:
             line = self.port.readline().decode(errors="replace").strip()
             if line.startswith("{"):
-                return json.loads(line)
+                try:
+                    return json.loads(line)
+                except json.JSONDecodeError as e:
+                    # A reply that arrived but did not survive the wire, which
+                    # is a different fault from silence and must be reported as
+                    # such. This used to raise straight out of the harness and
+                    # abandon every remaining check -- the S3's torn-line fault
+                    # (a reply short by a whole 64-byte USB packet) reaches here
+                    # as a line that starts with '{' and is not JSON, so the one
+                    # bug the bench exists to characterise was the one bug that
+                    # stopped it running. The length is the diagnostic worth
+                    # having: short by a multiple of 64 means whole packets went
+                    # missing, and the raw bytes say where the seam is.
+                    self.malformed.append(line)
+                    print(
+                        f"  ....  malformed reply, {len(line)} bytes "
+                        f"({len(line) % 64} past a 64-byte boundary): {e}"
+                    )
+                    print(f"        {line!r}")
+                    # A torn line may be followed by a good one; keep reading
+                    # until the deadline rather than giving up on the command.
+                    continue
             # Diagnostics and boot banners share this UART; keep looking.
         return None
 
@@ -96,13 +120,23 @@ class Device:
 
 
 def confirmed_note(dev, label):
-    """Mints a note and confirms it, so export_secret reaches the UI gate."""
+    """Mints a note and confirms it, so export_secret reaches the UI gate.
+
+    Both halves are checked. This used to return new_secret's id while
+    ignoring what confirm answered, so a confirm that timed out or came back
+    torn still reported "new_secret + confirm" as a PASS, and the run carried
+    on believing there was a CONFIRMED note behind that id. Every check after
+    it then failed for reasons that had nothing to do with what it was
+    testing, which is a worse outcome than failing here.
+    """
     r = dev.cmd({"cmd": "new_secret", "label": label})
     if not r or not r.get("ok"):
         return None
-    dev.cmd(
+    c = dev.cmd(
         {"cmd": "confirm", "id": r["id"], "amount_msat": 2100, "host": "example.com"}
     )
+    if not c or not c.get("ok"):
+        return None
     return r["id"]
 
 
@@ -346,8 +380,18 @@ def main():
         else:
             b.skip("BLE transport", "pass --ble to include it")
     finally:
+        torn = list(dev.malformed)
         dev.close()
-    return b.report()
+    rc = b.report()
+    # Said after the pass/fail tally because it reframes it: a run whose
+    # failures are all "no reply" against a link that also tore N replies is
+    # reporting one transport fault, not N unrelated protocol bugs.
+    if torn:
+        print(f"\n{len(torn)} reply/replies arrived malformed -- the link tore, "
+              f"the firmware did not necessarily misbehave:")
+        for line in torn:
+            print(f"  {len(line)} bytes: {line!r}")
+    return rc
 
 
 if __name__ == "__main__":
