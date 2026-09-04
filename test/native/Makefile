@@ -56,6 +56,7 @@ SRC = ../../src/vault/sha256.c \
       ../../src/ota/monocypher.c \
       ../../src/ota/monocypher-ed25519.c \
       ../../src/ota/ota_sign.c \
+      ../../src/vault/derive.c \
       test_sha256.c \
       test_hex.c \
       test_entropy.c \
@@ -85,6 +86,7 @@ SRC = ../../src/vault/sha256.c \
       test_base64.c \
       test_ota_sign.c \
       test_ota_dispatch.c \
+      test_derive.c \
       main.c
 BIN = vault_tests
 
