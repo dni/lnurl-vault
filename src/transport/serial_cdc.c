@@ -207,8 +207,24 @@ static void handle_line_state(int itf, cdcacm_event_t *event) {
         g_usb.port_opens++;
     } else {
         g_usb.port_closes++;
-        g_link_generation++;
     }
+    /* Both edges, not just the closing one. This clears the TX ring either
+     * way, so a reply already part-written into it loses its queued head --
+     * and if the generation does not move, host_still_there() stays true and
+     * serial_write() goes on appending the tail. The client then receives a
+     * reply with an arbitrary run deleted from the middle and the rest
+     * perfectly formed, which is unparseable but looks nothing like packet
+     * loss. A bench capture showed exactly that on a DTR *rise*
+     * (`port_opens` 1): 18 bytes gone from a 469-byte get_info, taking
+     * `"serial","ble"],"r` out of the middle of the capabilities object. 18
+     * is not a multiple of 64, which is what ruled out the lost-USB-packet
+     * explanation this file previously assumed.
+     *
+     * Bumping on both edges abandons that reply cleanly instead. A reply that
+     * never arrives is a timeout the client can see and retry -- and with a
+     * `tag` (see dispatcher.c) it can retry safely; a reply with a hole in it
+     * is silent corruption that reaches the client as garbage. */
+    g_link_generation++;
     tud_cdc_n_write_clear((uint8_t)itf);
 }
 
