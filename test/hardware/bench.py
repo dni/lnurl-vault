@@ -125,7 +125,24 @@ class Device:
         self.port.reset_input_buffer()
         self.port.write((json.dumps(payload) + "\n").encode())
         deadline = time.monotonic() + wait
-        while time.monotonic() < deadline:
+        base = self.port.timeout
+        try:
+            return self._read_reply(deadline, base)
+        finally:
+            self.port.timeout = base
+
+    def _read_reply(self, deadline, base):
+        while True:
+            # Cap each blocking read to the time actually left. readline()
+            # blocks for the whole port timeout however close the deadline is,
+            # so a read starting just under it ran on for nearly another full
+            # timeout -- which is how a 30s confirm window was measured, and
+            # reported, as 75.1s. A timing check has to measure the device,
+            # not the harness.
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return None
+            self.port.timeout = min(base, remaining) if base else remaining
             line = self.port.readline().decode(errors="replace").strip()
             if line.startswith("{"):
                 try:
@@ -134,13 +151,16 @@ class Device:
                     # A reply that arrived but did not survive the wire, which
                     # is a different fault from silence and must be reported as
                     # such. This used to raise straight out of the harness and
-                    # abandon every remaining check -- the S3's torn-line fault
-                    # (a reply short by a whole 64-byte USB packet) reaches here
-                    # as a line that starts with '{' and is not JSON, so the one
-                    # bug the bench exists to characterise was the one bug that
-                    # stopped it running. The length is the diagnostic worth
-                    # having: short by a multiple of 64 means whole packets went
-                    # missing, and the raw bytes say where the seam is.
+                    # abandon every remaining check, so the one bug the bench
+                    # exists to characterise was the one bug that stopped it
+                    # running.
+                    #
+                    # The length is the diagnostic. A run missing that is a
+                    # multiple of 64 means whole USB packets went astray; the
+                    # first real capture was short by 18, which is what ruled
+                    # that explanation out and pointed at the TX ring being
+                    # cleared mid-reply instead. The raw bytes say where the
+                    # seam is, which is what identifies the missing run.
                     self.malformed.append(line)
                     print(
                         f"  ....  malformed reply, {len(line)} bytes "
@@ -151,10 +171,24 @@ class Device:
                     # until the deadline rather than giving up on the command.
                     continue
             # Diagnostics and boot banners share this UART; keep looking.
-        return None
 
     def close(self):
         self.port.close()
+
+
+def note_count(dev):
+    """The device's note_count, or None if it did not answer.
+
+    A reply from cmd() must never be dereferenced straight: it is None when
+    nothing came back. `dev.cmd({"cmd": "get_info"}).get("note_count")` raised
+    AttributeError on the first unanswered get_info and abandoned the rest of
+    the run -- the same failure, for the same reason, as the JSONDecodeError
+    that used to escape cmd(). A reply that never arrives is a result to
+    record, not a crash: on a link being tested precisely because it drops
+    replies, the harness must outlive the fault it is measuring.
+    """
+    r = dev.cmd({"cmd": "get_info"})
+    return r.get("note_count") if r else None
 
 
 def confirmed_note(dev, label):
@@ -273,7 +307,7 @@ def run_serial(dev, b):
     b.check("the device still answers afterwards", dev.cmd({"cmd": "get_info"}) is not None)
 
     print("\n-- wipe refuses everything it should --")
-    count_before = dev.cmd({"cmd": "get_info"}).get("note_count")
+    count_before = note_count(dev)
 
     t0 = time.monotonic()
     r = dev.cmd({"cmd": "wipe"}, wait=10)
@@ -296,10 +330,10 @@ def run_serial(dev, b):
     r = dev.cmd({"cmd": "wipe", "confirm": "WIPE"})
     b.check("an unanswered wipe times out", r is not None and r.get("error") == "timeout")
 
-    count_after = dev.cmd({"cmd": "get_info"}).get("note_count")
+    count_after = note_count(dev)
     b.check(
         "no note was lost to any of that",
-        count_before == count_after,
+        count_before is not None and count_before == count_after,
         f"{count_before} -> {count_after}",
     )
     b.skip("granting a wipe", "needs a physical press; never automated on purpose")
