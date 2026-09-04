@@ -488,6 +488,13 @@ def main():
 
     print(f"\nmint: {args.mint}")
     dev = Device(args.port)
+    # Device() now probes until the board answers rather than sleeping a fixed
+    # time, so reaching here without a ready device means it never came up at
+    # all -- not that it was merely still resetting, which is what used to end
+    # this run before its first step (issue #120).
+    if not dev.ready:
+        sys.exit(f"the vault never answered get_info on {args.port}; it did not "
+                 f"come up within the settle window -- is it flashed and running?")
     info = dev.cmd({"cmd": "get_info"})
     if not info or not info.get("ok"):
         sys.exit("the vault did not answer get_info")
